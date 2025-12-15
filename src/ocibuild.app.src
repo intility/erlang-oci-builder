@@ -1,0 +1,18 @@
+{application, ocibuild, [
+    {description, "Build and publish OCI container images from the BEAM"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        ssl,
+        inets
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [
+        {"GitHub", "https://github.com/yourorg/ocibuild"}
+    ]}
+]}.

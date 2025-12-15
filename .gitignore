@@ -1,0 +1,47 @@
+# Compiled files
+*.beam
+*.o
+*.plt
+erl_crash.dump
+
+# Build directories
+_build/
+_checkouts/
+
+# Rebar3
+rebar.lock
+.rebar3/
+
+# Dialyzer
+*.plt
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.idea/
+*.iml
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.eunit/
+cover/
+logs/
+ct_run.*
+TEST-*.xml
+
+# Documentation
+doc/
+.edoc/
+
+# Release
+_rel/
+rel/vars/
+
+# Hex
+/deps/
+*.ez
