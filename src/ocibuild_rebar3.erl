@@ -312,11 +312,13 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
         %% Set working directory
         Image2 = ocibuild:workdir(Image1, to_binary(Workdir)),
 
-        %% Set entrypoint
+        %% Set entrypoint and clear inherited Cmd from base image
         ReleaseNameBin = list_to_binary(ReleaseName),
         CmdBin = to_binary(Cmd),
         Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, CmdBin],
-        Image3 = ocibuild:entrypoint(Image2, Entrypoint),
+        Image3a = ocibuild:entrypoint(Image2, Entrypoint),
+        %% Clear Cmd to prevent base image's Cmd (e.g., "iex") from being appended
+        Image3 = ocibuild:cmd(Image3a, []),
 
         %% Set environment variables
         Image4 =
