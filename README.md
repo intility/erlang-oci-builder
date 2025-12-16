@@ -39,9 +39,58 @@ end
 
 ## Quick Start
 
-### Rebar3 Plugin (Recommended)
+### Mix Task (Elixir)
 
-The easiest way to use ocibuild is with the rebar3 plugin:
+The easiest way to use ocibuild with Elixir:
+
+```elixir
+# mix.exs
+def deps do
+  [{:ocibuild, "~> 0.1"}]
+end
+
+def project do
+  [
+    # ...
+    ocibuild: [
+      base_image: "debian:slim",
+      env: %{"LANG" => "C.UTF-8"},
+      expose: [8080]
+    ]
+  ]
+end
+```
+
+```bash
+# Build release and create OCI image
+MIX_ENV=prod mix release
+MIX_ENV=prod mix ocibuild -t myapp:1.0.0
+
+# Load into Docker
+docker load < myapp-1.0.0.tar.gz
+
+# Or push directly to a registry
+OCIBUILD_TOKEN=$GITHUB_TOKEN mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+```
+
+#### Automatic Release Step
+
+You can also build OCI images automatically during `mix release`:
+
+```elixir
+# mix.exs
+releases: [
+  myapp: [
+    steps: [:assemble, &Ocibuild.MixRelease.build_image/1]
+  ]
+]
+```
+
+Then simply run `MIX_ENV=prod mix release` and the OCI image is built automatically.
+
+### Rebar3 Plugin (Erlang)
+
+The easiest way to use ocibuild with Erlang:
 
 ```erlang
 %% rebar.config
@@ -147,6 +196,43 @@ export OCIBUILD_TOKEN="your-token"
 # Username/password
 export OCIBUILD_USERNAME="user"
 export OCIBUILD_PASSWORD="pass"
+```
+
+## Mix Task Reference (Elixir)
+
+### CLI Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--tag` | `-t` | Image tag, e.g., `myapp:1.0.0`. Defaults to `release:version` |
+| `--registry` | `-r` | Registry for push, e.g., `ghcr.io` |
+| `--output` | `-o` | Output tarball path (default: `<tag>.tar.gz`) |
+| `--push` | | Push to registry after build |
+| `--base` | | Override base image |
+| `--release` | | Release name (if multiple configured) |
+
+### Configuration (`mix.exs`)
+
+```elixir
+def project do
+  [
+    app: :myapp,
+    version: "1.0.0",
+    # ...
+    ocibuild: [
+      base_image: "debian:slim",           # Base image (default: debian:slim)
+      tag: "myapp:1.0.0",                  # Optional, defaults to app:version
+      registry: "ghcr.io/myorg",           # Default registry for --push
+      workdir: "/app",                     # Working directory in container
+      env: %{"LANG" => "C.UTF-8"},         # Environment variables
+      expose: [8080, 443],                 # Ports to expose
+      labels: %{                           # Image labels
+        "org.opencontainers.image.source" => "https://github.com/..."
+      },
+      push: false                          # Auto-push (for release step)
+    ]
+  ]
+end
 ```
 
 ## Programmatic API Reference

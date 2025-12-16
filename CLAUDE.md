@@ -9,27 +9,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-# Compile (without rebar3)
-erlc -o _build +debug_info -I include src/*.erl test/*.erl
-
-# Run all tests
-cd _build && erl -noshell -pa . -eval 'eunit:test(ocibuild_tests, [verbose])' -s init stop
-
-# Run a single test (replace test_name with actual test function name)
-cd _build && erl -noshell -pa . -eval 'eunit:test({ocibuild_tests, test_name})' -s init stop
-
-# With rebar3
+# With rebar3 (Erlang)
 rebar3 compile
 rebar3 eunit
 rebar3 eunit --test=ocibuild_tests:test_name_test  # Single test
+
+# With mix (Elixir)
+mix compile
+mix test
+mix test test/ocibuild_mix_test.exs:42  # Single test by line
 ```
 
 ## Architecture
 
 ```
-ocibuild.erl          → Public API (from, copy, push, save, etc.)
-ocibuild_rebar3.erl   → Rebar3 provider (rebar3 ocibuild command)
-ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar, custom implementation)
+ocibuild.erl              → Public API (from, copy, push, save, etc.)
+ocibuild_rebar3.erl       → Rebar3 provider (rebar3 ocibuild command)
+Mix.Tasks.Ocibuild        → Mix task (mix ocibuild command) [Elixir]
+Ocibuild.MixRelease       → Mix release step integration [Elixir]
+ocibuild_tar.erl          → In-memory TAR builder (POSIX ustar, custom implementation)
 ocibuild_layer.erl    → Creates OCI layers (tar + gzip + SHA256)
 ocibuild_digest.erl   → SHA256 digest utilities
 ocibuild_json.erl     → JSON encode/decode (OTP 27 native + fallback for OTP 25+)
@@ -91,6 +89,45 @@ Configuration in `rebar.config`:
 ```
 
 Auth via environment: `OCIBUILD_TOKEN` or `OCIBUILD_USERNAME`/`OCIBUILD_PASSWORD`.
+
+## Mix Task (Elixir)
+
+Build OCI images from Mix releases:
+
+```bash
+# Build release and create OCI image
+MIX_ENV=prod mix release
+MIX_ENV=prod mix ocibuild -t myapp:1.0.0
+
+# Push to registry
+MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+```
+
+Configuration in `mix.exs`:
+```elixir
+def project do
+  [
+    ocibuild: [
+      base_image: "debian:slim",
+      registry: "ghcr.io/myorg",
+      env: %{"LANG" => "C.UTF-8"},
+      expose: [8080]
+    ]
+  ]
+end
+```
+
+### Automatic Release Step
+
+Add to release `:steps` for automatic OCI image building:
+
+```elixir
+releases: [
+  myapp: [
+    steps: [:assemble, &Ocibuild.MixRelease.build_image/1]
+  ]
+]
+```
 
 ## Common Development Tasks
 

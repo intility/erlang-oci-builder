@@ -20,6 +20,9 @@
 
 -export([init/1, do/1, format_error/1]).
 
+%% Exported for use by Mix task (Elixir integration)
+-export([collect_release_files/1, build_image/7, get_auth/0]).
+
 -define(PROVIDER, ocibuild).
 -define(DEPS, [release]).
 -define(DEFAULT_BASE_IMAGE, <<"debian:slim">>).
