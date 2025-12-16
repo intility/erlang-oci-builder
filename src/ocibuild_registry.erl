@@ -564,6 +564,19 @@ ensure_started() ->
     end,
     ok.
 
+%% Get SSL options for HTTPS requests
+-spec ssl_opts() -> [ssl:tls_client_option()].
+ssl_opts() ->
+    %% Use system CA certificates (OTP 25+) with proper verification
+    [
+        {verify, verify_peer},
+        {cacerts, public_key:cacerts_get()},
+        {depth, 10},
+        {customize_hostname_check, [
+            {match_fun, public_key:pkix_verify_hostname_match_fun(https)}
+        ]}
+    ].
+
 -spec http_get(string(), [{string(), string()}]) -> {ok, binary()} | {error, term()}.
 http_get(Url, Headers) ->
     http_get(Url, Headers, 5).
@@ -578,7 +591,7 @@ http_get(Url, Headers, RedirectsLeft) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     %% Disable autoredirect - we handle redirects manually to strip auth headers
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}],
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
@@ -630,7 +643,7 @@ http_head(Url, Headers) ->
     ensure_started(),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}],
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{socket_opts, [{keepalive, false}]}],
     case httpc:request(head, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
@@ -648,7 +661,7 @@ http_post(Url, Headers, Body) ->
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}],
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
     case httpc:request(post, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
@@ -666,7 +679,7 @@ http_put(Url, Headers, Body) ->
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}],
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
     case httpc:request(put, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
@@ -725,7 +738,7 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     %% Use streaming mode to receive chunks
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}],
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
     Opts = [{sync, false}, {stream, self}, {socket_opts, [{keepalive, false}]}],
 
     case httpc:request(get, Request, HttpOpts, Opts) of

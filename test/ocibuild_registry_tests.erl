@@ -30,7 +30,6 @@ sample_config() ->
         ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []}
     }).
 
-
 %%%===================================================================
 %%% Setup / Teardown
 %%%===================================================================
@@ -47,17 +46,13 @@ cleanup(_) ->
 %%%===================================================================
 
 registry_test_() ->
-    {foreach,
-        fun setup/0,
-        fun cleanup/1,
-        [
-            {"pull manifest from generic registry", fun pull_manifest_generic_test/0},
-            {"pull blob", fun pull_blob_test/0},
-            {"check blob exists returns true", fun check_blob_exists_true_test/0},
-            {"check blob exists returns false", fun check_blob_exists_false_test/0},
-            {"http error handling", fun http_error_test/0}
-        ]
-    }.
+    {foreach, fun setup/0, fun cleanup/1, [
+        {"pull manifest from generic registry", fun pull_manifest_generic_test/0},
+        {"pull blob", fun pull_blob_test/0},
+        {"check blob exists returns true", fun check_blob_exists_true_test/0},
+        {"check blob exists returns false", fun check_blob_exists_false_test/0},
+        {"http error handling", fun http_error_test/0}
+    ]}.
 
 %%%===================================================================
 %%% Pull manifest tests
@@ -84,7 +79,6 @@ pull_manifest_generic_test() ->
     ?assertEqual(2, maps:get(~"schemaVersion", Manifest)),
     ?assertEqual(~"amd64", maps:get(~"architecture", Config)).
 
-
 %%%===================================================================
 %%% Pull blob tests
 %%%===================================================================
@@ -92,9 +86,10 @@ pull_manifest_generic_test() ->
 pull_blob_test() ->
     BlobData = <<"binary blob data here">>,
 
-    meck:expect(httpc, request, fun
-        (get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:blobdigest", _Headers}, _HttpOpts, _Opts) ->
-            {ok, {{http, 200, "OK"}, [], BlobData}}
+    meck:expect(httpc, request, fun(
+        get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:blobdigest", _Headers}, _HttpOpts, _Opts
+    ) ->
+        {ok, {{http, 200, "OK"}, [], BlobData}}
     end),
 
     Result = ocibuild_registry:pull_blob(
@@ -106,15 +101,15 @@ pull_blob_test() ->
 
     ?assertEqual({ok, BlobData}, Result).
 
-
 %%%===================================================================
 %%% Check blob exists tests
 %%%===================================================================
 
 check_blob_exists_true_test() ->
-    meck:expect(httpc, request, fun
-        (head, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:exists", _Headers}, _HttpOpts, _Opts) ->
-            {ok, {{http, 200, "OK"}, [], <<>>}}
+    meck:expect(httpc, request, fun(
+        head, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:exists", _Headers}, _HttpOpts, _Opts
+    ) ->
+        {ok, {{http, 200, "OK"}, [], <<>>}}
     end),
 
     Result = ocibuild_registry:check_blob_exists(
@@ -127,9 +122,10 @@ check_blob_exists_true_test() ->
     ?assertEqual(true, Result).
 
 check_blob_exists_false_test() ->
-    meck:expect(httpc, request, fun
-        (head, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:notfound", _Headers}, _HttpOpts, _Opts) ->
-            {ok, {{http, 404, "Not Found"}, [], <<>>}}
+    meck:expect(httpc, request, fun(
+        head, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:notfound", _Headers}, _HttpOpts, _Opts
+    ) ->
+        {ok, {{http, 404, "Not Found"}, [], <<>>}}
     end),
 
     Result = ocibuild_registry:check_blob_exists(
@@ -146,9 +142,10 @@ check_blob_exists_false_test() ->
 %%%===================================================================
 
 http_error_test() ->
-    meck:expect(httpc, request, fun
-        (get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:error", _Headers}, _HttpOpts, _Opts) ->
-            {ok, {{http, 500, "Internal Server Error"}, [], <<>>}}
+    meck:expect(httpc, request, fun(
+        get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:error", _Headers}, _HttpOpts, _Opts
+    ) ->
+        {ok, {{http, 500, "Internal Server Error"}, [], <<>>}}
     end),
 
     Result = ocibuild_registry:pull_blob(

@@ -314,25 +314,25 @@ sample_config() ->
     }.
 
 from_with_meck_test_() ->
-    {foreach,
-        fun() -> meck:new(ocibuild_registry, [no_link]) end,
-        fun(_) -> meck:unload(ocibuild_registry) end,
-        [
+    {foreach, fun() -> meck:new(ocibuild_registry, [no_link]) end,
+        fun(_) -> meck:unload(ocibuild_registry) end, [
             {"from/1 with string ref", fun from_string_ref_test/0},
             {"from/1 with tuple ref", fun from_tuple_ref_test/0},
             {"from/2 with auth", fun from_with_auth_test/0},
             {"from/3 with progress", fun from_with_progress_test/0},
             {"from/1 error handling", fun from_error_test/0},
             {"image ref parsing", fun parse_image_ref_test/0}
-        ]
-    }.
+        ]}.
 
 from_string_ref_test() ->
     %% Mock pull_manifest/3 which is called by from/1
-    meck:expect(ocibuild_registry, pull_manifest,
+    meck:expect(
+        ocibuild_registry,
+        pull_manifest,
         fun(~"docker.io", ~"library/alpine", ~"3.19") ->
             {ok, sample_manifest(), sample_config()}
-        end),
+        end
+    ),
 
     Result = ocibuild:from(~"alpine:3.19"),
 
@@ -342,10 +342,13 @@ from_string_ref_test() ->
     ?assertEqual(~"amd64", maps:get(~"architecture", maps:get(config, Image))).
 
 from_tuple_ref_test() ->
-    meck:expect(ocibuild_registry, pull_manifest,
+    meck:expect(
+        ocibuild_registry,
+        pull_manifest,
         fun(~"ghcr.io", ~"myorg/myapp", ~"v1.0.0") ->
             {ok, sample_manifest(), sample_config()}
-        end),
+        end
+    ),
 
     Result = ocibuild:from({~"ghcr.io", ~"myorg/myapp", ~"v1.0.0"}),
 
@@ -356,10 +359,13 @@ from_tuple_ref_test() ->
 from_with_auth_test() ->
     Auth = #{token => ~"secret-token"},
     %% from/2 calls from/3 which calls pull_manifest/5
-    meck:expect(ocibuild_registry, pull_manifest,
+    meck:expect(
+        ocibuild_registry,
+        pull_manifest,
         fun(~"ghcr.io", ~"private/repo", ~"latest", Auth2, #{}) when Auth2 =:= Auth ->
             {ok, sample_manifest(), sample_config()}
-        end),
+        end
+    ),
 
     Result = ocibuild:from(~"ghcr.io/private/repo:latest", Auth),
 
@@ -370,15 +376,20 @@ from_with_progress_test() ->
     ProgressFn = fun(Info) -> Self ! {progress, Info} end,
 
     %% from/3 calls pull_manifest/5
-    meck:expect(ocibuild_registry, pull_manifest,
+    meck:expect(
+        ocibuild_registry,
+        pull_manifest,
         fun(~"docker.io", ~"library/alpine", ~"latest", #{}, Opts) ->
             %% Verify progress callback is passed and invoke it
             case maps:get(progress, Opts, undefined) of
-                undefined -> ok;
-                Fn when is_function(Fn) -> Fn(#{phase => manifest, bytes_received => 100, total_bytes => 100})
+                undefined ->
+                    ok;
+                Fn when is_function(Fn) ->
+                    Fn(#{phase => manifest, bytes_received => 100, total_bytes => 100})
             end,
             {ok, sample_manifest(), sample_config()}
-        end),
+        end
+    ),
 
     Result = ocibuild:from(~"alpine", #{}, #{progress => ProgressFn}),
 
@@ -387,14 +398,18 @@ from_with_progress_test() ->
     receive
         {progress, #{phase := manifest}} -> ok
     after 100 ->
-        ok  %% Progress may not be called if mock doesn't invoke it
+        %% Progress may not be called if mock doesn't invoke it
+        ok
     end.
 
 from_error_test() ->
-    meck:expect(ocibuild_registry, pull_manifest,
+    meck:expect(
+        ocibuild_registry,
+        pull_manifest,
         fun(~"docker.io", ~"library/notfound", ~"latest") ->
             {error, {http_error, 404, "Not Found"}}
-        end),
+        end
+    ),
 
     Result = ocibuild:from(~"notfound"),
 
@@ -402,11 +417,14 @@ from_error_test() ->
 
 parse_image_ref_test() ->
     %% Test that simple image names are parsed correctly using the mock
-    meck:expect(ocibuild_registry, pull_manifest,
+    meck:expect(
+        ocibuild_registry,
+        pull_manifest,
         fun(Registry, Repo, Tag) ->
             %% Return the parsed values for verification
             {error, {parsed, Registry, Repo, Tag}}
-        end),
+        end
+    ),
 
     %% Simple name defaults to docker.io/library
     {error, {parsed, R1, Repo1, T1}} = ocibuild:from(~"nginx"),
