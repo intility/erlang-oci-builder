@@ -20,6 +20,13 @@ mix test
 mix test test/ocibuild_mix_test.exs:42  # Single test by line
 ```
 
+## Formatting Commands
+
+```bash
+# With erlfmt
+rebar3 fmt -w
+```
+
 ## Architecture
 
 ```
