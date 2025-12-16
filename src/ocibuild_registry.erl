@@ -39,27 +39,41 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
     %% Get auth token if needed
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
-            %% Fetch manifest
+            %% Fetch manifest (accept both single manifests and manifest lists)
             ManifestUrl =
                 io_lib:format("~s/v2/~s/manifests/~s",
                               [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]),
             Headers =
                 auth_headers(Token)
-                ++ [{"Accept", "application/vnd.oci.image.manifest.v1+json"},
+                ++ [{"Accept", "application/vnd.oci.image.index.v1+json"},
+                    {"Accept", "application/vnd.docker.distribution.manifest.list.v2+json"},
+                    {"Accept", "application/vnd.oci.image.manifest.v1+json"},
                     {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}],
 
             case http_get(lists:flatten(ManifestUrl), Headers) of
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
-                    %% Fetch config blob
-                    ConfigDescriptor = maps:get(~"config", Manifest),
-                    ConfigDigest = maps:get(~"digest", ConfigDescriptor),
-                    case pull_blob(Registry, Repo, ConfigDigest, Auth) of
-                        {ok, ConfigJson} ->
-                            Config = ocibuild_json:decode(ConfigJson),
-                            {ok, Manifest, Config};
-                        {error, _} = Err ->
-                            Err
+                    %% Check if this is a manifest list (multi-platform image)
+                    case is_manifest_list(Manifest) of
+                        true ->
+                            %% Select platform-specific manifest and fetch it
+                            case select_platform_manifest(Manifest) of
+                                {ok, PlatformDigest} ->
+                                    pull_manifest(Registry, Repo, PlatformDigest, Auth);
+                                {error, _} = Err ->
+                                    Err
+                            end;
+                        false ->
+                            %% Single manifest - fetch config blob
+                            ConfigDescriptor = maps:get(~"config", Manifest),
+                            ConfigDigest = maps:get(~"digest", ConfigDescriptor),
+                            case pull_blob(Registry, Repo, ConfigDigest, Auth) of
+                                {ok, ConfigJson} ->
+                                    Config = ocibuild_json:decode(ConfigJson),
+                                    {ok, Manifest, Config};
+                                {error, _} = Err ->
+                                    Err
+                            end
                     end;
                 {error, _} = Err ->
                     Err
@@ -151,6 +165,96 @@ registry_url(Registry) ->
             Url;
         _error ->
             "https://" ++ binary_to_list(Registry)
+    end.
+
+%% Check if a manifest is a manifest list (multi-platform image index)
+-spec is_manifest_list(map()) -> boolean().
+is_manifest_list(Manifest) ->
+    case maps:find(~"mediaType", Manifest) of
+        {ok, ~"application/vnd.oci.image.index.v1+json"} ->
+            true;
+        {ok, ~"application/vnd.docker.distribution.manifest.list.v2+json"} ->
+            true;
+        _ ->
+            %% Also check for "manifests" key as fallback
+            maps:is_key(~"manifests", Manifest) andalso
+                not maps:is_key(~"config", Manifest)
+    end.
+
+%% Select the appropriate platform manifest from a manifest list
+-spec select_platform_manifest(map()) -> {ok, binary()} | {error, term()}.
+select_platform_manifest(#{~"manifests" := Manifests}) ->
+    %% Determine target platform (default to current system or linux/amd64)
+    {TargetOs, TargetArch} = get_target_platform(),
+
+    %% Filter out attestation manifests and find matching platform
+    CandidateManifests = [M || M <- Manifests,
+                               not is_attestation_manifest(M)],
+
+    case find_platform_manifest(CandidateManifests, TargetOs, TargetArch) of
+        {ok, _} = Result ->
+            Result;
+        {error, no_matching_platform} ->
+            %% Fall back to first non-attestation manifest
+            case CandidateManifests of
+                [First | _] ->
+                    {ok, maps:get(~"digest", First)};
+                [] ->
+                    {error, no_manifests_available}
+            end
+    end;
+select_platform_manifest(_) ->
+    {error, not_a_manifest_list}.
+
+%% Check if a manifest entry is an attestation (not a real image)
+-spec is_attestation_manifest(map()) -> boolean().
+is_attestation_manifest(#{~"annotations" := Annotations}) ->
+    maps:is_key(~"vnd.docker.reference.type", Annotations);
+is_attestation_manifest(#{~"platform" := #{~"architecture" := ~"unknown"}}) ->
+    true;
+is_attestation_manifest(_) ->
+    false.
+
+%% Find a manifest matching the target platform
+-spec find_platform_manifest([map()], binary(), binary()) ->
+          {ok, binary()} | {error, no_matching_platform}.
+find_platform_manifest([], _TargetOs, _TargetArch) ->
+    {error, no_matching_platform};
+find_platform_manifest([#{~"platform" := Platform, ~"digest" := Digest} | Rest],
+                       TargetOs, TargetArch) ->
+    Os = maps:get(~"os", Platform, <<>>),
+    Arch = maps:get(~"architecture", Platform, <<>>),
+    case {Os, Arch} of
+        {TargetOs, TargetArch} ->
+            {ok, Digest};
+        _ ->
+            find_platform_manifest(Rest, TargetOs, TargetArch)
+    end;
+find_platform_manifest([_ | Rest], TargetOs, TargetArch) ->
+    find_platform_manifest(Rest, TargetOs, TargetArch).
+
+%% Get the target platform (OS and architecture)
+-spec get_target_platform() -> {binary(), binary()}.
+get_target_platform() ->
+    Os = ~"linux",  % Container images are always for Linux
+    Arch = case erlang:system_info(system_architecture) of
+               Arch0 when is_list(Arch0) ->
+                   normalize_arch(list_to_binary(Arch0));
+               _ ->
+                   ~"amd64"
+           end,
+    {Os, Arch}.
+
+%% Normalize architecture name to OCI format
+-spec normalize_arch(binary()) -> binary().
+normalize_arch(Arch) ->
+    case Arch of
+        <<"x86_64", _/binary>> -> ~"amd64";
+        <<"amd64", _/binary>> -> ~"amd64";
+        <<"aarch64", _/binary>> -> ~"arm64";
+        <<"arm64", _/binary>> -> ~"arm64";
+        <<"arm", _/binary>> -> ~"arm";
+        _ -> ~"amd64"  % Default fallback
     end.
 
 %% Get authentication token
@@ -342,24 +446,68 @@ ensure_started() ->
 
 -spec http_get(string(), [{string(), string()}]) -> {ok, binary()} | {error, term()}.
 http_get(Url, Headers) ->
+    http_get(Url, Headers, 5).
+
+-spec http_get(string(), [{string(), string()}], non_neg_integer()) ->
+          {ok, binary()} | {error, term()}.
+http_get(_Url, _Headers, 0) ->
+    {error, too_many_redirects};
+http_get(Url, Headers, RedirectsLeft) ->
     ensure_started(),
-    Request = {Url, Headers},
-    case httpc:request(get, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}])
-    of
+    %% Add Connection: close to prevent stale connection reuse issues
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders},
+    %% Disable autoredirect - we handle redirects manually to strip auth headers
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
+        {ok, {{_, Status, _}, RespHeaders, _}} when Status =:= 301;
+                                                     Status =:= 302;
+                                                     Status =:= 303;
+                                                     Status =:= 307;
+                                                     Status =:= 308 ->
+            %% Handle redirect - strip Authorization header for external redirects
+            case get_redirect_location(RespHeaders) of
+                {ok, RedirectUrl} ->
+                    %% Don't forward auth headers to external hosts (e.g., S3)
+                    RedirectHeaders = strip_auth_headers(Headers),
+                    http_get(RedirectUrl, RedirectHeaders, RedirectsLeft - 1);
+                error ->
+                    {error, {redirect_without_location, Status}}
+            end;
         {ok, {{_, Status, Reason}, _, _}} ->
             {error, {http_error, Status, Reason}};
         {error, Reason} ->
             {error, Reason}
     end.
 
+%% Get Location header from response headers
+-spec get_redirect_location([{string(), string()}]) -> {ok, string()} | error.
+get_redirect_location([]) ->
+    error;
+get_redirect_location([{Key, Value} | Rest]) ->
+    case string:lowercase(Key) of
+        "location" -> {ok, Value};
+        _ -> get_redirect_location(Rest)
+    end.
+
+%% Strip authorization headers for redirects to external hosts
+-spec strip_auth_headers([{string(), string()}]) -> [{string(), string()}].
+strip_auth_headers(Headers) ->
+    [{K, V} || {K, V} <- Headers,
+               string:lowercase(K) =/= "authorization"].
+
 -spec http_head(string(), [{string(), string()}]) ->
                    {ok, [{string(), string()}]} | {error, term()}.
 http_head(Url, Headers) ->
     ensure_started(),
-    Request = {Url, Headers},
-    case httpc:request(head, Request, [{timeout, ?DEFAULT_TIMEOUT}], []) of
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}],
+    Opts = [{socket_opts, [{keepalive, false}]}],
+    case httpc:request(head, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, ResponseHeaders};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -373,9 +521,11 @@ http_head(Url, Headers) ->
 http_post(Url, Headers, Body) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
-    Request = {Url, Headers, ContentType, Body},
-    case httpc:request(post, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}])
-    of
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders, ContentType, Body},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(post, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -389,9 +539,11 @@ http_post(Url, Headers, Body) ->
 http_put(Url, Headers, Body) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
-    Request = {Url, Headers, ContentType, Body},
-    case httpc:request(put, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}])
-    of
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders, ContentType, Body},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(put, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody};
         {ok, {{_, Status, Reason}, _, _}} ->
