@@ -47,7 +47,7 @@ json_encode_object_test() ->
     ?assertEqual(#{<<"a">> => 1, <<"b">> => 2}, Decoded).
 
 json_decode_test() ->
-    ?assertEqual(#{<<"key">> => <<"value">>}, 
+    ?assertEqual(#{<<"key">> => <<"value">>},
                  ocibuild_json:decode(<<"{\"key\":\"value\"}">>)).
 
 %%%===================================================================
@@ -82,20 +82,20 @@ layer_create_test() ->
         {<<"/app/test">>, <<"test data">>, 8#755}
     ],
     Layer = ocibuild_layer:create(Files),
-    
+
     %% Check all required fields exist
     ?assert(maps:is_key(media_type, Layer)),
     ?assert(maps:is_key(digest, Layer)),
     ?assert(maps:is_key(diff_id, Layer)),
     ?assert(maps:is_key(size, Layer)),
     ?assert(maps:is_key(data, Layer)),
-    
+
     %% Digest should start with sha256:
     #{digest := Digest} = Layer,
     ?assertMatch(<<"sha256:", _/binary>>, Digest),
-    
+
     %% Media type should be correct
-    ?assertEqual(<<"application/vnd.oci.image.layer.v1.tar+gzip">>, 
+    ?assertEqual(<<"application/vnd.oci.image.layer.v1.tar+gzip">>,
                  maps:get(media_type, Layer)).
 
 %%%===================================================================
@@ -116,10 +116,10 @@ image_config_test() ->
     Image4 = ocibuild:workdir(Image3, <<"/app">>),
     Image5 = ocibuild:expose(Image4, 8080),
     Image6 = ocibuild:user(Image5, <<"nobody">>),
-    
+
     Config = maps:get(config, Image6),
     InnerConfig = maps:get(<<"config">>, Config),
-    
+
     ?assertEqual([<<"/app">>], maps:get(<<"Entrypoint">>, InnerConfig)),
     ?assertEqual([<<"--port">>, <<"8080">>], maps:get(<<"Cmd">>, InnerConfig)),
     ?assertEqual(<<"/app">>, maps:get(<<"WorkingDir">>, InnerConfig)),
@@ -130,7 +130,7 @@ add_layer_test() ->
     Image1 = ocibuild:add_layer(Image0, [
         {<<"/test.txt">>, <<"hello">>, 8#644}
     ]),
-    
+
     Layers = maps:get(layers, Image1),
     ?assertEqual(1, length(Layers)).
 
@@ -144,33 +144,87 @@ export_directory_test() ->
         {<<"/test.txt">>, <<"hello">>, 8#644}
     ]),
     Image2 = ocibuild:entrypoint(Image1, [<<"/bin/sh">>]),
-    
-    TmpDir = "/tmp/ocibuild_test_" ++ integer_to_list(erlang:unique_integer([positive])),
-    ok = ocibuild:export(Image2, TmpDir),
-    
-    %% Check required files exist
-    ?assert(filelib:is_file(filename:join(TmpDir, "oci-layout"))),
-    ?assert(filelib:is_file(filename:join(TmpDir, "index.json"))),
-    ?assert(filelib:is_dir(filename:join(TmpDir, "blobs/sha256"))),
-    
-    %% Cleanup
-    os:cmd("rm -rf " ++ TmpDir),
-    ok.
+
+    TmpDir = make_temp_dir("ocibuild_test_export"),
+    try
+        ok = ocibuild:export(Image2, TmpDir),
+
+        %% Check required files exist
+        ?assert(filelib:is_file(filename:join(TmpDir, "oci-layout"))),
+        ?assert(filelib:is_file(filename:join(TmpDir, "index.json"))),
+        ?assert(filelib:is_dir(filename:join([TmpDir, "blobs", "sha256"])))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
 
 save_tarball_test() ->
     {ok, Image0} = ocibuild:scratch(),
     Image1 = ocibuild:add_layer(Image0, [
         {<<"/test.txt">>, <<"hello">>, 8#644}
     ]),
-    
-    TmpFile = "/tmp/ocibuild_test_" ++ integer_to_list(erlang:unique_integer([positive])) ++ ".tar.gz",
-    ok = ocibuild:save(Image1, TmpFile),
-    
-    %% Check file exists and is gzipped
-    ?assert(filelib:is_file(TmpFile)),
-    {ok, Data} = file:read_file(TmpFile),
-    <<16#1f, 16#8b, _/binary>> = Data,
-    
-    %% Cleanup
-    file:delete(TmpFile),
-    ok.
+
+    TmpFile = make_temp_file("ocibuild_test_save", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image1, TmpFile),
+
+        %% Check file exists and is gzipped
+        ?assert(filelib:is_file(TmpFile)),
+        {ok, Data} = file:read_file(TmpFile),
+        <<16#1f, 16#8b, _/binary>> = Data
+    after
+        file:delete(TmpFile)
+    end.
+
+%%%===================================================================
+%%% Cross-platform helpers
+%%%===================================================================
+
+%% @doc Get the system temp directory in a cross-platform way
+temp_dir() ->
+    case os:type() of
+        {win32, _} ->
+            case os:getenv("TEMP") of
+                false ->
+                    case os:getenv("TMP") of
+                        false -> "C:\\Temp";
+                        TmpDir -> TmpDir
+                    end;
+                TempDir -> TempDir
+            end;
+        _ ->
+            "/tmp"
+    end.
+
+%% @doc Create a unique temporary directory
+make_temp_dir(Prefix) ->
+    Unique = integer_to_list(erlang:unique_integer([positive])),
+    DirName = Prefix ++ "_" ++ Unique,
+    TmpDir = filename:join(temp_dir(), DirName),
+    ok = filelib:ensure_dir(filename:join(TmpDir, "placeholder")),
+    case file:make_dir(TmpDir) of
+        ok -> TmpDir;
+        {error, eexist} -> TmpDir
+    end.
+
+%% @doc Create a unique temporary file path
+make_temp_file(Prefix, Extension) ->
+    Unique = integer_to_list(erlang:unique_integer([positive])),
+    FileName = Prefix ++ "_" ++ Unique ++ Extension,
+    filename:join(temp_dir(), FileName).
+
+%% @doc Recursively delete a directory (cross-platform)
+cleanup_temp_dir(Dir) ->
+    case filelib:is_dir(Dir) of
+        true ->
+            {ok, Files} = file:list_dir(Dir),
+            lists:foreach(fun(File) ->
+                Path = filename:join(Dir, File),
+                case filelib:is_dir(Path) of
+                    true -> cleanup_temp_dir(Path);
+                    false -> file:delete(Path)
+                end
+            end, Files),
+            file:del_dir(Dir);
+        false ->
+            ok
+    end.

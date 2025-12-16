@@ -1,0 +1,395 @@
+%%%-------------------------------------------------------------------
+%%% @doc Rebar3 provider for building OCI container images from releases.
+%%%
+%%% Usage:
+%%%   rebar3 ocibuild -t myapp:1.0.0
+%%%   rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+%%%
+%%% Configuration in rebar.config:
+%%%   {ocibuild, [
+%%%       {base_image, "debian:slim"},
+%%%       {registry, "docker.io"},
+%%%       {workdir, "/app"},
+%%%       {env, #{<<"LANG">> => <<"C.UTF-8">>}},
+%%%       {expose, [8080]}
+%%%   ]}.
+%%% @end
+%%%-------------------------------------------------------------------
+-module(ocibuild_rebar3).
+-behaviour(provider).
+
+-export([init/1, do/1, format_error/1]).
+
+-define(PROVIDER, ocibuild).
+-define(DEPS, [release]).
+-define(DEFAULT_BASE_IMAGE, <<"debian:slim">>).
+-define(DEFAULT_WORKDIR, <<"/app">>).
+
+%%%===================================================================
+%%% Provider callbacks
+%%%===================================================================
+
+%% @doc Initialize the provider and register CLI options.
+-spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
+init(State) ->
+    Provider = providers:create([
+        {name, ?PROVIDER},
+        {module, ?MODULE},
+        {bare, true},
+        {deps, ?DEPS},
+        {desc, "Build OCI container images from Erlang releases"},
+        {short_desc, "Build OCI images"},
+        {example, "rebar3 ocibuild -t myapp:1.0.0"},
+        {opts, [
+            {tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
+            {registry, $r, "registry", string, "Registry for push (e.g., ghcr.io)"},
+            {output, $o, "output", string, "Output tarball path"},
+            {push, undefined, "push", {boolean, false}, "Push to registry after build"},
+            {base, undefined, "base", string, "Override base image"},
+            {release, undefined, "release", string, "Release name (if multiple)"}
+        ]},
+        {profiles, [default, prod]}
+    ]),
+    {ok, rebar_state:add_provider(State, Provider)}.
+
+%% @doc Execute the provider - build OCI image from release.
+-spec do(rebar_state:t()) -> {ok, rebar_state:t()} | {error, term()}.
+do(State) ->
+    {Args, _} = rebar_state:command_parsed_args(State),
+    Config = rebar_state:get(State, ocibuild, []),
+
+    %% Get tag (required)
+    case proplists:get_value(tag, Args) of
+        undefined ->
+            {error, {?MODULE, missing_tag}};
+        Tag ->
+            do_build(State, Args, Config, list_to_binary(Tag))
+    end.
+
+%% @doc Format error messages for display.
+-spec format_error(term()) -> iolist().
+format_error(missing_tag) ->
+    "Missing required --tag (-t) option. Usage: rebar3 ocibuild -t myapp:1.0.0";
+format_error({release_not_found, Name, Path}) ->
+    io_lib:format("Release '~s' not found at ~s. Run 'rebar3 release' first.", [Name, Path]);
+format_error({no_release_configured, RelxConfig}) ->
+    io_lib:format("No release configured in rebar.config. Got: ~p", [RelxConfig]);
+format_error({file_read_error, Path, Reason}) ->
+    io_lib:format("Failed to read file ~s: ~p", [Path, Reason]);
+format_error({save_failed, Reason}) ->
+    io_lib:format("Failed to save image: ~p", [Reason]);
+format_error({push_failed, Reason}) ->
+    io_lib:format("Failed to push image: ~p", [Reason]);
+format_error({base_image_failed, Reason}) ->
+    io_lib:format("Failed to fetch base image: ~p", [Reason]);
+format_error(Reason) ->
+    io_lib:format("OCI build error: ~p", [Reason]).
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+
+%% @private Main build logic
+do_build(State, Args, Config, Tag) ->
+    rebar_api:info("Building OCI image: ~s", [Tag]),
+
+    %% Find release
+    case find_release(State, Args) of
+        {ok, ReleaseName, ReleasePath} ->
+            rebar_api:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
+
+            %% Collect files from release
+            case collect_release_files(ReleasePath) of
+                {ok, Files} ->
+                    rebar_api:info("Collected ~p files from release", [length(Files)]),
+                    build_and_output(State, Args, Config, Tag, ReleaseName, Files);
+                {error, Reason} ->
+                    {error, {?MODULE, Reason}}
+            end;
+        {error, Reason} ->
+            {error, {?MODULE, Reason}}
+    end.
+
+%% @private Find the release directory
+find_release(State, Args) ->
+    RelxConfig = rebar_state:get(State, relx, []),
+
+    %% Get release name from args or config
+    case get_release_name(Args, RelxConfig) of
+        {ok, ReleaseName} ->
+            %% Build the release path
+            BaseDir = rebar_dir:base_dir(State),
+            ReleasePath = filename:join([BaseDir, "rel", ReleaseName]),
+
+            case filelib:is_dir(ReleasePath) of
+                true ->
+                    {ok, ReleaseName, ReleasePath};
+                false ->
+                    {error, {release_not_found, ReleaseName, ReleasePath}}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @private Extract release name from args or relx config
+get_release_name(Args, RelxConfig) ->
+    case proplists:get_value(release, Args) of
+        undefined ->
+            %% Try to get from relx config
+            case find_relx_release(RelxConfig) of
+                {ok, Name} -> {ok, Name};
+                error -> {error, {no_release_configured, RelxConfig}}
+            end;
+        Name ->
+            {ok, Name}
+    end.
+
+%% @private Find release definition in relx config
+find_relx_release([]) ->
+    error;
+find_relx_release([{release, {Name, _Vsn}, _Apps} | _]) ->
+    {ok, atom_to_list(Name)};
+find_relx_release([{release, {Name, _Vsn}, _Apps, _Opts} | _]) ->
+    {ok, atom_to_list(Name)};
+find_relx_release([_ | Rest]) ->
+    find_relx_release(Rest).
+
+%% @private Collect all files from release directory
+collect_release_files(ReleasePath) ->
+    try
+        Files = collect_files_recursive(ReleasePath, ReleasePath),
+        {ok, Files}
+    catch
+        throw:{file_error, Path, Reason} ->
+            {error, {file_read_error, Path, Reason}}
+    end.
+
+%% @private Recursively collect files
+collect_files_recursive(BasePath, CurrentPath) ->
+    case file:list_dir(CurrentPath) of
+        {ok, Entries} ->
+            lists:flatmap(fun(Entry) ->
+                FullPath = filename:join(CurrentPath, Entry),
+                case filelib:is_dir(FullPath) of
+                    true ->
+                        collect_files_recursive(BasePath, FullPath);
+                    false ->
+                        [collect_single_file(BasePath, FullPath)]
+                end
+            end, Entries);
+        {error, Reason} ->
+            throw({file_error, CurrentPath, Reason})
+    end.
+
+%% @private Collect a single file with its container path and mode
+collect_single_file(BasePath, FilePath) ->
+    %% Get relative path from release root (cross-platform)
+    RelPath = make_relative_path(BasePath, FilePath),
+
+    %% Convert to container path with forward slashes
+    ContainerPath = to_container_path(RelPath),
+
+    %% Read file content
+    case file:read_file(FilePath) of
+        {ok, Content} ->
+            %% Get file permissions
+            Mode = get_file_mode(FilePath),
+            {ContainerPath, Content, Mode};
+        {error, Reason} ->
+            throw({file_error, FilePath, Reason})
+    end.
+
+%% @private Make a path relative to a base path (cross-platform)
+make_relative_path(BasePath, FullPath) ->
+    %% Normalize both paths to use consistent separators
+    BaseNorm = filename:split(BasePath),
+    FullNorm = filename:split(FullPath),
+    %% Remove the base prefix from the full path
+    strip_prefix(BaseNorm, FullNorm).
+
+strip_prefix([H|T1], [H|T2]) ->
+    strip_prefix(T1, T2);
+strip_prefix([], Remaining) ->
+    filename:join(Remaining);
+strip_prefix(_, FullPath) ->
+    filename:join(FullPath).
+
+%% @private Convert a local path to a container path (always forward slashes)
+to_container_path(RelPath) ->
+    %% Split and rejoin with forward slashes for container
+    Parts = filename:split(RelPath),
+    UnixPath = string:join(Parts, "/"),
+    list_to_binary("/app/" ++ UnixPath).
+
+%% @private Get file mode (permissions)
+get_file_mode(FilePath) ->
+    case file:read_file_info(FilePath) of
+        {ok, FileInfo} ->
+            %% Extract permission bits (rwxrwxrwx)
+            element(8, FileInfo) band 8#777;
+        {error, _} ->
+            %% Default to readable file
+            8#644
+    end.
+
+%% @private Build image and output
+build_and_output(State, Args, Config, Tag, ReleaseName, Files) ->
+    %% Get configuration options
+    BaseImage = get_base_image(Args, Config),
+    Workdir = proplists:get_value(workdir, Config, ?DEFAULT_WORKDIR),
+    EnvMap = proplists:get_value(env, Config, #{}),
+    ExposePorts = proplists:get_value(expose, Config, []),
+    Labels = proplists:get_value(labels, Config, #{}),
+
+    rebar_api:info("Base image: ~s", [BaseImage]),
+
+    %% Build the image
+    case build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) of
+        {ok, Image} ->
+            output_image(State, Args, Config, Tag, Image);
+        {error, Reason} ->
+            {error, {?MODULE, Reason}}
+    end.
+
+%% @private Get base image from args or config
+get_base_image(Args, Config) ->
+    case proplists:get_value(base, Args) of
+        undefined ->
+            proplists:get_value(base_image, Config, ?DEFAULT_BASE_IMAGE);
+        Base ->
+            list_to_binary(Base)
+    end.
+
+%% @private Build the OCI image
+build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
+    try
+        %% Start from base image or scratch
+        Image0 = case BaseImage of
+            <<"scratch">> ->
+                {ok, Img} = ocibuild:scratch(),
+                Img;
+            _ ->
+                case ocibuild:from(BaseImage) of
+                    {ok, Img} -> Img;
+                    {error, FromErr} -> throw({base_image_failed, FromErr})
+                end
+        end,
+
+        %% Add release files as a layer
+        Image1 = ocibuild:add_layer(Image0, Files),
+
+        %% Set working directory
+        Image2 = ocibuild:workdir(Image1, to_binary(Workdir)),
+
+        %% Set entrypoint
+        ReleaseNameBin = list_to_binary(ReleaseName),
+        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, <<"foreground">>],
+        Image3 = ocibuild:entrypoint(Image2, Entrypoint),
+
+        %% Set environment variables
+        Image4 = case map_size(EnvMap) of
+            0 -> Image3;
+            _ -> ocibuild:env(Image3, EnvMap)
+        end,
+
+        %% Expose ports
+        Image5 = lists:foldl(fun(Port, Img) ->
+            ocibuild:expose(Img, Port)
+        end, Image4, ExposePorts),
+
+        %% Add labels
+        Image6 = maps:fold(fun(Key, Value, Img) ->
+            ocibuild:label(Img, to_binary(Key), to_binary(Value))
+        end, Image5, Labels),
+
+        {ok, Image6}
+    catch
+        throw:Reason ->
+            {error, Reason}
+    end.
+
+%% @private Output the image (save and/or push)
+output_image(State, Args, Config, Tag, Image) ->
+    ShouldPush = proplists:get_value(push, Args, false),
+
+    %% Determine output path
+    OutputPath = case proplists:get_value(output, Args) of
+        undefined ->
+            %% Default: <tag>.tar.gz (with : replaced by -)
+            TagStr = binary_to_list(Tag),
+            SafeTag = lists:map(fun($:) -> $-; (C) -> C end, TagStr),
+            SafeTag ++ ".tar.gz";
+        Path ->
+            Path
+    end,
+
+    %% Save tarball
+    rebar_api:info("Saving image to ~s", [OutputPath]),
+    case ocibuild:save(Image, OutputPath) of
+        ok ->
+            rebar_api:info("Image saved successfully", []),
+
+            %% Push if requested
+            case ShouldPush of
+                true ->
+                    push_image(State, Args, Config, Tag, Image);
+                false ->
+                    rebar_api:console("~nTo load the image:~n  docker load < ~s~n", [OutputPath]),
+                    {ok, State}
+            end;
+        {error, Reason} ->
+            {error, {?MODULE, {save_failed, Reason}}}
+    end.
+
+%% @private Push image to registry
+push_image(State, Args, Config, Tag, Image) ->
+    %% Get registry
+    Registry = case proplists:get_value(registry, Args) of
+        undefined ->
+            proplists:get_value(registry, Config, <<"docker.io">>);
+        Reg ->
+            list_to_binary(Reg)
+    end,
+
+    %% Parse tag to get repository and tag parts
+    {Repo, ImageTag} = parse_tag(Tag),
+
+    %% Get auth from environment
+    Auth = get_auth(),
+
+    rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+
+    case ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth) of
+        ok ->
+            rebar_api:info("Push successful!", []),
+            {ok, State};
+        {error, Reason} ->
+            {error, {?MODULE, {push_failed, Reason}}}
+    end.
+
+%% @private Parse tag into repo and tag parts
+parse_tag(Tag) ->
+    case binary:split(Tag, <<":">>) of
+        [Repo, ImageTag] -> {Repo, ImageTag};
+        [Repo] -> {Repo, <<"latest">>}
+    end.
+
+%% @private Get authentication from environment variables
+get_auth() ->
+    case os:getenv("OCIBUILD_TOKEN") of
+        false ->
+            case {os:getenv("OCIBUILD_USERNAME"), os:getenv("OCIBUILD_PASSWORD")} of
+                {false, _} -> #{};
+                {_, false} -> #{};
+                {User, Pass} ->
+                    #{username => list_to_binary(User),
+                      password => list_to_binary(Pass)}
+            end;
+        Token ->
+            #{token => list_to_binary(Token)}
+    end.
+
+%% @private Convert to binary if needed
+to_binary(Bin) when is_binary(Bin) -> Bin;
+to_binary(List) when is_list(List) -> list_to_binary(List);
+to_binary(Atom) when is_atom(Atom) -> atom_to_binary(Atom, utf8).

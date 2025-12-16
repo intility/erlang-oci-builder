@@ -28,6 +28,7 @@ rebar3 eunit --test=ocibuild_tests:test_name_test  # Single test
 
 ```
 ocibuild.erl          → Public API (from, copy, push, save, etc.)
+ocibuild_rebar3.erl   → Rebar3 provider (rebar3 ocibuild command)
 ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar, custom implementation)
 ocibuild_layer.erl    → Creates OCI layers (tar + gzip + SHA256)
 ocibuild_digest.erl   → SHA256 digest utilities
@@ -61,6 +62,35 @@ User API (ocibuild.erl)
 **Untested:** Registry pull/push, Docker Hub token auth, GHCR/other registry auth.
 
 **Not Implemented:** Multi-platform images, layer caching, downloading base image layers (only metadata), chunked uploads, zstd compression.
+
+## Rebar3 Provider
+
+Build OCI images directly from releases:
+
+```bash
+# Build release and create OCI image
+rebar3 ocibuild -t myapp:1.0.0
+
+# Build and push to registry
+rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+
+# Custom base image
+rebar3 ocibuild -t myapp:1.0.0 --base erlang:27-alpine
+```
+
+Configuration in `rebar.config`:
+```erlang
+{ocibuild, [
+    {base_image, "debian:slim"},
+    {registry, "docker.io"},
+    {workdir, "/app"},
+    {env, #{<<"LANG">> => <<"C.UTF-8">>}},
+    {expose, [8080]},
+    {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}}
+]}.
+```
+
+Auth via environment: `OCIBUILD_TOKEN` or `OCIBUILD_USERNAME`/`OCIBUILD_PASSWORD`.
 
 ## Common Development Tasks
 

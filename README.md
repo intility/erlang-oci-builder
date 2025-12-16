@@ -39,7 +39,33 @@ end
 
 ## Quick Start
 
-### Erlang
+### Rebar3 Plugin (Recommended)
+
+The easiest way to use ocibuild is with the rebar3 plugin:
+
+```erlang
+%% rebar.config
+{deps, [{ocibuild, "~> 0.1"}]}.
+
+{ocibuild, [
+    {base_image, "debian:slim"},
+    {env, #{<<"LANG">> => <<"C.UTF-8">>}},
+    {expose, [8080]}
+]}.
+```
+
+```bash
+# Build release and create OCI image
+rebar3 ocibuild -t myapp:1.0.0
+
+# Load into Docker
+docker load < myapp-1.0.0.tar.gz
+
+# Or push directly to a registry
+OCIBUILD_TOKEN=$GITHUB_TOKEN rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+```
+
+### Programmatic API (Erlang)
 
 ```erlang
 %% Build from a base image
@@ -80,7 +106,50 @@ image = :ocibuild.env(image, %{"MIX_ENV" => "prod"})
                        %{token: System.get_env("GITHUB_TOKEN")})
 ```
 
-## API Reference
+## Rebar3 Plugin Reference
+
+### CLI Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--tag` | `-t` | Image tag (required), e.g., `myapp:1.0.0` |
+| `--registry` | `-r` | Registry for push, e.g., `ghcr.io` |
+| `--output` | `-o` | Output tarball path (default: `<tag>.tar.gz`) |
+| `--push` | | Push to registry after build |
+| `--base` | | Override base image |
+| `--release` | | Release name (if multiple configured) |
+
+### Configuration (`rebar.config`)
+
+```erlang
+{ocibuild, [
+    {base_image, "debian:slim"},           % Base image (default: debian:slim)
+    {registry, "docker.io"},               % Default registry for --push
+    {workdir, "/app"},                     % Working directory in container
+    {env, #{                               % Environment variables
+        <<"LANG">> => <<"C.UTF-8">>
+    }},
+    {expose, [8080, 443]},                 % Ports to expose
+    {labels, #{                            % Image labels
+        <<"org.opencontainers.image.source">> => <<"https://github.com/...">>
+    }}
+]}.
+```
+
+### Authentication
+
+Set environment variables for registry authentication:
+
+```bash
+# Token-based (GitHub, etc.)
+export OCIBUILD_TOKEN="your-token"
+
+# Username/password
+export OCIBUILD_USERNAME="user"
+export OCIBUILD_PASSWORD="pass"
+```
+
+## Programmatic API Reference
 
 ### Building Images
 
