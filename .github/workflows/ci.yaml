@@ -125,8 +125,8 @@ jobs:
             # Add ocibuild to deps
             content = String.replace(content, "defp deps do\n    [", "defp deps do\n    [\n      {:ocibuild, path: \"../ocibuild\"},")
 
-            # Add ocibuild config to project (use debian:bookworm-slim since release includes ERTS)
-            content = String.replace(content, "def project do\n    [", "def project do\n    [\n      ocibuild: [base_image: \"debian:bookworm-slim\"],")
+            # Add ocibuild config to project (ubuntu:noble has glibc 2.39, compatible with OTP 28 from ubuntu 24.04 runner)
+            content = String.replace(content, "def project do\n    [", "def project do\n    [\n      ocibuild: [base_image: \"ubuntu:noble\"],")
 
             File.write!("mix.exs", content)
             IO.puts("Updated mix.exs with ocibuild configuration")
