@@ -1,13 +1,26 @@
-# Build and publish OCI container images
+<h1 align="center">
+  <img src="https://avatars.githubusercontent.com/u/35199565" width="124px"/><br/>
+  Build and Publish OCI Container Images
+</h1>
 
-[![Hex.pm](https://img.shields.io/hexpm/v/ocibuild.svg)](https://hex.pm/packages/ocibuild)  [![Hex.pm](https://img.shields.io/hexpm/l/ocibuild.svg)](https://hex.pm/packages/ocibuild)
-
-`ocibuild` is an Erlang library for building OCI-compliant container images. 
+<p align="center">
+`ocibuild` is an Erlang library for building <a href="https://opencontainers.org/">OCI-compliant</a> container images. 
 It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependencies outside OTP 27+.
+</p>
+
+<p align="center">
+<a href="https://hex.pm/packages/ocibuild">
+    <img alt="hex.pm" src="https://img.shields.io/hexpm/v/ocibuild.svg" style="max-width:100%;">
+</a>
+
+<a href="https://hex.pm/packages/ocibuild">
+    <img alt="license" src="https://img.shields.io/hexpm/l/ocibuild.svg" style="max-width:100%;">
+</a>
+</p>
 
 ## Features
 
-- 🚀 **No Docker daemon required** — Builds images directly.
+- 🚀 **No Docker required** — Builds images directly.
 - 📦 **Push to any registry** — Docker Hub, GHCR, ECR, GCR, etc.
 - 📋 **OCI compliant** — Produces standard OCI image layouts.
 
