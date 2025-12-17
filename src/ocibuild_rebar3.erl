@@ -395,7 +395,13 @@ output_image(State, Args, Config, Tag, Image) ->
                 %% Extract just the image name (last path segment) for the filename
                 TagStr = binary_to_list(Tag),
                 ImageName = lists:last(string:split(TagStr, "/", all)),
-                SafeName = lists:map(fun($:) -> $-; (C) -> C end, ImageName),
+                SafeName = lists:map(
+                    fun
+                        ($:) -> $-;
+                        (C) -> C
+                    end,
+                    ImageName
+                ),
                 SafeName ++ ".tar.gz";
             Path ->
                 Path

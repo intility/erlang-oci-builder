@@ -533,7 +533,9 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                     {error, no_upload_location};
                 Location ->
                     %% Complete upload with PUT
-                    PutUrl = Location ++ "&digest=" ++ binary_to_list(Digest),
+                    %% The Location header may be relative or absolute
+                    AbsLocation = resolve_url(BaseUrl, Location),
+                    PutUrl = AbsLocation ++ "&digest=" ++ binary_to_list(Digest),
                     PutHeaders =
                         Headers ++
                             [
@@ -603,6 +605,34 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
         {error, _} = Err ->
             Err
     end.
+
+%%%===================================================================
+%%% URL helpers
+%%%===================================================================
+
+%% Resolve a potentially relative URL against a base URL
+%% Returns absolute URL suitable for httpc
+-spec resolve_url(string(), string()) -> string().
+resolve_url(_BaseUrl, [$h, $t, $t, $p, $s, $: | _] = AbsUrl) ->
+    %% Already absolute (starts with https:)
+    AbsUrl;
+resolve_url(_BaseUrl, [$h, $t, $t, $p, $: | _] = AbsUrl) ->
+    %% Already absolute (starts with http:)
+    AbsUrl;
+resolve_url(BaseUrl, [$/ | _] = RelPath) ->
+    %% Relative path - extract scheme and host from BaseUrl
+    case uri_string:parse(BaseUrl) of
+        #{scheme := Scheme, host := Host, port := Port} ->
+            lists:flatten(io_lib:format("~s://~s:~B~s", [Scheme, Host, Port, RelPath]));
+        #{scheme := Scheme, host := Host} ->
+            lists:flatten(io_lib:format("~s://~s~s", [Scheme, Host, RelPath]));
+        _ ->
+            %% Fallback: prepend base URL
+            BaseUrl ++ RelPath
+    end;
+resolve_url(BaseUrl, RelUrl) ->
+    %% Assume relative URL without leading slash, append to base
+    BaseUrl ++ "/" ++ RelUrl.
 
 %%%===================================================================
 %%% HTTP helpers (using httpc)
