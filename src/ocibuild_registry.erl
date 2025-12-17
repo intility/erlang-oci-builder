@@ -773,19 +773,30 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
             %% Get upload location
             case proplists:get_value("location", ResponseHeaders) of
                 undefined ->
+                    io:format(standard_error, "DEBUG: No Location header in response~n", []),
+                    io:format(standard_error, "DEBUG: Response headers: ~p~n", [ResponseHeaders]),
                     {error, no_upload_location};
                 Location ->
                     %% Complete upload with PUT
                     %% The Location header may be relative or absolute
+                    io:format(standard_error, "DEBUG: Location header: ~s~n", [Location]),
                     AbsLocation = resolve_url(BaseUrl, Location),
                     PutUrl = AbsLocation ++ "&digest=" ++ binary_to_list(Digest),
+                    io:format(standard_error, "DEBUG: PUT ~s~n", [PutUrl]),
                     PutHeaders =
                         Headers ++
                             [
                                 {"Content-Type", "application/octet-stream"},
                                 {"Content-Length", integer_to_list(byte_size(Data))}
                             ],
-                    case http_put(PutUrl, PutHeaders, Data) of
+                    PutResult = http_put(PutUrl, PutHeaders, Data),
+                    io:format(standard_error, "DEBUG: PUT result: ~p~n", [
+                        case PutResult of
+                            {ok, _} -> ok;
+                            {error, PutErr} -> {error, PutErr}
+                        end
+                    ]),
+                    case PutResult of
                         {ok, _} ->
                             ok;
                         {error, _} = Err ->
@@ -839,10 +850,18 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
         "~s/v2/~s/manifests/~s",
         [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
     ),
+    io:format(standard_error, "DEBUG: PUT manifest ~s~n", [lists:flatten(Url)]),
     Headers =
         auth_headers(Token) ++ [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
 
-    case http_put(lists:flatten(Url), Headers, ManifestJson) of
+    ManifestResult = http_put(lists:flatten(Url), Headers, ManifestJson),
+    io:format(standard_error, "DEBUG: Manifest PUT result: ~p~n", [
+        case ManifestResult of
+            {ok, _} -> ok;
+            {error, ManErr} -> {error, ManErr}
+        end
+    ]),
+    case ManifestResult of
         {ok, _} ->
             ok;
         {error, _} = Err ->
