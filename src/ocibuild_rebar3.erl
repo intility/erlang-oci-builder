@@ -392,19 +392,11 @@ output_image(State, Args, Config, Tag, Image) ->
     OutputPath =
         case proplists:get_value(output, Args) of
             undefined ->
-                %% Default: <tag>.tar.gz (with : replaced by -)
+                %% Extract just the image name (last path segment) for the filename
                 TagStr = binary_to_list(Tag),
-                SafeTag =
-                    lists:map(
-                        fun
-                            ($:) ->
-                                $-;
-                            (C) ->
-                                C
-                        end,
-                        TagStr
-                    ),
-                SafeTag ++ ".tar.gz";
+                ImageName = lists:last(string:split(TagStr, "/", all)),
+                SafeName = lists:map(fun($:) -> $-; (C) -> C end, ImageName),
+                SafeName ++ ".tar.gz";
             Path ->
                 Path
         end,

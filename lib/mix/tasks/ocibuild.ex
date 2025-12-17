@@ -190,8 +190,14 @@ defmodule Mix.Tasks.Ocibuild do
     output_path =
       case opts[:output] do
         nil ->
-          safe_tag = String.replace(tag, ":", "-")
-          "#{safe_tag}.tar.gz"
+          # Extract just the image name (last path segment) for the filename
+          image_name =
+            tag
+            |> String.split("/")
+            |> List.last()
+            |> String.replace(":", "-")
+
+          "#{image_name}.tar.gz"
 
         path ->
           path
