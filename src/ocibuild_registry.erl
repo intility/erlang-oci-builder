@@ -824,8 +824,16 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
 ) ->
     ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
-    %% Layers are stored in reverse order, reverse for correct manifest order
-    LayerDescriptors =
+    %% Get base image layers if present (these already exist in registry)
+    BaseLayerDescriptors = case maps:get(base_manifest, Image, undefined) of
+        undefined -> [];
+        BaseManifest ->
+            %% Base manifest layers are already in the correct format
+            maps:get(~"layers", BaseManifest, [])
+    end,
+
+    %% Our layers are stored in reverse order, reverse for correct manifest order
+    NewLayerDescriptors =
         [
             #{
                 ~"mediaType" => MediaType,
@@ -839,6 +847,9 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
             } <-
                 lists:reverse(maps:get(layers, Image, []))
         ],
+
+    %% Combine: base layers first, then our new layers
+    LayerDescriptors = BaseLayerDescriptors ++ NewLayerDescriptors,
 
     {ManifestJson, _} =
         ocibuild_manifest:build(
