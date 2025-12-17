@@ -133,23 +133,31 @@ jobs:
             -t "${IMAGE_NAME_LOWER}/test-app:integration" \
             -o test-app.tar.gz
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
 
-      - name: Load and push OCI image
+      - name: Push OCI image to ghcr.io
         working-directory: test_app
         env:
           IMAGE_NAME: ${{ github.repository }}
         run: |
           IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
-          # Load the tarball and push to ghcr.io
-          docker load < test-app.tar.gz
-          docker tag "${IMAGE_NAME_LOWER}/test-app:integration" "ghcr.io/${IMAGE_NAME_LOWER}/test-app:integration"
-          docker push "ghcr.io/${IMAGE_NAME_LOWER}/test-app:integration"
+          # Extract tarball and push OCI layout to ghcr.io using skopeo
+          mkdir -p oci-image
+          tar -xzf test-app.tar.gz -C oci-image
+          skopeo copy \
+            --dest-creds="${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            oci:oci-image \
+            docker://ghcr.io/${IMAGE_NAME_LOWER}/test-app:integration
+
+      - name: Log in to GitHub Container Registry (for verification)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify image was pushed
         env:
