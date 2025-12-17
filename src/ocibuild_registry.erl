@@ -674,21 +674,12 @@ exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
     end.
 
 %% Encode scope parameter for auth token requests
-%% Preserves slashes and colons (valid in query strings per RFC 3986)
-%% Only encodes characters that would break URL parsing
+%% Uses uri_string:quote for proper encoding
 -spec encode_scope(string()) -> string().
 encode_scope(Scope) ->
-    lists:flatmap(
-        fun
-            ($\s) -> "%20";
-            ($&) -> "%26";
-            ($=) -> "%3D";
-            ($#) -> "%23";
-            ($?) -> "%3F";
-            (C) -> [C]
-        end,
-        Scope
-    ).
+    %% Use uri_string:quote which properly encodes all special characters
+    %% except those allowed in query strings (unreserved chars + some sub-delims)
+    uri_string:quote(Scope).
 
 %% Build auth headers
 -spec auth_headers(binary() | {basic, binary()} | none) -> [{string(), string()}].
