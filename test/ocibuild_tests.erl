@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_tests).
--moduledoc "Basic tests for Shipwright".
+-moduledoc "Basic tests for `ocibuild`".
 
 -include_lib("eunit/include/eunit.hrl").
 

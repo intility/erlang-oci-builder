@@ -1,11 +1,11 @@
 -module(ocibuild).
 -moduledoc """
-Shipwright - Build and publish OCI container images from the BEAM.
+`ocibuild` - Build and publish OCI container images from the BEAM.
 
 This module provides the public API for building OCI-compliant
 container images without requiring Docker or any container runtime.
 
-== Quick Start ==
+# Quick Start
 
 ```
 %% Build from a base image

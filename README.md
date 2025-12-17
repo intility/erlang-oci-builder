@@ -10,9 +10,9 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ## Features
 
-- 🚀 **No Docker daemon required** — builds images directly
+- 🚀 **No Docker daemon required** — Builds images directly.
 - 📦 **Push to any registry** — Docker Hub, GHCR, ECR, GCR, etc.
-- 📋 **OCI compliant** — produces standard OCI image layouts
+- 📋 **OCI compliant** — Produces standard OCI image layouts.
 
 ## Installation
 
@@ -213,42 +213,6 @@ def project do
   ]
 end
 ```
-
-## Programmatic API Reference
-
-### Building Images
-
-| Function           | Description               |
-|--------------------|---------------------------|
-| `from/1`, `from/2` | Start from a base image   |
-| `scratch/0`        | Start from an empty image |
-
-### Adding Content
-
-| Function      | Description                           |
-|---------------|---------------------------------------|
-| `add_layer/2` | Add a layer from files with modes     |
-| `copy/3`      | Copy files to a destination directory |
-
-### Configuration
-
-| Function       | Description                   |
-|----------------|-------------------------------|
-| `entrypoint/2` | Set the container entrypoint  |
-| `cmd/2`        | Set default command arguments |
-| `env/2`        | Set environment variables     |
-| `workdir/2`    | Set working directory         |
-| `expose/2`     | Expose a port                 |
-| `label/3`      | Add a label                   |
-| `user/2`       | Set the user to run as        |
-
-### Output
-
-| Function           | Description                    |
-|--------------------|--------------------------------|
-| `push/3`, `push/4` | Push to a container registry   |
-| `save/2`           | Save as OCI layout tarball     |
-| `export/2`         | Export as OCI layout directory |
 
 ## Authentication
 
