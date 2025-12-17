@@ -785,8 +785,16 @@ download_and_upload_layer({SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, Bas
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->
     {ok, binary(), non_neg_integer()} | {error, term()}.
 push_config(#{config := Config}, BaseUrl, Repo, Token) ->
-    io:format(standard_error, "DEBUG: Config rootfs: ~p~n", [maps:get(~"rootfs", Config, undefined)]),
-    ConfigJson = ocibuild_json:encode(Config),
+    %% Reverse diff_ids and history which are stored in reverse order for O(1) append
+    Rootfs = maps:get(~"rootfs", Config),
+    DiffIds = maps:get(~"diff_ids", Rootfs, []),
+    History = maps:get(~"history", Config, []),
+    ExportConfig = Config#{
+        ~"rootfs" => Rootfs#{~"diff_ids" => lists:reverse(DiffIds)},
+        ~"history" => lists:reverse(History)
+    },
+    io:format(standard_error, "DEBUG: Config rootfs (after reverse): ~p~n", [maps:get(~"rootfs", ExportConfig, undefined)]),
+    ConfigJson = ocibuild_json:encode(ExportConfig),
     io:format(standard_error, "DEBUG: ConfigJson: ~s~n", [ConfigJson]),
     Digest = ocibuild_digest:sha256(ConfigJson),
     case push_blob(BaseUrl, Repo, Digest, ConfigJson, Token) of
