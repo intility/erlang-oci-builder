@@ -994,7 +994,7 @@ http_post(Url, Headers, Body) ->
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, ResponseBody}} ->
-            io:format(standard_error, "DEBUG: POST failed ~B ~s: ~s~n", [
+            io:format(standard_error, "DEBUG: POST failed ~B ~s: ~p~n", [
                 Status, Reason, ResponseBody
             ]),
             {error, {http_error, Status, Reason}};
