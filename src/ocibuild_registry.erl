@@ -458,6 +458,10 @@ docker_hub_auth(Repo, Auth) ->
 %% 1. GET /v2/ to trigger 401 response with WWW-Authenticate header
 %% 2. Parse the challenge to get realm, service, scope
 %% 3. Exchange credentials at the realm for a Bearer token
+%%
+%% Note: Some registries (like GHCR) allow anonymous pull (returning 200 for /v2/)
+%% but require authentication for push. When credentials are provided, we always
+%% try to get a token using well-known endpoints for such registries.
 -spec discover_auth(binary(), binary(), map()) ->
     {ok, binary() | {basic, binary()} | none} | {error, term()}.
 discover_auth(Registry, Repo, Auth) ->
@@ -470,28 +474,28 @@ discover_auth(Registry, Repo, Auth) ->
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
 
     case httpc:request(get, Request, HttpOpts, Opts) of
-        {ok, {{_, 200, _}, _, _}} ->
-            %% No auth required - anonymous access allowed
-            {ok, none};
+        {ok, {{_, 200, _}, RespHeaders, _}} ->
+            %% Anonymous access allowed for /v2/, but push may still require auth
+            %% If credentials provided, try to get a token anyway
+            case Auth of
+                #{username := _, password := _} ->
+                    %% Try to get WWW-Authenticate from response (some registries include it)
+                    %% Otherwise use well-known token endpoint
+                    case get_www_authenticate(RespHeaders) of
+                        {ok, WwwAuth} ->
+                            handle_www_authenticate(WwwAuth, Repo, Auth);
+                        error ->
+                            %% Use well-known token endpoint for registry
+                            use_wellknown_token_endpoint(Registry, Repo, Auth)
+                    end;
+                _ ->
+                    {ok, none}
+            end;
         {ok, {{_, 401, _}, RespHeaders, _}} ->
             %% Auth required - parse WWW-Authenticate challenge
             case get_www_authenticate(RespHeaders) of
                 {ok, WwwAuth} ->
-                    case parse_www_authenticate(WwwAuth) of
-                        {bearer, Challenge} ->
-                            exchange_token(Challenge, Repo, Auth);
-                        basic ->
-                            %% Registry wants basic auth (unusual but valid)
-                            case Auth of
-                                #{username := User, password := Pass} ->
-                                    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-                                    {ok, {basic, Encoded}};
-                                _ ->
-                                    {error, auth_required}
-                            end;
-                        unknown ->
-                            {error, {unknown_auth_scheme, WwwAuth}}
-                    end;
+                    handle_www_authenticate(WwwAuth, Repo, Auth);
                 error ->
                     {error, no_www_authenticate_header}
             end;
@@ -500,6 +504,40 @@ discover_auth(Registry, Repo, Auth) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+%% Handle WWW-Authenticate header (Bearer or Basic)
+-spec handle_www_authenticate(string(), binary(), map()) ->
+    {ok, binary() | {basic, binary()} | none} | {error, term()}.
+handle_www_authenticate(WwwAuth, Repo, Auth) ->
+    case parse_www_authenticate(WwwAuth) of
+        {bearer, Challenge} ->
+            exchange_token(Challenge, Repo, Auth);
+        basic ->
+            case Auth of
+                #{username := User, password := Pass} ->
+                    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                    {ok, {basic, Encoded}};
+                _ ->
+                    {error, auth_required}
+            end;
+        unknown ->
+            {error, {unknown_auth_scheme, WwwAuth}}
+    end.
+
+%% Well-known token endpoints for registries that allow anonymous /v2/ access
+-spec use_wellknown_token_endpoint(binary(), binary(), map()) ->
+    {ok, binary()} | {error, term()}.
+use_wellknown_token_endpoint(~"ghcr.io", Repo, Auth) ->
+    %% GHCR token endpoint
+    Challenge = #{realm => "https://ghcr.io/token", service => "ghcr.io"},
+    exchange_token(Challenge, Repo, Auth);
+use_wellknown_token_endpoint(~"quay.io", Repo, Auth) ->
+    %% Quay.io token endpoint
+    Challenge = #{realm => "https://quay.io/v2/auth", service => "quay.io"},
+    exchange_token(Challenge, Repo, Auth);
+use_wellknown_token_endpoint(Registry, _Repo, _Auth) ->
+    %% Unknown registry - can't get token without WWW-Authenticate
+    {error, {no_token_endpoint_for_registry, Registry}}.
 
 %% Get WWW-Authenticate header from response
 -spec get_www_authenticate([{string(), string()}]) -> {ok, string()} | error.
