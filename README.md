@@ -317,6 +317,48 @@ ocibuild builds OCI images by:
 This is the same approach used by .NET's `Microsoft.NET.Build.Containers`,
 Google's `ko`, and Java's `jib`.
 
+## Choosing a Base Image
+
+ocibuild is a build-time tool that creates OCI layers — it doesn't have a container
+runtime, so there's no equivalent to Dockerfile's `RUN apt-get install`. This is the
+same trade-off made by jib, ko, and .NET's container builder.
+
+If your application needs libraries not in the base image, you have several options:
+
+### Use Official Runtime Images
+
+The easiest approach — official Erlang/Elixir images include common runtime dependencies:
+
+```erlang
+{ocibuild, [{base_image, "erlang:27-slim"}]}.
+```
+
+```elixir
+ocibuild: [base_image: "elixir:1.17-slim"]
+```
+
+### Create a Custom Base Image
+
+For specific dependencies, create a base image once and reuse it:
+
+```dockerfile
+# Dockerfile.base
+FROM debian:slim
+RUN apt-get update && apt-get install -y libncurses6 libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+```bash
+docker build -t myorg/erlang-base:1.0 -f Dockerfile.base .
+docker push myorg/erlang-base:1.0
+```
+
+Then use it with ocibuild:
+
+```erlang
+{ocibuild, [{base_image, "myorg/erlang-base:1.0"}]}.
+```
+
 ## Requirements
 
 - OTP 27 or newer (uses the new `json` module)
