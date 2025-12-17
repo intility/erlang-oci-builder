@@ -781,7 +781,12 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                     %% The Location header may be relative or absolute
                     io:format(standard_error, "DEBUG: Location header: ~s~n", [Location]),
                     AbsLocation = resolve_url(BaseUrl, Location),
-                    PutUrl = AbsLocation ++ "&digest=" ++ binary_to_list(Digest),
+                    %% Use ? if no query params exist, & otherwise
+                    Separator = case lists:member($?, AbsLocation) of
+                        true -> "&";
+                        false -> "?"
+                    end,
+                    PutUrl = AbsLocation ++ Separator ++ "digest=" ++ binary_to_list(Digest),
                     io:format(standard_error, "DEBUG: PUT ~s~n", [PutUrl]),
                     PutHeaders =
                         Headers ++
