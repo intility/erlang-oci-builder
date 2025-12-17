@@ -427,14 +427,18 @@ parse_repo_tag(RepoTag) ->
 -spec init_config(map()) -> map().
 init_config(BaseConfig) ->
     %% Initialize config from base, preserving architecture/os
+    %% Base diff_ids and history come in forward order from registry,
+    %% but we store in reverse order for O(1) prepend (reversed on export)
+    BaseRootfs = maps:get(~"rootfs", BaseConfig, #{~"type" => ~"layers", ~"diff_ids" => []}),
+    BaseDiffIds = maps:get(~"diff_ids", BaseRootfs, []),
+    BaseHistory = maps:get(~"history", BaseConfig, []),
     #{
         ~"created" => iso8601_now(),
         ~"architecture" => maps:get(~"architecture", BaseConfig, ~"amd64"),
         ~"os" => maps:get(~"os", BaseConfig, ~"linux"),
         ~"config" => maps:get(~"config", BaseConfig, #{}),
-        ~"rootfs" =>
-            maps:get(~"rootfs", BaseConfig, #{~"type" => ~"layers", ~"diff_ids" => []}),
-        ~"history" => maps:get(~"history", BaseConfig, [])
+        ~"rootfs" => BaseRootfs#{~"diff_ids" => lists:reverse(BaseDiffIds)},
+        ~"history" => lists:reverse(BaseHistory)
     }.
 
 -spec add_layer_to_config(map(), layer()) -> map().
