@@ -138,37 +138,61 @@ defmodule OcibuildMixTest do
     end
   end
 
-  describe "authentication" do
+  describe "push authentication" do
     test "returns empty map when no env vars set" do
-      System.delete_env("OCIBUILD_TOKEN")
-      System.delete_env("OCIBUILD_USERNAME")
-      System.delete_env("OCIBUILD_PASSWORD")
+      System.delete_env("OCIBUILD_PUSH_TOKEN")
+      System.delete_env("OCIBUILD_PUSH_USERNAME")
+      System.delete_env("OCIBUILD_PUSH_PASSWORD")
 
-      assert :ocibuild_rebar3.get_auth() == %{}
+      assert :ocibuild_rebar3.get_push_auth() == %{}
     end
 
-    test "returns token auth when OCIBUILD_TOKEN set" do
-      System.put_env("OCIBUILD_TOKEN", "mytoken123")
+    test "returns token auth when OCIBUILD_PUSH_TOKEN set" do
+      System.put_env("OCIBUILD_PUSH_TOKEN", "mytoken123")
 
       try do
-        auth = :ocibuild_rebar3.get_auth()
+        auth = :ocibuild_rebar3.get_push_auth()
         assert auth == %{token: "mytoken123"}
       after
-        System.delete_env("OCIBUILD_TOKEN")
+        System.delete_env("OCIBUILD_PUSH_TOKEN")
       end
     end
 
     test "returns username/password auth when set" do
-      System.delete_env("OCIBUILD_TOKEN")
-      System.put_env("OCIBUILD_USERNAME", "myuser")
-      System.put_env("OCIBUILD_PASSWORD", "mypass")
+      System.delete_env("OCIBUILD_PUSH_TOKEN")
+      System.put_env("OCIBUILD_PUSH_USERNAME", "myuser")
+      System.put_env("OCIBUILD_PUSH_PASSWORD", "mypass")
 
       try do
-        auth = :ocibuild_rebar3.get_auth()
+        auth = :ocibuild_rebar3.get_push_auth()
         assert auth == %{username: "myuser", password: "mypass"}
       after
-        System.delete_env("OCIBUILD_USERNAME")
-        System.delete_env("OCIBUILD_PASSWORD")
+        System.delete_env("OCIBUILD_PUSH_USERNAME")
+        System.delete_env("OCIBUILD_PUSH_PASSWORD")
+      end
+    end
+  end
+
+  describe "pull authentication" do
+    test "returns empty map when no env vars set" do
+      System.delete_env("OCIBUILD_PULL_TOKEN")
+      System.delete_env("OCIBUILD_PULL_USERNAME")
+      System.delete_env("OCIBUILD_PULL_PASSWORD")
+
+      assert :ocibuild_rebar3.get_pull_auth() == %{}
+    end
+
+    test "returns username/password auth when set" do
+      System.delete_env("OCIBUILD_PULL_TOKEN")
+      System.put_env("OCIBUILD_PULL_USERNAME", "pulluser")
+      System.put_env("OCIBUILD_PULL_PASSWORD", "pullpass")
+
+      try do
+        auth = :ocibuild_rebar3.get_pull_auth()
+        assert auth == %{username: "pulluser", password: "pullpass"}
+      after
+        System.delete_env("OCIBUILD_PULL_USERNAME")
+        System.delete_env("OCIBUILD_PULL_PASSWORD")
       end
     end
   end

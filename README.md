@@ -64,7 +64,7 @@ MIX_ENV=prod mix ocibuild -t myapp:1.0.0
 podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
-OCIBUILD_TOKEN=$GITHUB_TOKEN mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
 ```
 
 #### Automatic Release Step
@@ -105,7 +105,7 @@ rebar3 ocibuild -t myapp:1.0.0
 podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
-OCIBUILD_TOKEN=$GITHUB_TOKEN rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
 ```
 
 ### Programmatic API (Erlang)
@@ -216,12 +216,14 @@ end
 ### CLI (Environment Variables)
 
 ```bash
-# Token-based (GitHub, etc.)
-export OCIBUILD_TOKEN="your-token"
+# Push credentials (for pushing to registries)
+export OCIBUILD_PUSH_USERNAME="user"
+export OCIBUILD_PUSH_PASSWORD="pass"
 
-# Username/password
-export OCIBUILD_USERNAME="user"
-export OCIBUILD_PASSWORD="pass"
+# Pull credentials (optional, for private base images)
+# If not set, anonymous pull is attempted (works for public images)
+export OCIBUILD_PULL_USERNAME="user"
+export OCIBUILD_PULL_PASSWORD="pass"
 ```
 
 ### Programmatic API

@@ -19,6 +19,11 @@ Configuration in rebar.config:
     {expose, [8080]}
 ]}.
 ```
+
+Authentication via environment variables:
+- Push: OCIBUILD_PUSH_USERNAME/OCIBUILD_PUSH_PASSWORD (or OCIBUILD_PUSH_TOKEN)
+- Pull (optional): OCIBUILD_PULL_USERNAME/OCIBUILD_PULL_PASSWORD
+  If pull credentials are not set, anonymous pull is attempted (works for public images).
 """.
 
 %% Note: The provider behaviour is part of rebar3's internal API and is only
@@ -28,7 +33,7 @@ Configuration in rebar.config:
 
 -export([init/1, do/1, format_error/1]).
 %% Exported for use by Mix task (Elixir integration)
--export([collect_release_files/1, build_image/7, build_image/8, get_auth/0]).
+-export([collect_release_files/1, build_image/7, build_image/8, get_push_auth/0, get_pull_auth/0]).
 
 %% Exports for testing
 -ifdef(TEST).
@@ -322,8 +327,8 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
                     %% Create progress callback for download
                     ProgressFn = make_progress_callback(),
                     Opts = #{progress => ProgressFn},
-                    Auth = get_auth(),
-                    case ocibuild:from(BaseImage, Auth, Opts) of
+                    PullAuth = get_pull_auth(),
+                    case ocibuild:from(BaseImage, PullAuth, Opts) of
                         {ok, Img} ->
                             %% Clear progress line
                             io:format("\r\e[K"),
@@ -437,8 +442,8 @@ push_image(State, Args, Config, Tag, Image) ->
     %% Parse tag to get repository and tag parts
     {Repo, ImageTag} = parse_tag(Tag),
 
-    %% Get auth from environment
-    Auth = get_auth(),
+    %% Get auth from environment (for pushing)
+    Auth = get_push_auth(),
 
     rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
 
@@ -459,12 +464,29 @@ parse_tag(Tag) ->
             {Repo, ~"latest"}
     end.
 
-%% @private Get authentication from environment variables
--spec get_auth() -> map().
-get_auth() ->
-    case os:getenv("OCIBUILD_TOKEN") of
+%% @private Get authentication for pushing images
+-spec get_push_auth() -> map().
+get_push_auth() ->
+    case os:getenv("OCIBUILD_PUSH_TOKEN") of
         false ->
-            case {os:getenv("OCIBUILD_USERNAME"), os:getenv("OCIBUILD_PASSWORD")} of
+            case {os:getenv("OCIBUILD_PUSH_USERNAME"), os:getenv("OCIBUILD_PUSH_PASSWORD")} of
+                {false, _} ->
+                    #{};
+                {_, false} ->
+                    #{};
+                {User, Pass} ->
+                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
+            end;
+        Token ->
+            #{token => list_to_binary(Token)}
+    end.
+
+%% @private Get authentication for pulling base images
+-spec get_pull_auth() -> map().
+get_pull_auth() ->
+    case os:getenv("OCIBUILD_PULL_TOKEN") of
+        false ->
+            case {os:getenv("OCIBUILD_PULL_USERNAME"), os:getenv("OCIBUILD_PULL_PASSWORD")} of
                 {false, _} ->
                     #{};
                 {_, false} ->

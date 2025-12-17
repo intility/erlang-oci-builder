@@ -141,33 +141,53 @@ parse_tag(Tag) ->
 %%% Auth tests (using exported function)
 %%%===================================================================
 
-get_auth_empty_test() ->
+get_push_auth_empty_test() ->
     %% Clear any existing env vars
-    os:unsetenv("OCIBUILD_TOKEN"),
-    os:unsetenv("OCIBUILD_USERNAME"),
-    os:unsetenv("OCIBUILD_PASSWORD"),
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
+    os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
 
-    ?assertEqual(#{}, ocibuild_rebar3:get_auth()).
+    ?assertEqual(#{}, ocibuild_rebar3:get_push_auth()).
 
-get_auth_token_test() ->
-    os:putenv("OCIBUILD_TOKEN", "mytoken123"),
+get_push_auth_token_test() ->
+    os:putenv("OCIBUILD_PUSH_TOKEN", "mytoken123"),
     try
-        Auth = ocibuild_rebar3:get_auth(),
+        Auth = ocibuild_rebar3:get_push_auth(),
         ?assertEqual(#{token => ~"mytoken123"}, Auth)
     after
-        os:unsetenv("OCIBUILD_TOKEN")
+        os:unsetenv("OCIBUILD_PUSH_TOKEN")
     end.
 
-get_auth_username_password_test() ->
-    os:unsetenv("OCIBUILD_TOKEN"),
-    os:putenv("OCIBUILD_USERNAME", "myuser"),
-    os:putenv("OCIBUILD_PASSWORD", "mypass"),
+get_push_auth_username_password_test() ->
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
     try
-        Auth = ocibuild_rebar3:get_auth(),
+        Auth = ocibuild_rebar3:get_push_auth(),
         ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, Auth)
     after
-        os:unsetenv("OCIBUILD_USERNAME"),
-        os:unsetenv("OCIBUILD_PASSWORD")
+        os:unsetenv("OCIBUILD_PUSH_USERNAME"),
+        os:unsetenv("OCIBUILD_PUSH_PASSWORD")
+    end.
+
+get_pull_auth_empty_test() ->
+    %% Clear any existing env vars
+    os:unsetenv("OCIBUILD_PULL_TOKEN"),
+    os:unsetenv("OCIBUILD_PULL_USERNAME"),
+    os:unsetenv("OCIBUILD_PULL_PASSWORD"),
+
+    ?assertEqual(#{}, ocibuild_rebar3:get_pull_auth()).
+
+get_pull_auth_username_password_test() ->
+    os:unsetenv("OCIBUILD_PULL_TOKEN"),
+    os:putenv("OCIBUILD_PULL_USERNAME", "pulluser"),
+    os:putenv("OCIBUILD_PULL_PASSWORD", "pullpass"),
+    try
+        Auth = ocibuild_rebar3:get_pull_auth(),
+        ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, Auth)
+    after
+        os:unsetenv("OCIBUILD_PULL_USERNAME"),
+        os:unsetenv("OCIBUILD_PULL_PASSWORD")
     end.
 
 %%%===================================================================
@@ -294,26 +314,26 @@ build_image_with_custom_cmd_test() ->
 %%% Auth partial tests
 %%%===================================================================
 
-get_auth_username_only_test() ->
-    os:unsetenv("OCIBUILD_TOKEN"),
-    os:putenv("OCIBUILD_USERNAME", "myuser"),
-    os:unsetenv("OCIBUILD_PASSWORD"),
+get_push_auth_username_only_test() ->
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
+    os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
     try
         %% Missing password should return empty
-        ?assertEqual(#{}, ocibuild_rebar3:get_auth())
+        ?assertEqual(#{}, ocibuild_rebar3:get_push_auth())
     after
-        os:unsetenv("OCIBUILD_USERNAME")
+        os:unsetenv("OCIBUILD_PUSH_USERNAME")
     end.
 
-get_auth_password_only_test() ->
-    os:unsetenv("OCIBUILD_TOKEN"),
-    os:unsetenv("OCIBUILD_USERNAME"),
-    os:putenv("OCIBUILD_PASSWORD", "mypass"),
+get_push_auth_password_only_test() ->
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
     try
         %% Missing username should return empty
-        ?assertEqual(#{}, ocibuild_rebar3:get_auth())
+        ?assertEqual(#{}, ocibuild_rebar3:get_push_auth())
     after
-        os:unsetenv("OCIBUILD_PASSWORD")
+        os:unsetenv("OCIBUILD_PUSH_PASSWORD")
     end.
 
 %%%===================================================================

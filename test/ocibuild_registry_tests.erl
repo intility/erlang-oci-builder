@@ -41,11 +41,32 @@ sample_manifest() ->
 %%%===================================================================
 
 setup() ->
-    meck:new(httpc, [unstick, passthrough]),
+    %% Start required applications
+    application:ensure_all_started(inets),
+    application:ensure_all_started(ssl),
+    %% Ensure any existing mock is unloaded first
+    safe_unload(ocibuild_registry),
+    %% Mock ocibuild_registry with passthrough - we'll mock http_get/http_head
+    meck:new(ocibuild_registry, [unstick, passthrough]),
     ok.
 
+%% Safely unload a mock module
+safe_unload(Module) ->
+    case is_mocked(Module) of
+        true -> meck:unload(Module);
+        false -> ok
+    end.
+
+%% Check if a module is currently mocked
+is_mocked(Module) ->
+    try meck:validate(Module) of
+        _ -> true
+    catch
+        error:{not_mocked, _} -> false
+    end.
+
 cleanup(_) ->
-    meck:unload(httpc).
+    meck:unload(ocibuild_registry).
 
 %%%===================================================================
 %%% Test generators
@@ -66,15 +87,14 @@ registry_test_() ->
 %%%===================================================================
 
 pull_manifest_generic_test() ->
-    %% Mock HTTP responses for a generic registry (not docker.io)
-    %% Use actual digest of sample config in the URL pattern
+    %% Mock http_get to return manifest and config responses
     ConfigDigest = sample_config_digest(),
     ConfigUrl = "https://ghcr.io/v2/myorg/myapp/blobs/" ++ binary_to_list(ConfigDigest),
-    meck:expect(httpc, request, fun
-        (get, {"https://ghcr.io/v2/myorg/myapp/manifests/latest", _Headers}, _HttpOpts, _Opts) ->
-            {ok, {{http, 200, "OK"}, [], sample_manifest()}};
-        (get, {Url, _Headers}, _HttpOpts, _Opts) when Url =:= ConfigUrl ->
-            {ok, {{http, 200, "OK"}, [], sample_config()}}
+    meck:expect(ocibuild_registry, http_get, fun
+        ("https://ghcr.io/v2/myorg/myapp/manifests/latest", _Headers) ->
+            {ok, sample_manifest()};
+        (Url, _Headers) when Url =:= ConfigUrl ->
+            {ok, sample_config()}
     end),
 
     Result = ocibuild_registry:pull_manifest(
@@ -95,14 +115,11 @@ pull_manifest_generic_test() ->
 
 pull_blob_test() ->
     BlobData = <<"binary blob data here">>,
-    %% Use actual digest of blob data
     BlobDigest = ocibuild_digest:sha256(BlobData),
     BlobUrl = "https://ghcr.io/v2/myorg/myapp/blobs/" ++ binary_to_list(BlobDigest),
 
-    meck:expect(httpc, request, fun(
-        get, {Url, _Headers}, _HttpOpts, _Opts
-    ) when Url =:= BlobUrl ->
-        {ok, {{http, 200, "OK"}, [], BlobData}}
+    meck:expect(ocibuild_registry, http_get, fun(Url, _Headers) when Url =:= BlobUrl ->
+        {ok, BlobData}
     end),
 
     Result = ocibuild_registry:pull_blob(
@@ -118,15 +135,12 @@ pull_blob_test() ->
 pull_blob_digest_mismatch_test() ->
     OriginalData = <<"original content">>,
     TamperedData = <<"tampered content">>,
-    %% Request using digest of original data, but server returns tampered data
     OriginalDigest = ocibuild_digest:sha256(OriginalData),
     BlobUrl = "https://ghcr.io/v2/myorg/myapp/blobs/" ++ binary_to_list(OriginalDigest),
 
-    meck:expect(httpc, request, fun(
-        get, {Url, _Headers}, _HttpOpts, _Opts
-    ) when Url =:= BlobUrl ->
+    meck:expect(ocibuild_registry, http_get, fun(Url, _Headers) when Url =:= BlobUrl ->
         %% MITM or registry compromise returns different content
-        {ok, {{http, 200, "OK"}, [], TamperedData}}
+        {ok, TamperedData}
     end),
 
     Result = ocibuild_registry:pull_blob(
@@ -144,10 +158,10 @@ pull_blob_digest_mismatch_test() ->
 %%%===================================================================
 
 check_blob_exists_true_test() ->
-    meck:expect(httpc, request, fun(
-        head, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:exists", _Headers}, _HttpOpts, _Opts
+    meck:expect(ocibuild_registry, http_head, fun(
+        "https://ghcr.io/v2/myorg/myapp/blobs/sha256:exists", _Headers
     ) ->
-        {ok, {{http, 200, "OK"}, [], <<>>}}
+        {ok, []}
     end),
 
     Result = ocibuild_registry:check_blob_exists(
@@ -160,10 +174,10 @@ check_blob_exists_true_test() ->
     ?assertEqual(true, Result).
 
 check_blob_exists_false_test() ->
-    meck:expect(httpc, request, fun(
-        head, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:notfound", _Headers}, _HttpOpts, _Opts
+    meck:expect(ocibuild_registry, http_head, fun(
+        "https://ghcr.io/v2/myorg/myapp/blobs/sha256:notfound", _Headers
     ) ->
-        {ok, {{http, 404, "Not Found"}, [], <<>>}}
+        {error, {http_error, 404, "Not Found"}}
     end),
 
     Result = ocibuild_registry:check_blob_exists(
@@ -180,10 +194,10 @@ check_blob_exists_false_test() ->
 %%%===================================================================
 
 http_error_test() ->
-    meck:expect(httpc, request, fun(
-        get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:error", _Headers}, _HttpOpts, _Opts
+    meck:expect(ocibuild_registry, http_get, fun(
+        "https://ghcr.io/v2/myorg/myapp/blobs/sha256:error", _Headers
     ) ->
-        {ok, {{http, 500, "Internal Server Error"}, [], <<>>}}
+        {error, {http_error, 500, "Internal Server Error"}}
     end),
 
     Result = ocibuild_registry:pull_blob(

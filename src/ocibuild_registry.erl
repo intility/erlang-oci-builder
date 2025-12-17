@@ -16,6 +16,11 @@ See: https://github.com/opencontainers/distribution-spec
     check_blob_exists/4
 ]).
 
+%% Export internal HTTP functions for testing (allows mocking to skip SSL setup)
+-ifdef(TEST).
+-export([http_get/2, http_head/2]).
+-endif.
+
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer.
 -type progress_info() :: #{
@@ -90,7 +95,7 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
                 total_bytes => unknown
             }),
 
-            case http_get(lists:flatten(ManifestUrl), Headers) of
+            case ?MODULE:http_get(lists:flatten(ManifestUrl), Headers) of
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
                     %% Check if this is a manifest list (multi-platform image)
@@ -216,7 +221,7 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
                 [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
-            case http_head(lists:flatten(Url), Headers) of
+            case ?MODULE:http_head(lists:flatten(Url), Headers) of
                 {ok, _} ->
                     true;
                 {error, _} ->
@@ -412,7 +417,7 @@ docker_hub_auth(Repo, Auth) ->
                 []
         end,
 
-    case http_get(Url, Headers) of
+    case ?MODULE:http_get(Url, Headers) of
         {ok, Body} ->
             Response = ocibuild_json:decode(Body),
             case maps:find(~"token", Response) of
@@ -473,7 +478,7 @@ push_blob(BaseUrl, Repo, Digest, Data, Token) ->
         ),
     Headers = auth_headers(Token),
 
-    case http_head(lists:flatten(CheckUrl), Headers) of
+    case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
         {ok, _} ->
             %% Blob already exists
             ok;
@@ -751,7 +756,7 @@ maybe_report_progress(ProgressFn, Info) when is_function(ProgressFn, 1) ->
     {ok, binary()} | {error, term()}.
 http_get_with_progress(Url, Headers, undefined, _Phase, _TotalBytes) ->
     %% No progress callback - use regular http_get
-    http_get(Url, Headers);
+    ?MODULE:http_get(Url, Headers);
 http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes) ->
     http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, 5).
 
