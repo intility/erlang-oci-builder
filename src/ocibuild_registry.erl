@@ -405,7 +405,7 @@ docker_hub_auth(Repo, Auth) ->
     Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
     Url =
         "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
-            uri_string:quote(Scope),
+            encode_scope(Scope),
 
     Headers =
         case Auth of
@@ -436,7 +436,7 @@ ghcr_auth(Repo, Auth) ->
     Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
     Url =
         "https://ghcr.io/token?service=ghcr.io&scope=" ++
-            uri_string:quote(Scope),
+            encode_scope(Scope),
 
     Headers =
         case Auth of
@@ -459,6 +459,23 @@ ghcr_auth(Repo, Auth) ->
         {error, _} = Err ->
             Err
     end.
+
+%% Encode scope parameter for auth token requests
+%% Preserves slashes and colons (valid in query strings per RFC 3986)
+%% Only encodes characters that would break URL parsing
+-spec encode_scope(string()) -> string().
+encode_scope(Scope) ->
+    lists:flatmap(
+        fun
+            ($\s) -> "%20";
+            ($&) -> "%26";
+            ($=) -> "%3D";
+            ($#) -> "%23";
+            ($?) -> "%3F";
+            (C) -> [C]
+        end,
+        Scope
+    ).
 
 %% Build auth headers
 -spec auth_headers(binary() | {basic, binary()} | none) -> [{string(), string()}].
