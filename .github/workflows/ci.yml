@@ -113,7 +113,7 @@ jobs:
 
       - name: Create Phoenix project
         run: |
-          mix phx.new test_app --no-ecto --no-mailer --no-dashboard --no-live --no-install
+          yes | mix phx.new test_app --no-ecto --no-mailer --no-dashboard --no-live --no-install
 
       - name: Configure ocibuild dependency
         working-directory: test_app
