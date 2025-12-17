@@ -473,8 +473,12 @@ discover_auth(Registry, Repo, Auth) ->
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
 
+    io:format(standard_error, "DEBUG: Checking ~s for auth challenge~n", [V2Url]),
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, 200, _}, RespHeaders, _}} ->
+            io:format(
+                standard_error, "DEBUG: Got 200 from /v2/, checking for WWW-Authenticate~n", []
+            ),
             %% Anonymous access allowed for /v2/, but push may still require auth
             %% If credentials provided, try to get a token anyway
             case Auth of
@@ -492,11 +496,14 @@ discover_auth(Registry, Repo, Auth) ->
                     {ok, none}
             end;
         {ok, {{_, 401, _}, RespHeaders, _}} ->
+            io:format(standard_error, "DEBUG: Got 401 from /v2/~n", []),
             %% Auth required - parse WWW-Authenticate challenge
             case get_www_authenticate(RespHeaders) of
                 {ok, WwwAuth} ->
+                    io:format(standard_error, "DEBUG: WWW-Authenticate: ~s~n", [WwwAuth]),
                     handle_www_authenticate(WwwAuth, Repo, Auth);
                 error ->
+                    io:format(standard_error, "DEBUG: No WWW-Authenticate header found~n", []),
                     {error, no_www_authenticate_header}
             end;
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -624,13 +631,17 @@ exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
             _ -> Realm ++ "&" ++ QueryString
         end,
 
+    io:format(standard_error, "DEBUG: Token URL: ~s~n", [TokenUrl]),
+
     %% Add basic auth header if credentials provided
     Headers =
         case Auth of
             #{username := User, password := Pass} ->
                 Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                io:format(standard_error, "DEBUG: Using Basic auth for token exchange~n", []),
                 [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
             _ ->
+                io:format(standard_error, "DEBUG: No credentials for token exchange~n", []),
                 []
         end,
 
@@ -640,14 +651,24 @@ exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
             %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
             case maps:find(~"token", Response) of
                 {ok, Token} ->
+                    io:format(standard_error, "DEBUG: Got token (~B bytes)~n", [byte_size(Token)]),
                     {ok, Token};
                 error ->
                     case maps:find(~"access_token", Response) of
-                        {ok, Token} -> {ok, Token};
-                        error -> {error, no_token_in_response}
+                        {ok, Token} ->
+                            io:format(standard_error, "DEBUG: Got access_token (~B bytes)~n", [
+                                byte_size(Token)
+                            ]),
+                            {ok, Token};
+                        error ->
+                            io:format(standard_error, "DEBUG: No token in response: ~p~n", [
+                                maps:keys(Response)
+                            ]),
+                            {error, no_token_in_response}
                     end
             end;
-        {error, _} = Err ->
+        {error, Reason} = Err ->
+            io:format(standard_error, "DEBUG: Token exchange failed: ~p~n", [Reason]),
             Err
     end.
 
@@ -733,6 +754,7 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
     Headers = auth_headers(Token),
 
+    io:format(standard_error, "DEBUG: POST ~s~n", [lists:flatten(InitUrl)]),
     case http_post(lists:flatten(InitUrl), Headers, <<>>) of
         {ok, _, ResponseHeaders} ->
             %% Get upload location
