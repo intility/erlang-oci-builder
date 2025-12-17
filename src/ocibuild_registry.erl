@@ -16,10 +16,8 @@ See: https://github.com/opencontainers/distribution-spec
     check_blob_exists/4
 ]).
 
-%% Export internal HTTP functions for testing (allows mocking to skip SSL setup)
--ifdef(TEST).
+%% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
 -export([http_get/2, http_head/2]).
--endif.
 
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer.
