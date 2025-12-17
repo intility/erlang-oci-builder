@@ -383,18 +383,18 @@ normalize_arch(Arch) ->
 %% Get authentication token
 -spec get_auth_token(binary(), binary(), map()) ->
     {ok, binary() | {basic, binary()} | none} | {error, term()}.
-get_auth_token(~"docker.io", Repo, Auth) ->
-    %% Docker Hub uses token authentication
-    docker_hub_auth(Repo, Auth);
-get_auth_token(~"ghcr.io", Repo, Auth) ->
-    %% GitHub Container Registry uses token authentication
-    ghcr_auth(Repo, Auth);
+%% Direct token takes priority for all registries
 get_auth_token(_Registry, _Repo, #{token := Token}) ->
     {ok, Token};
+%% Docker Hub with username/password requires token exchange
+get_auth_token(~"docker.io", Repo, #{username := _, password := _} = Auth) ->
+    docker_hub_auth(Repo, Auth);
+%% All other registries (including GHCR): use basic auth directly
+%% This matches skopeo's behavior and works with GITHUB_TOKEN
 get_auth_token(_Registry, _Repo, #{username := User, password := Pass}) ->
-    %% Basic auth - encode as base64
     Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
     {ok, {basic, Encoded}};
+%% No auth provided
 get_auth_token(_Registry, _Repo, #{}) ->
     {ok, none}.
 
@@ -405,37 +405,6 @@ docker_hub_auth(Repo, Auth) ->
     Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
     Url =
         "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
-            encode_scope(Scope),
-
-    Headers =
-        case Auth of
-            #{username := User, password := Pass} ->
-                Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-                [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
-            _ ->
-                []
-        end,
-
-    case ?MODULE:http_get(Url, Headers) of
-        {ok, Body} ->
-            Response = ocibuild_json:decode(Body),
-            case maps:find(~"token", Response) of
-                {ok, Token} ->
-                    {ok, Token};
-                error ->
-                    {error, no_token_in_response}
-            end;
-        {error, _} = Err ->
-            Err
-    end.
-
-%% GitHub Container Registry authentication
--spec ghcr_auth(binary(), map()) -> {ok, binary()} | {error, term()}.
-ghcr_auth(Repo, Auth) ->
-    %% GHCR requires getting a token from ghcr.io/token
-    Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
-    Url =
-        "https://ghcr.io/token?service=ghcr.io&scope=" ++
             encode_scope(Scope),
 
     Headers =

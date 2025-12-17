@@ -147,11 +147,9 @@ jobs:
       - name: Build and push OCI image
         working-directory: test_app
         env:
-          # Push credentials for ghcr.io
           OCIBUILD_PUSH_USERNAME: ${{ github.actor }}
           OCIBUILD_PUSH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_NAME: ${{ github.repository }}
-          # ghcr.io requires lowercase image names
         run: |
           IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
           MIX_ENV=prod mix ocibuild \
