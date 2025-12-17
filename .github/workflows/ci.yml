@@ -24,6 +24,7 @@ jobs:
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ matrix.otp }}
+          rebar3-version: '3'
 
       - name: Cache rebar3 dependencies
         uses: actions/cache@v4
@@ -66,6 +67,7 @@ jobs:
         with:
           otp-version: '28'
           elixir-version: '1.19'
+          rebar3-version: '3'
 
       - name: Cache Mix dependencies
         uses: actions/cache@v4
