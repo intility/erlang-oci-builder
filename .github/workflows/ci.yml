@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test OTP ${{ matrix.otp }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ['27', '28']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+
+      - name: Cache rebar3 dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build
+            ~/.cache/rebar3
+          key: ${{ runner.os }}-rebar3-otp${{ matrix.otp }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rebar3-otp${{ matrix.otp }}-
+
+      - name: Cache ocibuild layers
+        uses: actions/cache@v4
+        with:
+          path: _build/ocibuild_cache
+          key: ocibuild-layers-${{ runner.os }}
+
+      - name: Compile (rebar3)
+        run: rebar3 compile
+
+      - name: Run Erlang tests with coverage
+        run: rebar3 eunit
+
+      - name: Coverage report
+        run: rebar3 cover --verbose
+
+  integration:
+    name: Integration Test (Phoenix)
+    runs-on: ubuntu-24.04
+    needs: test
+
+    steps:
+      - name: Checkout ocibuild
+        uses: actions/checkout@v4
+        with:
+          path: ocibuild
+
+      - name: Setup Erlang/OTP and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28'
+          elixir-version: '1.19'
+
+      - name: Cache Mix dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-integration-otp28-elixir1.19-${{ hashFiles('ocibuild/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-integration-otp28-elixir1.19-
+
+      - name: Cache ocibuild layers
+        uses: actions/cache@v4
+        with:
+          path: test_app/_build/ocibuild_cache
+          key: ocibuild-layers-${{ runner.os }}
+
+      - name: Install Phoenix generator
+        run: mix archive.install hex phx_new --force
+
+      - name: Create Phoenix project
+        run: |
+          mix phx.new test_app --no-ecto --no-mailer --no-dashboard --no-live --no-install
+
+      - name: Configure ocibuild dependency
+        working-directory: test_app
+        run: |
+          # Add ocibuild as a path dependency using Elixir
+          elixir -e '
+            content = File.read!("mix.exs")
+
+            # Add ocibuild to deps
+            content = String.replace(content, "defp deps do\n    [", "defp deps do\n    [\n      {:ocibuild, path: \"../ocibuild\"},")
+
+            # Add ocibuild config to project
+            content = String.replace(content, "def project do\n    [", "def project do\n    [\n      ocibuild: [base_image: \"hexpm/elixir:1.19.0-erlang-28.0-debian-bookworm-slim\"],")
+
+            File.write!("mix.exs", content)
+            IO.puts("Updated mix.exs with ocibuild configuration")
+          '
+
+      - name: Get dependencies
+        working-directory: test_app
+        run: mix deps.get
+
+      - name: Compile
+        working-directory: test_app
+        run: MIX_ENV=prod mix compile
+
+      - name: Build release
+        working-directory: test_app
+        run: MIX_ENV=prod mix release
+
+      - name: Build and push OCI image
+        working-directory: test_app
+        env:
+          OCIBUILD_USERNAME: ${{ github.actor }}
+          OCIBUILD_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          # ghcr.io requires lowercase image names
+          IMAGE_NAME: ${{ github.repository }}
+        run: |
+          IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          MIX_ENV=prod mix ocibuild \
+            -t "${IMAGE_NAME_LOWER}/test-app:integration" \
+            --push \
+            -r ghcr.io
+
+      - name: Log in to GitHub Container Registry (for verification)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image was pushed
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+        run: |
+          IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          docker pull "ghcr.io/${IMAGE_NAME_LOWER}/test-app:integration"
+          docker images "ghcr.io/${IMAGE_NAME_LOWER}/test-app:integration"
