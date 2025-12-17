@@ -4,7 +4,7 @@
 </h1>
 
 <p align="center">
-`ocibuild` is an Erlang library for building <a href="https://opencontainers.org/">OCI-compliant</a> container images. 
+<code>ocibuild</code> is an Erlang library for building <a href="https://opencontainers.org/">OCI-compliant</a> container images. 
 It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependencies outside OTP 27+.
 </p>
 
