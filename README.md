@@ -1,4 +1,4 @@
-# ocibuild - Build and publish OCI container images
+# Build and publish OCI container images
 
 [![Hex.pm](https://img.shields.io/hexpm/v/ocibuild.svg)](https://hex.pm/packages/ocibuild)  [![Hex.pm](https://img.shields.io/hexpm/l/ocibuild.svg)](https://hex.pm/packages/ocibuild)
 
