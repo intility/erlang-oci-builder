@@ -66,16 +66,17 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
     {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
     ProgressFn = maps:get(progress, Opts, undefined),
 
     %% Get auth token if needed
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             %% Fetch manifest (accept both single manifests and manifest lists)
             ManifestUrl =
                 io_lib:format(
                     "~s/v2/~s/manifests/~s",
-                    [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]
+                    [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Ref)]
                 ),
             Headers =
                 auth_headers(Token) ++
@@ -175,12 +176,13 @@ pull_blob(Registry, Repo, Digest, Auth, Opts) ->
     {ok, binary()} | {error, term()}.
 pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             Url = io_lib:format(
                 "~s/v2/~s/blobs/~s",
-                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+                [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
             case
@@ -211,12 +213,13 @@ verify_digest(Data, ExpectedDigest) ->
 -spec check_blob_exists(binary(), binary(), binary(), map()) -> boolean().
 check_blob_exists(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             Url = io_lib:format(
                 "~s/v2/~s/blobs/~s",
-                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+                [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
             case ?MODULE:http_head(lists:flatten(Url), Headers) of
@@ -233,20 +236,21 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
 -spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             %% Push layers
-            case push_layers(Image, BaseUrl, Repo, Token) of
+            case push_layers(Image, BaseUrl, NormalizedRepo, Token) of
                 ok ->
                     %% Push config
-                    case push_config(Image, BaseUrl, Repo, Token) of
+                    case push_config(Image, BaseUrl, NormalizedRepo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
                             %% Push manifest
                             push_manifest(
                                 Image,
                                 BaseUrl,
-                                Repo,
+                                NormalizedRepo,
                                 Tag,
                                 Token,
                                 ConfigDigest,
@@ -275,6 +279,14 @@ registry_url(Registry) ->
         _ ->
             "https://" ++ binary_to_list(Registry)
     end.
+
+%% Normalize repository name for a given registry
+%% Docker Hub requires library/ prefix for official images
+-spec normalize_repo(binary(), binary()) -> binary().
+normalize_repo(~"docker.io", Repo) ->
+    normalize_docker_hub_repo(Repo);
+normalize_repo(_Registry, Repo) ->
+    Repo.
 
 %% Check if a manifest is a manifest list (multi-platform image index)
 -spec is_manifest_list(map()) -> boolean().
@@ -386,23 +398,36 @@ normalize_arch(Arch) ->
 %% Direct token takes priority for all registries
 get_auth_token(_Registry, _Repo, #{token := Token}) ->
     {ok, Token};
-%% Docker Hub with username/password requires token exchange
+%% Docker Hub with username/password requires token exchange via known auth server
 get_auth_token(~"docker.io", Repo, #{username := _, password := _} = Auth) ->
     docker_hub_auth(Repo, Auth);
-%% All other registries (including GHCR): use basic auth directly
-%% This matches skopeo's behavior and works with GITHUB_TOKEN
-get_auth_token(_Registry, _Repo, #{username := User, password := Pass}) ->
-    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-    {ok, {basic, Encoded}};
-%% No auth provided
-get_auth_token(_Registry, _Repo, #{}) ->
-    {ok, none}.
+%% All other registries: discover auth via WWW-Authenticate challenge
+get_auth_token(Registry, Repo, #{username := _, password := _} = Auth) ->
+    discover_auth(Registry, Repo, Auth);
+%% No auth provided - try anonymous access
+get_auth_token(Registry, Repo, #{}) ->
+    discover_auth(Registry, Repo, #{}).
+
+%% Normalize Docker Hub repository name
+%% Single-component names like "alpine" need "library/" prefix
+-spec normalize_docker_hub_repo(binary()) -> binary().
+normalize_docker_hub_repo(Repo) ->
+    case binary:match(Repo, <<"/">>) of
+        nomatch ->
+            %% Official image - add library/ prefix
+            <<"library/", Repo/binary>>;
+        _ ->
+            %% User/org image - use as-is
+            Repo
+    end.
 
 %% Docker Hub specific authentication
 -spec docker_hub_auth(binary(), map()) -> {ok, binary()} | {error, term()}.
 docker_hub_auth(Repo, Auth) ->
     %% Docker Hub requires getting a token from auth.docker.io
-    Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
+    %% Normalize repo name (add library/ prefix for official images)
+    NormalizedRepo = normalize_docker_hub_repo(Repo),
+    Scope = "repository:" ++ binary_to_list(NormalizedRepo) ++ ":pull,push",
     Url =
         "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
             encode_scope(Scope),
@@ -424,6 +449,165 @@ docker_hub_auth(Repo, Auth) ->
                     {ok, Token};
                 error ->
                     {error, no_token_in_response}
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Discover authentication via WWW-Authenticate challenge (standard OCI flow)
+%% 1. GET /v2/ to trigger 401 response with WWW-Authenticate header
+%% 2. Parse the challenge to get realm, service, scope
+%% 3. Exchange credentials at the realm for a Bearer token
+-spec discover_auth(binary(), binary(), map()) ->
+    {ok, binary() | {basic, binary()} | none} | {error, term()}.
+discover_auth(Registry, Repo, Auth) ->
+    BaseUrl = registry_url(Registry),
+    V2Url = BaseUrl ++ "/v2/",
+
+    ensure_started(),
+    Request = {V2Url, [{"Connection", "close"}]},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+
+    case httpc:request(get, Request, HttpOpts, Opts) of
+        {ok, {{_, 200, _}, _, _}} ->
+            %% No auth required - anonymous access allowed
+            {ok, none};
+        {ok, {{_, 401, _}, RespHeaders, _}} ->
+            %% Auth required - parse WWW-Authenticate challenge
+            case get_www_authenticate(RespHeaders) of
+                {ok, WwwAuth} ->
+                    case parse_www_authenticate(WwwAuth) of
+                        {bearer, Challenge} ->
+                            exchange_token(Challenge, Repo, Auth);
+                        basic ->
+                            %% Registry wants basic auth (unusual but valid)
+                            case Auth of
+                                #{username := User, password := Pass} ->
+                                    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                                    {ok, {basic, Encoded}};
+                                _ ->
+                                    {error, auth_required}
+                            end;
+                        unknown ->
+                            {error, {unknown_auth_scheme, WwwAuth}}
+                    end;
+                error ->
+                    {error, no_www_authenticate_header}
+            end;
+        {ok, {{_, Status, Reason}, _, _}} ->
+            {error, {http_error, Status, Reason}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Get WWW-Authenticate header from response
+-spec get_www_authenticate([{string(), string()}]) -> {ok, string()} | error.
+get_www_authenticate([]) ->
+    error;
+get_www_authenticate([{Key, Value} | Rest]) ->
+    case string:lowercase(Key) of
+        "www-authenticate" -> {ok, Value};
+        _ -> get_www_authenticate(Rest)
+    end.
+
+%% Parse WWW-Authenticate header
+%% Returns {bearer, #{realm => ..., service => ...}} | basic | unknown
+-spec parse_www_authenticate(string()) ->
+    {bearer, #{realm := string(), service => string()}} | basic | unknown.
+parse_www_authenticate(Header) ->
+    %% Normalize to lowercase for scheme comparison
+    case string:prefix(string:lowercase(Header), "bearer ") of
+        nomatch ->
+            case string:prefix(string:lowercase(Header), "basic") of
+                nomatch -> unknown;
+                _ -> basic
+            end;
+        _ ->
+            %% Extract the params part (after "Bearer ")
+            ParamsStr = string:slice(Header, 7),
+            Params = parse_auth_params(ParamsStr),
+            case maps:find(realm, Params) of
+                {ok, Realm} ->
+                    {bearer, Params#{realm => Realm}};
+                error ->
+                    unknown
+            end
+    end.
+
+%% Parse key="value" pairs from auth header
+-spec parse_auth_params(string()) -> #{atom() => string()}.
+parse_auth_params(Str) ->
+    %% Split on comma, then parse each key="value" pair
+    Parts = string:split(Str, ",", all),
+    lists:foldl(
+        fun(Part, Acc) ->
+            case parse_auth_param(string:trim(Part)) of
+                {Key, Value} -> Acc#{Key => Value};
+                error -> Acc
+            end
+        end,
+        #{},
+        Parts
+    ).
+
+%% Parse a single key="value" pair
+-spec parse_auth_param(string()) -> {atom(), string()} | error.
+parse_auth_param(Str) ->
+    case string:split(Str, "=", leading) of
+        [KeyStr, ValueStr] ->
+            Key = list_to_atom(string:lowercase(string:trim(KeyStr))),
+            %% Remove surrounding quotes if present
+            Value = string:trim(ValueStr, both, "\""),
+            {Key, Value};
+        _ ->
+            error
+    end.
+
+%% Exchange credentials for a Bearer token at the realm URL
+-spec exchange_token(#{realm := string(), atom() => string()}, binary(), map()) ->
+    {ok, binary()} | {error, term()}.
+exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
+    %% Build token URL with query params
+    Service = maps:get(service, Challenge, ""),
+    Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
+
+    %% Build query string
+    QueryParts = [
+        "service=" ++ uri_string:quote(Service),
+        "scope=" ++ encode_scope(Scope)
+    ],
+    QueryString = string:join(QueryParts, "&"),
+
+    %% Append query to realm URL
+    TokenUrl =
+        case string:find(Realm, "?") of
+            nomatch -> Realm ++ "?" ++ QueryString;
+            _ -> Realm ++ "&" ++ QueryString
+        end,
+
+    %% Add basic auth header if credentials provided
+    Headers =
+        case Auth of
+            #{username := User, password := Pass} ->
+                Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
+            _ ->
+                []
+        end,
+
+    case ?MODULE:http_get(TokenUrl, Headers) of
+        {ok, Body} ->
+            Response = ocibuild_json:decode(Body),
+            %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
+            case maps:find(~"token", Response) of
+                {ok, Token} ->
+                    {ok, Token};
+                error ->
+                    case maps:find(~"access_token", Response) of
+                        {ok, Token} -> {ok, Token};
+                        error -> {error, no_token_in_response}
+                    end
             end;
         {error, _} = Err ->
             Err
