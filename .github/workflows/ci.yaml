@@ -191,7 +191,11 @@ jobs:
           sleep 5
 
           # Check container is still running
-          docker ps | grep test-app
+          if ! docker ps | grep test-app; then
+            echo "Container stopped unexpectedly:"
+            docker logs test-app
+            exit 1
+          fi
 
           # Check app responds
           curl -f http://localhost:4000 || (docker logs test-app && exit 1)
