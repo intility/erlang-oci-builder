@@ -498,23 +498,15 @@ discover_auth(Registry, Repo, Auth) ->
         {ok, {{_, 401, _}, RespHeaders, _}} ->
             io:format(standard_error, "DEBUG: Got 401 from /v2/~n", []),
             %% Auth required - parse WWW-Authenticate challenge
-            %% GHCR special case: Use Basic Auth directly (token exchange doesn't work well with GITHUB_TOKEN)
-            case {Registry, Auth} of
-                {~"ghcr.io", #{username := User, password := Pass}} ->
-                    io:format(standard_error, "DEBUG: Using Basic Auth directly for GHCR~n", []),
-                    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-                    {ok, {basic, Encoded}};
-                _ ->
-                    case get_www_authenticate(RespHeaders) of
-                        {ok, WwwAuth} ->
-                            io:format(standard_error, "DEBUG: WWW-Authenticate: ~s~n", [WwwAuth]),
-                            handle_www_authenticate(WwwAuth, Repo, Auth);
-                        error ->
-                            io:format(
-                                standard_error, "DEBUG: No WWW-Authenticate header found~n", []
-                            ),
-                            {error, no_www_authenticate_header}
-                    end
+            case get_www_authenticate(RespHeaders) of
+                {ok, WwwAuth} ->
+                    io:format(standard_error, "DEBUG: WWW-Authenticate: ~s~n", [WwwAuth]),
+                    handle_www_authenticate(WwwAuth, Repo, Auth);
+                error ->
+                    io:format(
+                        standard_error, "DEBUG: No WWW-Authenticate header found~n", []
+                    ),
+                    {error, no_www_authenticate_header}
             end;
         {ok, {{_, Status, Reason}, _, _}} ->
             {error, {http_error, Status, Reason}};
@@ -1001,7 +993,10 @@ http_post(Url, Headers, Body) ->
     case httpc:request(post, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
-        {ok, {{_, Status, Reason}, _, _}} ->
+        {ok, {{_, Status, Reason}, _, ResponseBody}} ->
+            io:format(standard_error, "DEBUG: POST failed ~B ~s: ~s~n", [
+                Status, Reason, ResponseBody
+            ]),
             {error, {http_error, Status, Reason}};
         {error, Reason} ->
             {error, Reason}
