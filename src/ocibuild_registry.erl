@@ -761,7 +761,14 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
             none -> none
         end
     ]),
-    case http_post(lists:flatten(InitUrl), Headers, <<>>) of
+    Result = http_post(lists:flatten(InitUrl), Headers, <<>>),
+    io:format(standard_error, "DEBUG: POST result: ~p~n", [
+        case Result of
+            {ok, _, _} -> ok;
+            {error, E} -> {error, E}
+        end
+    ]),
+    case Result of
         {ok, _, ResponseHeaders} ->
             %% Get upload location
             case proplists:get_value("location", ResponseHeaders) of
