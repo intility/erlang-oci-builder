@@ -498,13 +498,23 @@ discover_auth(Registry, Repo, Auth) ->
         {ok, {{_, 401, _}, RespHeaders, _}} ->
             io:format(standard_error, "DEBUG: Got 401 from /v2/~n", []),
             %% Auth required - parse WWW-Authenticate challenge
-            case get_www_authenticate(RespHeaders) of
-                {ok, WwwAuth} ->
-                    io:format(standard_error, "DEBUG: WWW-Authenticate: ~s~n", [WwwAuth]),
-                    handle_www_authenticate(WwwAuth, Repo, Auth);
-                error ->
-                    io:format(standard_error, "DEBUG: No WWW-Authenticate header found~n", []),
-                    {error, no_www_authenticate_header}
+            %% GHCR special case: Use Basic Auth directly (token exchange doesn't work well with GITHUB_TOKEN)
+            case {Registry, Auth} of
+                {~"ghcr.io", #{username := User, password := Pass}} ->
+                    io:format(standard_error, "DEBUG: Using Basic Auth directly for GHCR~n", []),
+                    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                    {ok, {basic, Encoded}};
+                _ ->
+                    case get_www_authenticate(RespHeaders) of
+                        {ok, WwwAuth} ->
+                            io:format(standard_error, "DEBUG: WWW-Authenticate: ~s~n", [WwwAuth]),
+                            handle_www_authenticate(WwwAuth, Repo, Auth);
+                        error ->
+                            io:format(
+                                standard_error, "DEBUG: No WWW-Authenticate header found~n", []
+                            ),
+                            {error, no_www_authenticate_header}
+                    end
             end;
         {ok, {{_, Status, Reason}, _, _}} ->
             {error, {http_error, Status, Reason}};
@@ -533,11 +543,16 @@ handle_www_authenticate(WwwAuth, Repo, Auth) ->
 
 %% Well-known token endpoints for registries that allow anonymous /v2/ access
 -spec use_wellknown_token_endpoint(binary(), binary(), map()) ->
-    {ok, binary()} | {error, term()}.
-use_wellknown_token_endpoint(~"ghcr.io", Repo, Auth) ->
-    %% GHCR token endpoint
-    Challenge = #{realm => "https://ghcr.io/token", service => "ghcr.io"},
-    exchange_token(Challenge, Repo, Auth);
+    {ok, binary() | {basic, binary()}} | {error, term()}.
+use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{username := User, password := Pass}) ->
+    %% GHCR: Use Basic Auth directly for push operations
+    %% This works better with GITHUB_TOKEN than token exchange
+    io:format(standard_error, "DEBUG: Using Basic Auth directly for GHCR~n", []),
+    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+    {ok, {basic, Encoded}};
+use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{}) ->
+    %% No credentials for GHCR
+    {ok, none};
 use_wellknown_token_endpoint(~"quay.io", Repo, Auth) ->
     %% Quay.io token endpoint
     Challenge = #{realm => "https://quay.io/v2/auth", service => "quay.io"},
