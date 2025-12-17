@@ -647,6 +647,7 @@ exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
 
     case ?MODULE:http_get(TokenUrl, Headers) of
         {ok, Body} ->
+            io:format(standard_error, "DEBUG: Token response: ~s~n", [Body]),
             Response = ocibuild_json:decode(Body),
             %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
             case maps:find(~"token", Response) of
@@ -755,6 +756,13 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     Headers = auth_headers(Token),
 
     io:format(standard_error, "DEBUG: POST ~s~n", [lists:flatten(InitUrl)]),
+    io:format(standard_error, "DEBUG: Auth header type: ~p~n", [
+        case Token of
+            {basic, _} -> basic;
+            _ when is_binary(Token) -> bearer;
+            none -> none
+        end
+    ]),
     case http_post(lists:flatten(InitUrl), Headers, <<>>) of
         {ok, _, ResponseHeaders} ->
             %% Get upload location
