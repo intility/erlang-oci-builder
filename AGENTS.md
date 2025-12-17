@@ -20,8 +20,6 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 ### Target OTP Version
 
 - Primary target: OTP 27+ (has built-in `json` module)
-- Fallback: OTP 25+ (includes custom JSON encoder/decoder)
-
 ---
 
 ## Architecture
