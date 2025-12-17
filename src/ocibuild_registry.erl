@@ -697,20 +697,89 @@ auth_headers({basic, Encoded}) ->
 auth_headers(Token) when is_binary(Token) ->
     [{"Authorization", "Bearer " ++ binary_to_list(Token)}].
 
-%% Push all layers
+%% Push all layers (including base image layers)
 -spec push_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
-push_layers(#{layers := Layers}, BaseUrl, Repo, Token) ->
-    %% Layers are stored in reverse order, reverse for correct push order
-    lists:foldl(
-        fun
-            (#{digest := Digest, data := Data}, ok) ->
-                push_blob(BaseUrl, Repo, Digest, Data, Token);
-            (_, {error, _} = Err) ->
-                Err
-        end,
-        ok,
-        lists:reverse(Layers)
-    ).
+push_layers(Image, BaseUrl, Repo, Token) ->
+    %% First push base image layers (if any) that don't already exist in target
+    case push_base_layers(Image, BaseUrl, Repo, Token) of
+        ok ->
+            %% Then push our new layers
+            Layers = maps:get(layers, Image, []),
+            %% Layers are stored in reverse order, reverse for correct push order
+            lists:foldl(
+                fun
+                    (#{digest := Digest, data := Data}, ok) ->
+                        push_blob(BaseUrl, Repo, Digest, Data, Token);
+                    (_, {error, _} = Err) ->
+                        Err
+                end,
+                ok,
+                lists:reverse(Layers)
+            );
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push base image layers to target registry
+-spec push_base_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
+push_base_layers(Image, BaseUrl, Repo, Token) ->
+    case maps:get(base_manifest, Image, undefined) of
+        undefined ->
+            %% No base image, nothing to do
+            ok;
+        BaseManifest ->
+            BaseLayers = maps:get(~"layers", BaseManifest, []),
+            BaseRef = maps:get(base, Image, none),
+            BaseAuth = maps:get(auth, Image, #{}),
+            push_base_layers_list(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token)
+    end.
+
+-spec push_base_layers_list(list(), term(), map(), string(), binary(), binary()) ->
+    ok | {error, term()}.
+push_base_layers_list([], _BaseRef, _BaseAuth, _BaseUrl, _Repo, _Token) ->
+    ok;
+push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token) ->
+    Digest = maps:get(~"digest", Layer),
+    Size = maps:get(~"size", Layer),
+
+    %% Check if blob already exists in target registry
+    CheckUrl = io_lib:format(
+        "~s/v2/~s/blobs/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+    ),
+    Headers = auth_headers(Token),
+
+    case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
+        {ok, _} ->
+            %% Layer already exists in target, skip
+            io:format(standard_error, "DEBUG: Base layer ~s already exists~n", [Digest]),
+            push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
+        {error, _} ->
+            %% Need to download from source and upload to target
+            io:format(standard_error, "DEBUG: Downloading base layer ~s (~.2f MB)~n",
+                [Digest, Size / 1024 / 1024]),
+            case download_and_upload_layer(BaseRef, BaseAuth, Digest, BaseUrl, Repo, Token) of
+                ok ->
+                    push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
+                {error, _} = Err ->
+                    Err
+            end
+    end.
+
+-spec download_and_upload_layer(term(), map(), binary(), string(), binary(), binary()) ->
+    ok | {error, term()}.
+download_and_upload_layer(none, _BaseAuth, _Digest, _BaseUrl, _Repo, _Token) ->
+    {error, no_base_ref};
+download_and_upload_layer({SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, BaseUrl, Repo, Token) ->
+    %% Download blob from source registry
+    case pull_blob(SrcRegistry, SrcRepo, Digest, BaseAuth) of
+        {ok, Data} ->
+            io:format(standard_error, "DEBUG: Uploading base layer ~s~n", [Digest]),
+            %% Upload to target registry
+            push_blob(BaseUrl, Repo, Digest, Data, Token);
+        {error, _} = Err ->
+            Err
+    end.
 
 %% Push config and return its digest and size
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->
