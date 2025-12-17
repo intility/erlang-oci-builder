@@ -785,7 +785,9 @@ download_and_upload_layer({SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, Bas
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->
     {ok, binary(), non_neg_integer()} | {error, term()}.
 push_config(#{config := Config}, BaseUrl, Repo, Token) ->
+    io:format(standard_error, "DEBUG: Config rootfs: ~p~n", [maps:get(~"rootfs", Config, undefined)]),
     ConfigJson = ocibuild_json:encode(Config),
+    io:format(standard_error, "DEBUG: ConfigJson: ~s~n", [ConfigJson]),
     Digest = ocibuild_digest:sha256(ConfigJson),
     case push_blob(BaseUrl, Repo, Digest, ConfigJson, Token) of
         ok ->
