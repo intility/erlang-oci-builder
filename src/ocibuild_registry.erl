@@ -850,6 +850,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
 
     %% Combine: base layers first, then our new layers
     LayerDescriptors = BaseLayerDescriptors ++ NewLayerDescriptors,
+    io:format(standard_error, "DEBUG: LayerDescriptors: ~p~n", [LayerDescriptors]),
 
     {ManifestJson, _} =
         ocibuild_manifest:build(
@@ -866,6 +867,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
         "~s/v2/~s/manifests/~s",
         [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
     ),
+    io:format(standard_error, "DEBUG: ManifestJson: ~s~n", [ManifestJson]),
     io:format(standard_error, "DEBUG: PUT manifest ~s~n", [lists:flatten(Url)]),
     Headers =
         auth_headers(Token) ++ [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
