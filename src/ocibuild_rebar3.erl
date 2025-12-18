@@ -438,16 +438,26 @@ make_progress_callback() ->
         #{phase := Phase, total_bytes := Total} = Info,
         %% For downloads use bytes_received, for uploads use bytes_sent
         Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
-        PhaseStr =
-            case Phase of
-                manifest -> "Fetching manifest";
-                config -> "Fetching config  ";
-                layer -> "Downloading layer";
-                uploading -> "Uploading layer  "
-            end,
-        ProgressStr = format_progress(Bytes, Total),
-        %% Use carriage return to overwrite the line
-        io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr])
+        %% Only print meaningful progress:
+        %% - Skip if Total is 0 or unknown (e.g., manifest with unknown size)
+        %% - Skip if Bytes is 0 (initial state before any progress)
+        %% This avoids duplicate 0% lines in CI logs where \r doesn't clear
+        ShouldPrint = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
+        case ShouldPrint of
+            true ->
+                PhaseStr =
+                    case Phase of
+                        manifest -> "Fetching manifest";
+                        config -> "Fetching config  ";
+                        layer -> "Downloading layer";
+                        uploading -> "Uploading layer  "
+                    end,
+                ProgressStr = format_progress(Bytes, Total),
+                %% Use carriage return to overwrite the line
+                io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
+            false ->
+                ok
+        end
     end.
 
 %% @private Format progress as a string with bar
