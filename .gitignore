@@ -2,6 +2,7 @@
 *.beam
 *.o
 *.plt
+rebar3.crashdump
 erl_crash.dump
 
 # Build directories
