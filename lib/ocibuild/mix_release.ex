@@ -59,55 +59,43 @@ defmodule Ocibuild.MixRelease do
     config = Mix.Project.config()
     ocibuild_config = config[:ocibuild] || []
 
-    # Get configuration
-    base_image = Keyword.get(ocibuild_config, :base_image, "debian:slim")
-    workdir = Keyword.get(ocibuild_config, :workdir, "/app")
-    env_map = Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map()
-    expose_ports = Keyword.get(ocibuild_config, :expose, [])
-    labels = Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map()
-    push_registry = Keyword.get(ocibuild_config, :push)
-    # Elixir releases use "start" command (Erlang uses "foreground")
-    cmd = Keyword.get(ocibuild_config, :cmd, "start")
+    # Build state map for the adapter
+    state = build_state(release, ocibuild_config)
 
-    # Get or generate tag
-    tag = get_tag(ocibuild_config, release.name, release.version)
-
-    Mix.shell().info("Building OCI image: #{tag}")
-    Mix.shell().info("  Release path: #{release.path}")
-    Mix.shell().info("  Base image: #{base_image}")
-
-    # Collect release files using shared release module
-    case :ocibuild_release.collect_release_files(to_charlist(release.path)) do
-      {:ok, files} ->
-        Mix.shell().info("  Collected #{length(files)} files")
-
-        # Build image with Elixir-appropriate start command
-        pull_auth = :ocibuild_release.get_pull_auth()
-        build_opts = %{auth: pull_auth}
-
-        case :ocibuild_release.build_image(
-               to_binary(base_image),
-               files,
-               to_charlist(release.name),
-               to_binary(workdir),
-               env_map,
-               expose_ports,
-               labels,
-               to_binary(cmd),
-               build_opts
-             ) do
-          {:ok, image} ->
-            # Add description annotation if configured
-            image_with_descr = add_description_annotation(image, ocibuild_config)
-            output_image(image_with_descr, tag, push_registry)
-            release
-
-          {:error, reason} ->
-            Mix.raise("Failed to build OCI image: #{inspect(reason)}")
-        end
+    # Delegate to ocibuild_release:run/3
+    case :ocibuild_release.run(:ocibuild_mix, state, %{}) do
+      {:ok, _state} ->
+        release
 
       {:error, reason} ->
-        Mix.raise("Failed to collect release files: #{inspect(reason)}")
+        Mix.raise(format_error(reason))
+    end
+  end
+
+  defp build_state(release, ocibuild_config) do
+    %{
+      # Release info
+      release_name: release.name,
+      release_path: to_charlist(release.path),
+      # Configuration
+      base_image: Keyword.get(ocibuild_config, :base_image, "debian:slim") |> to_binary(),
+      workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
+      env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
+      expose: Keyword.get(ocibuild_config, :expose, []),
+      labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
+      cmd: Keyword.get(ocibuild_config, :cmd, "start") |> to_binary(),
+      description: get_description(ocibuild_config),
+      tag: get_tag(ocibuild_config, release.name, release.version) |> to_binary(),
+      output: nil,
+      push: get_push(ocibuild_config),
+      chunk_size: Keyword.get(ocibuild_config, :chunk_size)
+    }
+  end
+
+  defp get_description(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :description) do
+      nil -> :undefined
+      desc -> to_binary(desc)
     end
   end
 
@@ -118,44 +106,19 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
-  defp output_image(image, tag, push_registry) do
-    # Generate output path
-    safe_tag = String.replace(tag, ":", "-")
-    output_path = "#{safe_tag}.tar.gz"
-
-    Mix.shell().info("  Saving to #{output_path}")
-
-    case :ocibuild.save(image, to_charlist(output_path)) do
-      :ok ->
-        Mix.shell().info("OCI image saved successfully")
-
-        if push_registry do
-          push_image(image, tag, push_registry)
-        else
-          Mix.shell().info("To load: docker load < #{output_path}")
-        end
-
-      {:error, reason} ->
-        Mix.raise("Failed to save OCI image: #{inspect(reason)}")
+  defp get_push(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :push) do
+      nil -> nil
+      registry -> to_binary(registry)
     end
   end
 
-  defp push_image(image, tag, registry) do
-    {repo, image_tag} = :ocibuild_release.parse_tag(to_binary(tag))
-    auth = :ocibuild_release.get_push_auth()
-
-    Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
-
-    repo_tag = "#{repo}:#{image_tag}"
-
-    case :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth) do
-      :ok ->
-        Mix.shell().info("Push successful!")
-
-      {:error, reason} ->
-        Mix.raise("Failed to push OCI image: #{inspect(reason)}")
-    end
-  end
+  defp format_error({:release_not_found, reason}), do: "Failed to find release: #{inspect(reason)}"
+  defp format_error({:collect_failed, reason}), do: "Failed to collect release files: #{inspect(reason)}"
+  defp format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
+  defp format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
+  defp format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"
+  defp format_error(reason), do: "OCI build error: #{inspect(reason)}"
 
   # Convert Elixir map to Erlang-compatible map with binary keys
   defp to_erlang_map(map) when is_map(map) do
@@ -166,15 +129,4 @@ defmodule Ocibuild.MixRelease do
   defp to_binary(value) when is_atom(value), do: Atom.to_string(value)
   defp to_binary(value) when is_list(value), do: to_string(value)
   defp to_binary(value), do: to_string(value)
-
-  # Add description annotation if configured
-  defp add_description_annotation(image, ocibuild_config) do
-    descr =
-      case Keyword.get(ocibuild_config, :description) do
-        nil -> :undefined
-        description -> to_binary(description)
-      end
-
-    :ocibuild_release.add_description(image, descr)
-  end
 end

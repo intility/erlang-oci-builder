@@ -71,13 +71,6 @@ export OCIBUILD_PULL_PASSWORD="pass"
 %% Adapter callbacks (ocibuild_adapter behaviour)
 -export([get_config/1, find_release/2, info/2, console/2, error/2]).
 
-%% Legacy exports for backward compatibility (delegate to ocibuild_release)
--export([collect_release_files/1, build_image/7, build_image/8]).
--export([get_push_auth/0, get_pull_auth/0]).
--export([
-    make_progress_callback/0, format_progress/2, format_bytes/1, is_tty/0, clear_progress_line/0
-]).
-
 %% Exports for testing
 -ifdef(TEST).
 -export([find_relx_release/1, get_base_image/2]).
@@ -136,88 +129,36 @@ do(State) ->
 -spec format_error(term()) -> iolist().
 format_error(missing_tag) ->
     "Missing required --tag (-t) option. Usage: rebar3 ocibuild -t myapp:1.0.0";
-format_error({release_not_found, Name, Path}) ->
+format_error({release_not_found, {Name, Path}}) ->
     io_lib:format("Release '~s' not found at ~s. Run 'rebar3 release' first.", [Name, Path]);
+format_error({release_not_found, Reason}) ->
+    io_lib:format("Failed to find release: ~p", [Reason]);
 format_error({no_release_configured, RelxConfig}) ->
     io_lib:format("No release configured in rebar.config. Got: ~p", [RelxConfig]);
-format_error({file_read_error, Path, Reason}) ->
+format_error({collect_failed, {file_read_error, Path, Reason}}) ->
     io_lib:format("Failed to read file ~s: ~p", [Path, Reason]);
+format_error({collect_failed, Reason}) ->
+    io_lib:format("Failed to collect release files: ~p", [Reason]);
+format_error({build_failed, {base_image_failed, Reason}}) ->
+    io_lib:format("Failed to fetch base image: ~p", [Reason]);
+format_error({build_failed, Reason}) ->
+    io_lib:format("Failed to build image: ~p", [Reason]);
 format_error({save_failed, Reason}) ->
     io_lib:format("Failed to save image: ~p", [Reason]);
 format_error({push_failed, Reason}) ->
     io_lib:format("Failed to push image: ~p", [Reason]);
-format_error({base_image_failed, Reason}) ->
-    io_lib:format("Failed to fetch base image: ~p", [Reason]);
 format_error(Reason) ->
     io_lib:format("OCI build error: ~p", [Reason]).
-
-%%%===================================================================
-%%% Delegated API (for backward compatibility with Mix tasks)
-%%%===================================================================
-
--doc "Collect all files from a release directory. Delegates to ocibuild_release.".
--spec collect_release_files(file:filename()) ->
-    {ok, [{binary(), binary(), non_neg_integer()}]} | {error, term()}.
-collect_release_files(ReleasePath) ->
-    ocibuild_release:collect_release_files(ReleasePath).
-
--doc "Build an OCI image from release files. Delegates to ocibuild_release.".
--spec build_image(
-    binary(),
-    [{binary(), binary(), non_neg_integer()}],
-    string() | binary(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
-    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
-
--doc "Build an OCI image from release files with custom start command. Delegates to ocibuild_release.".
--spec build_image(
-    binary(),
-    [{binary(), binary(), non_neg_integer()}],
-    string() | binary(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map(),
-    binary()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
-    %% Create progress callback for terminal display
-    ProgressFn = make_progress_callback(),
-    PullAuth = get_pull_auth(),
-    Opts = #{auth => PullAuth, progress => ProgressFn},
-    Result = ocibuild_release:build_image(
-        BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts
-    ),
-    %% Clear progress line after build (only in TTY mode)
-    clear_progress_line(),
-    Result.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
-%% @private Main build logic
-do_build(State, _Args, Config, Tag) ->
-    rebar_api:info("Building OCI image: ~s", [Tag]),
-
-    %% Find release using adapter callback
-    case find_release(State, #{}) of
-        {ok, ReleaseName, ReleasePath} ->
-            rebar_api:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
-
-            %% Collect files from release
-            case collect_release_files(ReleasePath) of
-                {ok, Files} ->
-                    rebar_api:info("Collected ~p files from release", [length(Files)]),
-                    build_and_output(State, Config, Tag, ReleaseName, Files);
-                {error, Reason} ->
-                    {error, {?MODULE, Reason}}
-            end;
+%% @private Main build logic - delegates to ocibuild_release:run/3
+do_build(State, _Args, _Config, _Tag) ->
+    case ocibuild_release:run(?MODULE, State, #{}) of
+        {ok, NewState} ->
+            {ok, NewState};
         {error, Reason} ->
             {error, {?MODULE, Reason}}
     end.
@@ -232,31 +173,6 @@ find_relx_release([{release, {Name, _Vsn}, _Apps, _Opts} | _]) ->
 find_relx_release([_ | Rest]) ->
     find_relx_release(Rest).
 
-%% @private Build image and output
-build_and_output(State, _Config, Tag, ReleaseName, Files) ->
-    %% Get normalized configuration from adapter
-    AdapterConfig = get_config(State),
-    #{
-        base_image := BaseImage,
-        workdir := Workdir,
-        env := EnvMap,
-        expose := ExposePorts,
-        labels := Labels,
-        description := Description
-    } = AdapterConfig,
-
-    rebar_api:info("Base image: ~s", [BaseImage]),
-
-    %% Build the image
-    case build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) of
-        {ok, Image0} ->
-            %% Add description annotation if provided
-            Image = ocibuild_release:add_description(Image0, Description),
-            output_image(State, Tag, Image);
-        {error, Reason} ->
-            {error, {?MODULE, Reason}}
-    end.
-
 %% @private Get base image from args or config (used by get_config)
 get_base_image(Args, Config) ->
     case proplists:get_value(base, Args) of
@@ -265,105 +181,6 @@ get_base_image(Args, Config) ->
         Base ->
             list_to_binary(Base)
     end.
-
-%% @private Output the image (save and/or push)
-output_image(State, Tag, Image) ->
-    %% Get config from adapter
-    AdapterConfig = get_config(State),
-    #{output := OutputOpt, push := PushRegistry, chunk_size := ChunkSize} = AdapterConfig,
-
-    %% Determine output path
-    OutputPath =
-        case OutputOpt of
-            undefined ->
-                %% Extract just the image name (last path segment) for the filename
-                TagStr = binary_to_list(Tag),
-                ImageName = lists:last(string:split(TagStr, "/", all)),
-                SafeName = lists:map(
-                    fun
-                        ($:) -> $-;
-                        (C) -> C
-                    end,
-                    ImageName
-                ),
-                SafeName ++ ".tar.gz";
-            Path ->
-                binary_to_list(Path)
-        end,
-
-    %% Save tarball
-    rebar_api:info("Saving image to ~s", [OutputPath]),
-    case ocibuild_release:save_image(Image, OutputPath, Tag) of
-        ok ->
-            rebar_api:info("Image saved successfully", []),
-
-            %% Push if requested
-            case PushRegistry of
-                undefined ->
-                    rebar_api:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
-                    {ok, State};
-                _ ->
-                    push_to_registry(State, Tag, Image, PushRegistry, ChunkSize)
-            end;
-        {error, Reason} ->
-            {error, {?MODULE, {save_failed, Reason}}}
-    end.
-
-%% @private Push image to registry
-push_to_registry(State, Tag, Image, Registry, ChunkSize) ->
-    %% Parse tag to get repository and tag parts
-    {Repo, ImageTag} = ocibuild_release:parse_tag(Tag),
-
-    %% Get auth from environment (for pushing)
-    Auth = ocibuild_release:get_push_auth(),
-
-    %% Build push options
-    PushOpts =
-        case ChunkSize of
-            undefined -> #{};
-            Size -> #{chunk_size => Size}
-        end,
-
-    rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
-
-    RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
-    case ocibuild_release:push_image(Image, Registry, RepoTag, Auth, PushOpts) of
-        ok ->
-            rebar_api:info("Push successful!", []),
-            {ok, State};
-        {error, Reason} ->
-            {error, {?MODULE, {push_failed, Reason}}}
-    end.
-
-%%%===================================================================
-%%% Legacy API (delegate to ocibuild_release for backward compatibility)
-%%%===================================================================
-
--doc "Get authentication for pushing images. Delegates to ocibuild_release.".
--spec get_push_auth() -> map().
-get_push_auth() -> ocibuild_release:get_push_auth().
-
--doc "Get authentication for pulling base images. Delegates to ocibuild_release.".
--spec get_pull_auth() -> map().
-get_pull_auth() -> ocibuild_release:get_pull_auth().
-
--doc "Check if stdout is connected to a TTY. Delegates to ocibuild_release.".
--spec is_tty() -> boolean().
-is_tty() -> ocibuild_release:is_tty().
-
--doc "Clear the progress line if in TTY mode. Delegates to ocibuild_release.".
--spec clear_progress_line() -> ok.
-clear_progress_line() -> ocibuild_release:clear_progress_line().
-
--doc "Create a progress callback. Delegates to ocibuild_release.".
--spec make_progress_callback() -> ocibuild_registry:progress_callback().
-make_progress_callback() -> ocibuild_release:make_progress_callback().
-
--doc "Format progress as a string with bar. Delegates to ocibuild_release.".
-format_progress(Received, Total) -> ocibuild_release:format_progress(Received, Total).
-
--doc "Format bytes as human-readable string. Delegates to ocibuild_release.".
-format_bytes(Bytes) -> ocibuild_release:format_bytes(Bytes).
 
 %%%===================================================================
 %%% Adapter Callbacks (ocibuild_adapter behaviour)

@@ -6,7 +6,7 @@ defmodule OcibuildMixTest do
       tmp_dir = create_mock_release()
 
       try do
-        {:ok, files} = :ocibuild_rebar3.collect_release_files(to_charlist(tmp_dir))
+        {:ok, files} = :ocibuild_release.collect_release_files(to_charlist(tmp_dir))
 
         # Should have collected the files we created
         assert length(files) >= 3
@@ -35,7 +35,7 @@ defmodule OcibuildMixTest do
       tmp_dir = make_temp_dir("ocibuild_empty")
 
       try do
-        {:ok, files} = :ocibuild_rebar3.collect_release_files(to_charlist(tmp_dir))
+        {:ok, files} = :ocibuild_release.collect_release_files(to_charlist(tmp_dir))
         assert files == []
       after
         cleanup_temp_dir(tmp_dir)
@@ -51,13 +51,15 @@ defmodule OcibuildMixTest do
       ]
 
       {:ok, image} =
-        :ocibuild_rebar3.build_image(
+        :ocibuild_release.build_image(
           "scratch",
           files,
           ~c"myapp",
           "/app",
           %{},
           [],
+          %{},
+          "foreground",
           %{}
         )
 
@@ -75,13 +77,15 @@ defmodule OcibuildMixTest do
       env_map = %{"LANG" => "C.UTF-8", "PORT" => "8080"}
 
       {:ok, image} =
-        :ocibuild_rebar3.build_image(
+        :ocibuild_release.build_image(
           "scratch",
           files,
           ~c"myapp",
           "/app",
           env_map,
           [],
+          %{},
+          "foreground",
           %{}
         )
 
@@ -97,13 +101,15 @@ defmodule OcibuildMixTest do
       files = [{"/app/test", "data", 0o644}]
 
       {:ok, image} =
-        :ocibuild_rebar3.build_image(
+        :ocibuild_release.build_image(
           "scratch",
           files,
           ~c"myapp",
           "/app",
           %{},
           [8080, 443],
+          %{},
+          "foreground",
           %{}
         )
 
@@ -120,14 +126,16 @@ defmodule OcibuildMixTest do
       labels = %{"org.opencontainers.image.version" => "1.0.0"}
 
       {:ok, image} =
-        :ocibuild_rebar3.build_image(
+        :ocibuild_release.build_image(
           "scratch",
           files,
           ~c"myapp",
           "/app",
           %{},
           [],
-          labels
+          labels,
+          "foreground",
+          %{}
         )
 
       config = :maps.get(:config, image)
@@ -144,14 +152,14 @@ defmodule OcibuildMixTest do
       System.delete_env("OCIBUILD_PUSH_USERNAME")
       System.delete_env("OCIBUILD_PUSH_PASSWORD")
 
-      assert :ocibuild_rebar3.get_push_auth() == %{}
+      assert :ocibuild_release.get_push_auth() == %{}
     end
 
     test "returns token auth when OCIBUILD_PUSH_TOKEN set" do
       System.put_env("OCIBUILD_PUSH_TOKEN", "mytoken123")
 
       try do
-        auth = :ocibuild_rebar3.get_push_auth()
+        auth = :ocibuild_release.get_push_auth()
         assert auth == %{token: "mytoken123"}
       after
         System.delete_env("OCIBUILD_PUSH_TOKEN")
@@ -164,7 +172,7 @@ defmodule OcibuildMixTest do
       System.put_env("OCIBUILD_PUSH_PASSWORD", "mypass")
 
       try do
-        auth = :ocibuild_rebar3.get_push_auth()
+        auth = :ocibuild_release.get_push_auth()
         assert auth == %{username: "myuser", password: "mypass"}
       after
         System.delete_env("OCIBUILD_PUSH_USERNAME")
@@ -179,7 +187,7 @@ defmodule OcibuildMixTest do
       System.delete_env("OCIBUILD_PULL_USERNAME")
       System.delete_env("OCIBUILD_PULL_PASSWORD")
 
-      assert :ocibuild_rebar3.get_pull_auth() == %{}
+      assert :ocibuild_release.get_pull_auth() == %{}
     end
 
     test "returns username/password auth when set" do
@@ -188,7 +196,7 @@ defmodule OcibuildMixTest do
       System.put_env("OCIBUILD_PULL_PASSWORD", "pullpass")
 
       try do
-        auth = :ocibuild_rebar3.get_pull_auth()
+        auth = :ocibuild_release.get_pull_auth()
         assert auth == %{username: "pulluser", password: "pullpass"}
       after
         System.delete_env("OCIBUILD_PULL_USERNAME")

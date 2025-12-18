@@ -15,7 +15,7 @@ collect_release_files_test() ->
     TmpDir = create_mock_release(),
     try
         %% Test file collection using the actual exported function
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
 
         %% Should have collected the files we created
         ?assert(length(Files) >= 3),
@@ -39,7 +39,7 @@ collect_release_files_test() ->
 collect_empty_dir_test() ->
     TmpDir = make_temp_dir("ocibuild_empty"),
     try
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
         ?assertEqual([], Files)
     after
         cleanup_temp_dir(TmpDir)
@@ -56,7 +56,7 @@ build_scratch_image_test() ->
             {~"/app/lib/myapp.beam", ~"beam_data", 8#644}
         ],
 
-    {ok, Image} = ocibuild_rebar3:build_image(
+    {ok, Image} = ocibuild_release:build_image(
         ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}
     ),
 
@@ -77,7 +77,7 @@ build_with_env_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     EnvMap = #{~"LANG" => ~"C.UTF-8", ~"PORT" => ~"8080"},
 
-    {ok, Image} = ocibuild_rebar3:build_image(
+    {ok, Image} = ocibuild_release:build_image(
         ~"scratch", Files, "myapp", ~"/app", EnvMap, [], #{}
     ),
 
@@ -92,7 +92,7 @@ build_with_env_test() ->
 build_with_exposed_ports_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
 
-    {ok, Image} = ocibuild_rebar3:build_image(
+    {ok, Image} = ocibuild_release:build_image(
         ~"scratch", Files, "myapp", ~"/app", #{}, [8080, 443], #{}
     ),
 
@@ -107,7 +107,7 @@ build_with_labels_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     Labels = #{~"org.opencontainers.image.version" => ~"1.0.0"},
 
-    {ok, Image} = ocibuild_rebar3:build_image(
+    {ok, Image} = ocibuild_release:build_image(
         ~"scratch", Files, "myapp", ~"/app", #{}, [], Labels
     ),
 
@@ -147,12 +147,12 @@ get_push_auth_empty_test() ->
     os:unsetenv("OCIBUILD_PUSH_USERNAME"),
     os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
 
-    ?assertEqual(#{}, ocibuild_rebar3:get_push_auth()).
+    ?assertEqual(#{}, ocibuild_release:get_push_auth()).
 
 get_push_auth_token_test() ->
     os:putenv("OCIBUILD_PUSH_TOKEN", "mytoken123"),
     try
-        Auth = ocibuild_rebar3:get_push_auth(),
+        Auth = ocibuild_release:get_push_auth(),
         ?assertEqual(#{token => ~"mytoken123"}, Auth)
     after
         os:unsetenv("OCIBUILD_PUSH_TOKEN")
@@ -163,7 +163,7 @@ get_push_auth_username_password_test() ->
     os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
     os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
     try
-        Auth = ocibuild_rebar3:get_push_auth(),
+        Auth = ocibuild_release:get_push_auth(),
         ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, Auth)
     after
         os:unsetenv("OCIBUILD_PUSH_USERNAME"),
@@ -176,14 +176,14 @@ get_pull_auth_empty_test() ->
     os:unsetenv("OCIBUILD_PULL_USERNAME"),
     os:unsetenv("OCIBUILD_PULL_PASSWORD"),
 
-    ?assertEqual(#{}, ocibuild_rebar3:get_pull_auth()).
+    ?assertEqual(#{}, ocibuild_release:get_pull_auth()).
 
 get_pull_auth_username_password_test() ->
     os:unsetenv("OCIBUILD_PULL_TOKEN"),
     os:putenv("OCIBUILD_PULL_USERNAME", "pulluser"),
     os:putenv("OCIBUILD_PULL_PASSWORD", "pullpass"),
     try
-        Auth = ocibuild_rebar3:get_pull_auth(),
+        Auth = ocibuild_release:get_pull_auth(),
         ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, Auth)
     after
         os:unsetenv("OCIBUILD_PULL_USERNAME"),
@@ -225,7 +225,7 @@ format_error_push_failed_test() ->
     ?assert(string:find(Result, "push") =/= nomatch).
 
 format_error_base_image_failed_test() ->
-    Result = ocibuild_rebar3:format_error({base_image_failed, not_found}),
+    Result = ocibuild_rebar3:format_error({build_failed, {base_image_failed, not_found}}),
     ?assert(is_list(Result)),
     ?assert(string:find(Result, "base image") =/= nomatch).
 
@@ -238,31 +238,31 @@ format_error_generic_test() ->
 %%%===================================================================
 
 format_bytes_test() ->
-    ?assertEqual("100 B", lists:flatten(ocibuild_rebar3:format_bytes(100))),
-    ?assertEqual("0 B", lists:flatten(ocibuild_rebar3:format_bytes(0))),
-    ?assertEqual("1.0 KB", lists:flatten(ocibuild_rebar3:format_bytes(1024))),
-    ?assertEqual("1.0 MB", lists:flatten(ocibuild_rebar3:format_bytes(1024 * 1024))),
-    ?assertEqual("1.00 GB", lists:flatten(ocibuild_rebar3:format_bytes(1024 * 1024 * 1024))).
+    ?assertEqual("100 B", lists:flatten(ocibuild_release:format_bytes(100))),
+    ?assertEqual("0 B", lists:flatten(ocibuild_release:format_bytes(0))),
+    ?assertEqual("1.0 KB", lists:flatten(ocibuild_release:format_bytes(1024))),
+    ?assertEqual("1.0 MB", lists:flatten(ocibuild_release:format_bytes(1024 * 1024))),
+    ?assertEqual("1.00 GB", lists:flatten(ocibuild_release:format_bytes(1024 * 1024 * 1024))).
 
 %%%===================================================================
 %%% Format progress tests
 %%%===================================================================
 
 format_progress_unknown_total_test() ->
-    Result = lists:flatten(ocibuild_rebar3:format_progress(1024, unknown)),
+    Result = lists:flatten(ocibuild_release:format_progress(1024, unknown)),
     ?assert(string:find(Result, "1.0 KB") =/= nomatch).
 
 format_progress_with_percent_test() ->
-    Result = lists:flatten(ocibuild_rebar3:format_progress(512, 1024)),
+    Result = lists:flatten(ocibuild_release:format_progress(512, 1024)),
     ?assert(string:find(Result, "50%") =/= nomatch).
 
 format_progress_complete_test() ->
-    Result = lists:flatten(ocibuild_rebar3:format_progress(1024, 1024)),
+    Result = lists:flatten(ocibuild_release:format_progress(1024, 1024)),
     ?assert(string:find(Result, "100%") =/= nomatch).
 
 format_progress_zero_total_test() ->
     %% Should handle zero/invalid total gracefully
-    Result = lists:flatten(ocibuild_rebar3:format_progress(100, 0)),
+    Result = lists:flatten(ocibuild_release:format_progress(100, 0)),
     ?assert(is_list(Result)).
 
 %%%===================================================================
@@ -298,7 +298,7 @@ build_image_with_custom_cmd_test() ->
             {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
         ],
 
-    {ok, Image} = ocibuild_rebar3:build_image(
+    {ok, Image} = ocibuild_release:build_image(
         ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}, ~"start"
     ),
 
@@ -320,7 +320,7 @@ get_push_auth_username_only_test() ->
     os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
     try
         %% Missing password should return empty
-        ?assertEqual(#{}, ocibuild_rebar3:get_push_auth())
+        ?assertEqual(#{}, ocibuild_release:get_push_auth())
     after
         os:unsetenv("OCIBUILD_PUSH_USERNAME")
     end.
@@ -331,7 +331,7 @@ get_push_auth_password_only_test() ->
     os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
     try
         %% Missing username should return empty
-        ?assertEqual(#{}, ocibuild_rebar3:get_push_auth())
+        ?assertEqual(#{}, ocibuild_release:get_push_auth())
     after
         os:unsetenv("OCIBUILD_PUSH_PASSWORD")
     end.
@@ -475,7 +475,7 @@ build_image_all_options_test() ->
             {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
         ],
 
-    {ok, Image} = ocibuild_rebar3:build_image(
+    {ok, Image} = ocibuild_release:build_image(
         ~"scratch",
         Files,
         "myapp",
@@ -508,19 +508,19 @@ build_image_all_options_test() ->
 
 format_progress_negative_total_test() ->
     %% Negative total should be handled
-    Result = lists:flatten(ocibuild_rebar3:format_progress(100, -1)),
+    Result = lists:flatten(ocibuild_release:format_progress(100, -1)),
     ?assert(is_list(Result)).
 
 format_progress_large_values_test() ->
     %% Large values (gigabytes)
     Result = lists:flatten(
-        ocibuild_rebar3:format_progress(1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
+        ocibuild_release:format_progress(1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
     ),
     ?assert(string:find(Result, "50%") =/= nomatch).
 
 format_progress_overflow_test() ->
     %% More received than total should cap at 100%
-    Result = lists:flatten(ocibuild_rebar3:format_progress(2000, 1000)),
+    Result = lists:flatten(ocibuild_release:format_progress(2000, 1000)),
     ?assert(string:find(Result, "100%") =/= nomatch).
 
 %%%===================================================================
@@ -529,7 +529,7 @@ format_progress_overflow_test() ->
 
 make_progress_callback_test() ->
     %% Get the callback
-    Callback = ocibuild_rebar3:make_progress_callback(),
+    Callback = ocibuild_release:make_progress_callback(),
     ?assert(is_function(Callback, 1)),
 
     %% Test calling it with manifest phase
@@ -562,7 +562,7 @@ collect_symlink_inside_release_test() ->
         ok = file:make_symlink("real_file", SymlinkPath),
 
         %% Should successfully collect both files
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
         ?assertEqual(2, length(Files)),
 
         %% Symlink should resolve to the same content
@@ -590,7 +590,7 @@ collect_symlink_outside_release_test() ->
         ok = file:make_symlink("/etc/passwd", SymlinkPath),
 
         %% Should collect only the regular file, not the symlink
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
         ?assertEqual(1, length(Files)),
 
         %% The evil symlink should not be present
@@ -616,7 +616,7 @@ collect_symlink_relative_escape_test() ->
         ok = file:make_symlink("../../../etc/passwd", SymlinkPath),
 
         %% Should collect only the regular file
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
         ?assertEqual(1, length(Files)),
 
         %% The escape symlink should not be present
@@ -642,7 +642,7 @@ collect_broken_symlink_test() ->
         ok = file:make_symlink("nonexistent_file", SymlinkPath),
 
         %% Should collect only the regular file
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
         ?assertEqual(1, length(Files))
     after
         cleanup_temp_dir(TmpDir)
@@ -663,7 +663,7 @@ collect_symlink_to_dir_inside_test() ->
         ok = file:make_symlink("real_dir", SymlinkPath),
 
         %% Should collect files from both the real dir and via the symlink
-        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
 
         %% Should have 2 files (same file accessible via two paths)
         ?assertEqual(2, length(Files)),

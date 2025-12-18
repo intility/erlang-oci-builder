@@ -85,8 +85,17 @@ defmodule Mix.Tasks.Ocibuild do
     # Find release
     case find_release(config, opts) do
       {:ok, release_name, release_path} ->
-        Mix.shell().info("Using release: #{release_name} at #{release_path}")
-        build_and_output(release_name, release_path, opts, ocibuild_config, config)
+        # Build state map for the adapter
+        state = build_state(release_name, release_path, opts, ocibuild_config, config)
+
+        # Delegate to ocibuild_release:run/3
+        case :ocibuild_release.run(:ocibuild_mix, state, %{}) do
+          {:ok, _state} ->
+            :ok
+
+          {:error, reason} ->
+            Mix.raise(format_error(reason))
+        end
 
       {:error, reason} ->
         Mix.raise(format_error(reason))
@@ -119,153 +128,49 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  defp build_and_output(release_name, release_path, opts, ocibuild_config, config) do
-    # Get configuration with CLI overrides
-    base_image = get_base_image(opts, ocibuild_config)
-    workdir = Keyword.get(ocibuild_config, :workdir, "/app")
-    env_map = Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map()
-    expose_ports = Keyword.get(ocibuild_config, :expose, [])
-    labels = Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map()
-    # Elixir releases use "start" command (Erlang uses "foreground")
-    cmd = opts[:cmd] || Keyword.get(ocibuild_config, :cmd, "start")
+  defp build_state(release_name, release_path, opts, ocibuild_config, config) do
+    %{
+      # Release info
+      release_name: release_name,
+      release_path: to_charlist(release_path),
+      # Configuration with CLI overrides
+      base_image: get_opt(opts, :base, ocibuild_config, :base_image, "debian:slim") |> to_binary(),
+      workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
+      env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
+      expose: Keyword.get(ocibuild_config, :expose, []),
+      labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
+      cmd: get_opt(opts, :cmd, ocibuild_config, :cmd, "start") |> to_binary(),
+      description: get_description(opts, ocibuild_config),
+      tag: get_tag(opts, ocibuild_config, release_name, config[:version]) |> to_binary(),
+      output: get_opt_binary(opts, :output),
+      push: get_opt_binary(opts, :push),
+      chunk_size: opts[:chunk_size]
+    }
+  end
 
-    # Get or generate tag
-    tag = get_tag(opts, ocibuild_config, release_name, config[:version])
+  defp get_opt(opts, opt_key, config, config_key, default) do
+    opts[opt_key] || Keyword.get(config, config_key, default)
+  end
 
-    Mix.shell().info("Building OCI image: #{tag}")
-    Mix.shell().info("  Base image: #{base_image}")
-
-    # Collect release files using shared release module
-    case :ocibuild_release.collect_release_files(to_charlist(release_path)) do
-      {:ok, files} ->
-        Mix.shell().info("  Collected #{length(files)} files from release")
-
-        # Build image with Elixir-appropriate start command
-        pull_auth = :ocibuild_release.get_pull_auth()
-        progress_fn = :ocibuild_release.make_progress_callback()
-        build_opts = %{auth: pull_auth, progress: progress_fn}
-
-        case :ocibuild_release.build_image(
-               to_binary(base_image),
-               files,
-               to_charlist(release_name),
-               to_binary(workdir),
-               env_map,
-               expose_ports,
-               labels,
-               to_binary(cmd),
-               build_opts
-             ) do
-          {:ok, image} ->
-            # Clear progress line after build (only in TTY mode)
-            :ocibuild_release.clear_progress_line()
-            # Add description annotation if provided
-            image_with_descr = add_description_annotation(image, opts, ocibuild_config)
-            output_image(image_with_descr, tag, opts, ocibuild_config)
-
-          {:error, reason} ->
-            # Clear progress line on error too
-            :ocibuild_release.clear_progress_line()
-            Mix.raise("Failed to build image: #{inspect(reason)}")
-        end
-
-      {:error, reason} ->
-        Mix.raise("Failed to collect release files: #{inspect(reason)}")
+  defp get_opt_binary(opts, key) do
+    case opts[key] do
+      nil -> nil
+      val -> to_binary(val)
     end
   end
 
-  defp get_base_image(opts, ocibuild_config) do
-    cond do
-      opts[:base] -> opts[:base]
-      Keyword.has_key?(ocibuild_config, :base_image) -> Keyword.get(ocibuild_config, :base_image)
-      true -> "debian:slim"
+  defp get_description(opts, ocibuild_config) do
+    case opts[:desc] || Keyword.get(ocibuild_config, :description) do
+      nil -> :undefined
+      desc -> to_binary(desc)
     end
   end
 
   defp get_tag(opts, ocibuild_config, release_name, version) do
     cond do
-      opts[:tag] ->
-        opts[:tag]
-
-      Keyword.has_key?(ocibuild_config, :tag) ->
-        Keyword.get(ocibuild_config, :tag)
-
-      true ->
-        # Auto-generate from release name and version
-        "#{release_name}:#{version}"
-    end
-  end
-
-  defp output_image(image, tag, opts, _ocibuild_config) do
-    push_registry = opts[:push]
-
-    # Determine output path
-    output_path =
-      case opts[:output] do
-        nil ->
-          # Extract just the image name (last path segment) for the filename
-          image_name =
-            tag
-            |> String.split("/")
-            |> List.last()
-            |> String.replace(":", "-")
-
-          "#{image_name}.tar.gz"
-
-        path ->
-          path
-      end
-
-    # Save tarball
-    Mix.shell().info("  Saving to #{output_path}")
-
-    save_opts = %{tag: to_binary(tag)}
-
-    case :ocibuild.save(image, to_charlist(output_path), save_opts) do
-      :ok ->
-        Mix.shell().info("Image saved successfully")
-
-        if push_registry do
-          push_image(image, tag, push_registry, opts)
-        else
-          Mix.shell().info("\nTo load the image:\n  podman load < #{output_path}")
-          :ok
-        end
-
-      {:error, reason} ->
-        Mix.raise("Failed to save image: #{inspect(reason)}")
-    end
-  end
-
-  defp push_image(image, tag, registry, opts) do
-    {repo, image_tag} = :ocibuild_release.parse_tag(to_binary(tag))
-    auth = :ocibuild_release.get_push_auth()
-    progress_fn = :ocibuild_release.make_progress_callback()
-
-    # Build push options with chunk_size and progress callback
-    push_opts =
-      case opts[:chunk_size] do
-        nil -> %{progress: progress_fn}
-        chunk_size_mb -> %{chunk_size: chunk_size_mb * 1024 * 1024, progress: progress_fn}
-      end
-
-    Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
-
-    repo_tag = "#{repo}:#{image_tag}"
-
-    result = :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts)
-    # Clear progress line after push (only in TTY mode)
-    :ocibuild_release.clear_progress_line()
-    # Stop the dedicated httpc profile to allow clean VM exit
-    :ocibuild_registry.stop_httpc()
-
-    case result do
-      :ok ->
-        Mix.shell().info("Push successful!")
-        :ok
-
-      {:error, reason} ->
-        Mix.raise("Failed to push image: #{inspect(reason)}")
+      opts[:tag] -> opts[:tag]
+      Keyword.has_key?(ocibuild_config, :tag) -> Keyword.get(ocibuild_config, :tag)
+      true -> "#{release_name}:#{version}"
     end
   end
 
@@ -279,7 +184,12 @@ defmodule Mix.Tasks.Ocibuild do
     """
   end
 
-  defp format_error(reason), do: inspect(reason)
+  defp format_error({:release_not_found, reason}), do: "Failed to find release: #{inspect(reason)}"
+  defp format_error({:collect_failed, reason}), do: "Failed to collect release files: #{inspect(reason)}"
+  defp format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
+  defp format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
+  defp format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"
+  defp format_error(reason), do: "OCI build error: #{inspect(reason)}"
 
   # Convert Elixir map to Erlang-compatible map with binary keys
   defp to_erlang_map(map) when is_map(map) do
@@ -290,16 +200,4 @@ defmodule Mix.Tasks.Ocibuild do
   defp to_binary(value) when is_atom(value), do: Atom.to_string(value)
   defp to_binary(value) when is_list(value), do: to_string(value)
   defp to_binary(value), do: to_string(value)
-
-  # Add description annotation if provided via CLI or config
-  defp add_description_annotation(image, opts, ocibuild_config) do
-    descr =
-      cond do
-        opts[:desc] -> to_binary(opts[:desc])
-        Keyword.has_key?(ocibuild_config, :description) -> to_binary(Keyword.get(ocibuild_config, :description))
-        true -> :undefined
-      end
-
-    :ocibuild_release.add_description(image, descr)
-  end
 end

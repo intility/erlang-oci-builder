@@ -14,6 +14,9 @@ Security features:
 
 -include_lib("kernel/include/file.hrl").
 
+%% Public API - High-level Orchestration
+-export([run/3]).
+
 %% Public API - File Collection
 -export([
     collect_release_files/1,
@@ -74,6 +77,196 @@ Security features:
 -endif.
 
 -define(DEFAULT_WORKDIR, ~"/app").
+
+%%%===================================================================
+%%% High-level Orchestration
+%%%===================================================================
+
+-doc """
+Run the complete OCI image build pipeline.
+
+This function orchestrates the entire build process using the adapter module
+for build-system-specific operations (configuration, release finding, logging).
+
+The adapter module must implement the `ocibuild_adapter` behaviour:
+- `get_config/1` - Extract configuration from build system state
+- `find_release/2` - Locate the release directory
+- `info/2`, `console/2`, `error/2` - Logging functions
+
+Options:
+- `cmd` - Start command override (default: from adapter config or "foreground")
+
+Returns `{ok, State}` on success (State passed through from adapter),
+or `{error, Reason}` on failure.
+""".
+-spec run(module(), term(), map()) -> {ok, term()} | {error, term()}.
+run(AdapterModule, AdapterState, Opts) ->
+    try
+        %% Get configuration from adapter
+        Config = AdapterModule:get_config(AdapterState),
+        #{
+            base_image := BaseImage,
+            workdir := Workdir,
+            env := EnvMap,
+            expose := ExposePorts,
+            labels := Labels,
+            cmd := DefaultCmd,
+            description := Description,
+            tag := TagOpt,
+            output := OutputOpt,
+            push := PushRegistry,
+            chunk_size := ChunkSize
+        } = Config,
+
+        %% Get tag (required)
+        Tag =
+            case TagOpt of
+                undefined -> throw({error, missing_tag});
+                T -> T
+            end,
+
+        AdapterModule:info("Building OCI image: ~s", [Tag]),
+
+        %% Find release using adapter
+        case AdapterModule:find_release(AdapterState, Opts) of
+            {ok, ReleaseName, ReleasePath} ->
+                AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
+
+                %% Collect files from release
+                case collect_release_files(ReleasePath) of
+                    {ok, Files} ->
+                        AdapterModule:info("Collected ~p files from release", [length(Files)]),
+
+                        %% Build the image
+                        AdapterModule:info("Base image: ~s", [BaseImage]),
+                        Cmd = maps:get(cmd, Opts, DefaultCmd),
+
+                        ProgressFn = make_progress_callback(),
+                        PullAuth = get_pull_auth(),
+                        BuildOpts = #{auth => PullAuth, progress => ProgressFn},
+
+                        Result = build_image(
+                            BaseImage,
+                            Files,
+                            ReleaseName,
+                            Workdir,
+                            EnvMap,
+                            ExposePorts,
+                            Labels,
+                            Cmd,
+                            BuildOpts
+                        ),
+                        clear_progress_line(),
+
+                        case Result of
+                            {ok, Image0} ->
+                                %% Add description annotation
+                                Image = add_description(Image0, Description),
+
+                                %% Output the image (save and optionally push)
+                                do_output(
+                                    AdapterModule,
+                                    AdapterState,
+                                    Image,
+                                    Tag,
+                                    OutputOpt,
+                                    PushRegistry,
+                                    ChunkSize
+                                );
+                            {error, BuildError} ->
+                                {error, {build_failed, BuildError}}
+                        end;
+                    {error, CollectError} ->
+                        {error, {collect_failed, CollectError}}
+                end;
+            {error, FindError} ->
+                {error, {release_not_found, FindError}}
+        end
+    catch
+        throw:{error, Reason} ->
+            {error, Reason};
+        throw:Reason ->
+            {error, Reason}
+    end.
+
+%% @private Output the image (save and optionally push)
+-spec do_output(
+    module(),
+    term(),
+    ocibuild:image(),
+    binary(),
+    binary() | undefined,
+    binary() | undefined,
+    pos_integer() | undefined
+) -> {ok, term()} | {error, term()}.
+do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, ChunkSize) ->
+    %% Determine output path
+    OutputPath =
+        case OutputOpt of
+            undefined ->
+                %% Generate from tag: extract image name, replace : with -
+                TagStr = binary_to_list(Tag),
+                ImageName = lists:last(string:split(TagStr, "/", all)),
+                SafeName = lists:map(
+                    fun
+                        ($:) -> $-;
+                        (C) -> C
+                    end,
+                    ImageName
+                ),
+                SafeName ++ ".tar.gz";
+            Path ->
+                binary_to_list(Path)
+        end,
+
+    %% Save tarball
+    AdapterModule:info("Saving image to ~s", [OutputPath]),
+    case save_image(Image, OutputPath, Tag) of
+        ok ->
+            AdapterModule:info("Image saved successfully", []),
+
+            %% Push if requested
+            case PushRegistry of
+                undefined ->
+                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    {ok, AdapterState};
+                _ ->
+                    do_push(AdapterModule, AdapterState, Image, Tag, PushRegistry, ChunkSize)
+            end;
+        {error, SaveError} ->
+            {error, {save_failed, SaveError}}
+    end.
+
+%% @private Push image to registry
+-spec do_push(
+    module(),
+    term(),
+    ocibuild:image(),
+    binary(),
+    binary(),
+    pos_integer() | undefined
+) -> {ok, term()} | {error, term()}.
+do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
+    {Repo, ImageTag} = parse_tag(Tag),
+    Auth = get_push_auth(),
+
+    %% Build push options
+    PushOpts =
+        case ChunkSize of
+            undefined -> #{};
+            Size -> #{chunk_size => Size * 1024 * 1024}
+        end,
+
+    AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+
+    RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
+    case push_image(Image, Registry, RepoTag, Auth, PushOpts) of
+        ok ->
+            AdapterModule:info("Push successful!", []),
+            {ok, AdapterState};
+        {error, PushError} ->
+            {error, {push_failed, PushError}}
+    end.
 
 %%%===================================================================
 %%% Public API
