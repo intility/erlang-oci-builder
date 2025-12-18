@@ -20,7 +20,7 @@ See: https://github.com/opencontainers/distribution-spec
 -export([is_retriable_error/1, with_retry/2]).
 
 %% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
--export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3]).
+-export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3, http_put/4]).
 
 %% Export internal functions for testing
 -export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
@@ -898,7 +898,9 @@ do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token) ->
                                 {"Content-Type", "application/octet-stream"},
                                 {"Content-Length", integer_to_list(byte_size(Data))}
                             ],
-                    case ?MODULE:http_put(PutUrl, PutHeaders, Data) of
+                    %% Use longer timeout for large uploads: base 60s + 1s per 100KB
+                    PutTimeout = 60000 + (byte_size(Data) div 100),
+                    case ?MODULE:http_put(PutUrl, PutHeaders, Data, PutTimeout) of
                         {ok, _} ->
                             ok;
                         {error, _} = Err ->
@@ -1339,11 +1341,16 @@ http_post(Url, Headers, Body) ->
 -spec http_put(string(), [{string(), string()}], binary()) ->
     {ok, binary()} | {error, term()}.
 http_put(Url, Headers, Body) ->
+    http_put(Url, Headers, Body, ?DEFAULT_TIMEOUT).
+
+-spec http_put(string(), [{string(), string()}], binary(), pos_integer()) ->
+    {ok, binary()} | {error, term()}.
+http_put(Url, Headers, Body, Timeout) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
+    HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
     case httpc:request(put, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->

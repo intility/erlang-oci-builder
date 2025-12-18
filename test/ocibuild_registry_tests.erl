@@ -278,8 +278,8 @@ small_blob_monolithic_test() ->
         {ok, <<>>, [{"location", "/v2/test/blobs/uploads/uuid123"}]}
     end),
 
-    %% Mock http_put for monolithic upload
-    meck:expect(ocibuild_registry, http_put, fun(_Url, _Headers, Body) ->
+    %% Mock http_put for monolithic upload (http_put/4 with timeout)
+    meck:expect(ocibuild_registry, http_put, 4, fun(_Url, _Headers, Body, _Timeout) ->
         ?assertEqual(byte_size(Data), byte_size(Body)),
         {ok, <<>>}
     end),
@@ -530,15 +530,15 @@ chunked_upload_416_fallback_test() ->
         {ok, 416, []}
     end),
 
-    %% PUT succeeds (for monolithic fallback)
-    meck:expect(ocibuild_registry, http_put, fun(Url, _Headers, Body) ->
+    %% PUT succeeds (for monolithic fallback) - note: http_put/4 is used with timeout
+    meck:expect(ocibuild_registry, http_put, 4, fun(Url, _Headers, Body, _Timeout) ->
         Calls = get(CallRef),
         put(CallRef, [put | Calls]),
         %% Verify it's the full blob in monolithic upload
         ?assertEqual(byte_size(Data), byte_size(Body)),
         %% Verify the digest is in the URL
         ?assert(string:find(Url, binary_to_list(Digest)) =/= nomatch),
-        {ok, 201}
+        {ok, <<>>}
     end),
 
     Result = ocibuild_registry:push_blob(
