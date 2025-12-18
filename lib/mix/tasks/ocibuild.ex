@@ -157,15 +157,15 @@ defmodule Mix.Tasks.Ocibuild do
                build_opts
              ) do
           {:ok, image} ->
-            # Clear progress line after build
-            :io.format(~c"\r\e[K", [])
+            # Clear progress line after build (only in TTY mode)
+            :ocibuild_rebar3.clear_progress_line()
             # Add description annotation if provided
             image_with_descr = add_description_annotation(image, opts, ocibuild_config)
             output_image(image_with_descr, tag, opts, ocibuild_config)
 
           {:error, reason} ->
             # Clear progress line on error too
-            :io.format(~c"\r\e[K", [])
+            :ocibuild_rebar3.clear_progress_line()
             Mix.raise("Failed to build image: #{inspect(reason)}")
         end
 
@@ -254,8 +254,8 @@ defmodule Mix.Tasks.Ocibuild do
     repo_tag = "#{repo}:#{image_tag}"
 
     result = :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts)
-    # Clear progress line after push
-    :io.format(~c"\r\e[K", [])
+    # Clear progress line after push (only in TTY mode)
+    :ocibuild_rebar3.clear_progress_line()
     # Stop httpc to ensure VM can exit cleanly
     :inets.stop(:httpc, :default)
 

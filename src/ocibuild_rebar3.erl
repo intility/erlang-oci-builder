@@ -71,7 +71,9 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -export([collect_release_files/1, build_image/7, build_image/8, get_push_auth/0, get_pull_auth/0]).
 
 %% Progress display - shared with Mix task for consistent output
--export([make_progress_callback/0, format_progress/2, format_bytes/1]).
+-export([
+    make_progress_callback/0, format_progress/2, format_bytes/1, is_tty/0, clear_progress_line/0
+]).
 
 %% Exports for testing
 -ifdef(TEST).
@@ -189,8 +191,8 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
     Result = ocibuild_release:build_image(
         BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts
     ),
-    %% Clear progress line after build
-    io:format("\r\e[K"),
+    %% Clear progress line after build (only in TTY mode)
+    clear_progress_line(),
     Result.
 
 %%%===================================================================
@@ -377,8 +379,8 @@ push_image(State, _Config, Tag, Image, Registry, Args) ->
     rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
 
     Result = ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth, PushOpts),
-    %% Clear progress line after push
-    io:format("\r\e[K", []),
+    %% Clear progress line after push (only in TTY mode)
+    clear_progress_line(),
     case Result of
         ok ->
             rebar_api:info("Push successful!", []),
@@ -432,17 +434,37 @@ get_pull_auth() ->
 
 %% @doc Create a progress callback for terminal display.
 %% Used by both rebar3 and Mix task for consistent output.
+%% @doc Check if stdout is connected to a TTY (terminal).
+%% Returns true for interactive terminals, false for CI/pipes.
+-spec is_tty() -> boolean().
+is_tty() ->
+    case io:columns() of
+        {ok, _} -> true;
+        {error, _} -> false
+    end.
+
+%% @doc Clear the progress line if in TTY mode.
+%% In CI mode (non-TTY), progress is printed with newlines so no clearing needed.
+-spec clear_progress_line() -> ok.
+clear_progress_line() ->
+    case is_tty() of
+        true -> io:format("\r\e[K", []);
+        false -> ok
+    end.
+
 -spec make_progress_callback() -> ocibuild_registry:progress_callback().
 make_progress_callback() ->
+    %% Capture TTY state once at callback creation
+    IsTTY = is_tty(),
     fun(Info) ->
         #{phase := Phase, total_bytes := Total} = Info,
-        %% For downloads use bytes_received, for uploads use bytes_sent
         Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
-        %% Only print meaningful progress:
-        %% - Skip if Total is 0 or unknown (e.g., manifest with unknown size)
-        %% - Skip if Bytes is 0 (initial state before any progress)
-        %% This avoids duplicate 0% lines in CI logs where \r doesn't clear
-        ShouldPrint = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
+        %% Only print meaningful progress (Total > 0 and Bytes > 0)
+        HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
+        %% In TTY: show all progress updates (animated)
+        %% In CI: only show final state (Bytes == Total) to avoid duplicate lines
+        IsComplete = Bytes =:= Total,
+        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete),
         case ShouldPrint of
             true ->
                 PhaseStr =
@@ -453,8 +475,14 @@ make_progress_callback() ->
                         uploading -> "Uploading layer  "
                     end,
                 ProgressStr = format_progress(Bytes, Total),
-                %% Use carriage return to overwrite the line
-                io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
+                case IsTTY of
+                    true ->
+                        %% TTY: use carriage return to update in place
+                        io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
+                    false ->
+                        %% CI: print with newline (only called for final state)
+                        io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
+                end;
             false ->
                 ok
         end
