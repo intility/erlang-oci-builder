@@ -256,8 +256,10 @@ defmodule Mix.Tasks.Ocibuild do
     result = :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts)
     # Clear progress line after push (only in TTY mode)
     :ocibuild_rebar3.clear_progress_line()
-    # Stop httpc to ensure VM can exit cleanly
-    :inets.stop(:httpc, :default)
+    # Stop inets and ssl applications to ensure VM can exit cleanly
+    # (httpc keeps persistent connections that prevent clean shutdown)
+    Application.stop(:inets)
+    Application.stop(:ssl)
 
     case result do
       :ok ->
