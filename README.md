@@ -138,8 +138,9 @@ Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"start"]),
 Image3 = ocibuild:env(Image2, #{~"MIX_ENV" => ~"prod"}),
 
 %% Push to a registry
-ok = ocibuild:push(Image3, ~"ghcr.io", ~"myorg/myapp:v1.0.0",
-                     #{token => os:getenv("GITHUB_TOKEN")}).
+Auth = #{username => list_to_binary(os:getenv("GITHUB_ACTOR")),
+         password => list_to_binary(os:getenv("GITHUB_TOKEN"))},
+ok = ocibuild:push(Image3, ~"ghcr.io", ~"myorg/myapp:v1.0.0", Auth).
 
 %% Or save as a tarball for podman load
 ok = ocibuild:save(Image3, "myapp.tar.gz").
@@ -160,8 +161,9 @@ image = :ocibuild.entrypoint(image, ["/app/myapp", "start"])
 image = :ocibuild.env(image, %{"MIX_ENV" => "prod"})
 
 # Push to a registry
-:ok = :ocibuild.push(image, "ghcr.io", "myorg/myapp:v1.0.0",
-                       %{token: System.get_env("GITHUB_TOKEN")})
+auth = %{username: System.get_env("GITHUB_ACTOR"),
+         password: System.get_env("GITHUB_TOKEN")}
+:ok = :ocibuild.push(image, "ghcr.io", "myorg/myapp:v1.0.0", auth)
 ```
 
 ## CLI Reference
@@ -244,11 +246,12 @@ export OCIBUILD_PULL_PASSWORD="pass"
 ### Programmatic API
 
 ```erlang
-%% Token auth (GHCR, etc.)
-Auth = #{token => os:getenv("GITHUB_TOKEN")}.
+%% GHCR - use username + token as password
+Auth = #{username => list_to_binary(os:getenv("GITHUB_ACTOR")),
+         password => list_to_binary(os:getenv("GITHUB_TOKEN"))}.
 ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:latest", Auth).
 
-%% Username/password (Docker Hub, etc.)
+%% Docker Hub - username/password
 Auth = #{username => ~"myuser", password => ~"mypassword"}.
 ocibuild:push(Image, ~"docker.io", ~"myuser/myapp:latest", Auth).
 ```

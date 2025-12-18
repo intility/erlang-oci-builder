@@ -18,9 +18,9 @@ Image1 = ocibuild:copy(Image0, [{<<"myapp">>, AppBinary}], <<"/app">>),
 Image2 = ocibuild:entrypoint(Image1, [<<"/app/myapp">>, <<"start">>]),
 Image3 = ocibuild:env(Image2, #{<<"MIX_ENV">> => <<"prod">>}),
 
-%% Push to a registry
-ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>,
-                     #{token => Token}).
+%% Push to a registry (GHCR uses username + token as password)
+Auth = #{username => <<"github-username">>, password => <<"github-token">>},
+ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth).
 ```
 """.
 
@@ -313,8 +313,9 @@ push(Image, Registry, RepoTag) ->
 Push the image to a container registry with authentication.
 
 ```
-ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>,
-                     #{token => os:getenv("GITHUB_TOKEN")}).
+%% GHCR uses username + token as password
+Auth = #{username => <<"github-user">>, password => <<"github-token">>},
+ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>, Auth).
 ```
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth()) ->
