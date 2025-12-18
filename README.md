@@ -1,13 +1,28 @@
-# Build and publish OCI container images
+<h1 align="center">
+  <img src="https://avatars.githubusercontent.com/u/35199565" width="124px"/><br/>
+  Build and Publish OCI Container Images
+</h1>
 
-[![Hex.pm](https://img.shields.io/hexpm/v/ocibuild.svg)](https://hex.pm/packages/ocibuild)  [![Hex.pm](https://img.shields.io/hexpm/l/ocibuild.svg)](https://hex.pm/packages/ocibuild)
-
-`ocibuild` is an Erlang library for building OCI-compliant container images. 
+<p align="center">
+<code>ocibuild</code> is an Erlang library for building <a href="https://opencontainers.org/">OCI-compliant</a> container images. 
 It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependencies outside OTP 27+.
+</p>
+
+<p align="center">
+<a href="https://github.com/intility/erlang-oci-builder/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/intility/erlang-oci-builder/actions/workflows/ci.yml/badge.svg" style="max-width:100%;">
+</a>
+<a href="https://hex.pm/packages/ocibuild">
+    <img alt="hex.pm" src="https://img.shields.io/hexpm/v/ocibuild.svg" style="max-width:100%;">
+</a>
+<a href="https://hex.pm/packages/ocibuild">
+    <img alt="license" src="https://img.shields.io/hexpm/l/ocibuild.svg" style="max-width:100%;">
+</a>
+</p>
 
 ## Features
 
-- 🚀 **No Docker daemon required** — Builds images directly.
+- 🚀 **No Docker required** — Builds images directly.
 - 📦 **Push to any registry** — Docker Hub, GHCR, ECR, GCR, etc.
 - 📋 **OCI compliant** — Produces standard OCI image layouts.
 
@@ -64,7 +79,7 @@ MIX_ENV=prod mix ocibuild -t myapp:1.0.0
 podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
-OCIBUILD_TOKEN=$GITHUB_TOKEN mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
 ```
 
 #### Automatic Release Step
@@ -105,7 +120,7 @@ rebar3 ocibuild -t myapp:1.0.0
 podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
-OCIBUILD_TOKEN=$GITHUB_TOKEN rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
 ```
 
 ### Programmatic API (Erlang)
@@ -216,12 +231,14 @@ end
 ### CLI (Environment Variables)
 
 ```bash
-# Token-based (GitHub, etc.)
-export OCIBUILD_TOKEN="your-token"
+# Push credentials (for pushing to registries)
+export OCIBUILD_PUSH_USERNAME="user"
+export OCIBUILD_PUSH_PASSWORD="pass"
 
-# Username/password
-export OCIBUILD_USERNAME="user"
-export OCIBUILD_PASSWORD="pass"
+# Pull credentials (optional, for private base images)
+# If not set, anonymous pull is attempted (works for public images)
+export OCIBUILD_PULL_USERNAME="user"
+export OCIBUILD_PULL_PASSWORD="pass"
 ```
 
 ### Programmatic API

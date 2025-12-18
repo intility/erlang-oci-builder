@@ -95,7 +95,9 @@ Configuration in `rebar.config`:
 ]}.
 ```
 
-Auth via environment: `OCIBUILD_TOKEN` or `OCIBUILD_USERNAME`/`OCIBUILD_PASSWORD`.
+Auth via environment:
+- Push: `OCIBUILD_PUSH_USERNAME`/`OCIBUILD_PUSH_PASSWORD` (or `OCIBUILD_PUSH_TOKEN`)
+- Pull (optional): `OCIBUILD_PULL_USERNAME`/`OCIBUILD_PULL_PASSWORD` (anonymous if unset)
 
 ## Mix Task (Elixir)
 

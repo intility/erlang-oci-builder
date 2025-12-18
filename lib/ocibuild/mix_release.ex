@@ -136,7 +136,7 @@ defmodule Ocibuild.MixRelease do
   defp push_image(image, tag, ocibuild_config) do
     registry = Keyword.get(ocibuild_config, :registry, "docker.io")
     {repo, image_tag} = parse_tag(tag)
-    auth = :ocibuild_rebar3.get_auth()
+    auth = :ocibuild_rebar3.get_push_auth()
 
     Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
 

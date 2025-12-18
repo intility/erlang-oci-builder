@@ -16,6 +16,9 @@ See: https://github.com/opencontainers/distribution-spec
     check_blob_exists/4
 ]).
 
+%% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
+-export([http_get/2, http_head/2]).
+
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer.
 -type progress_info() :: #{
@@ -63,16 +66,17 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
     {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
     ProgressFn = maps:get(progress, Opts, undefined),
 
     %% Get auth token if needed
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             %% Fetch manifest (accept both single manifests and manifest lists)
             ManifestUrl =
                 io_lib:format(
                     "~s/v2/~s/manifests/~s",
-                    [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]
+                    [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Ref)]
                 ),
             Headers =
                 auth_headers(Token) ++
@@ -90,7 +94,7 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
                 total_bytes => unknown
             }),
 
-            case http_get(lists:flatten(ManifestUrl), Headers) of
+            case ?MODULE:http_get(lists:flatten(ManifestUrl), Headers) of
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
                     %% Check if this is a manifest list (multi-platform image)
@@ -172,12 +176,13 @@ pull_blob(Registry, Repo, Digest, Auth, Opts) ->
     {ok, binary()} | {error, term()}.
 pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             Url = io_lib:format(
                 "~s/v2/~s/blobs/~s",
-                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+                [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
             case
@@ -208,15 +213,16 @@ verify_digest(Data, ExpectedDigest) ->
 -spec check_blob_exists(binary(), binary(), binary(), map()) -> boolean().
 check_blob_exists(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             Url = io_lib:format(
                 "~s/v2/~s/blobs/~s",
-                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+                [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
-            case http_head(lists:flatten(Url), Headers) of
+            case ?MODULE:http_head(lists:flatten(Url), Headers) of
                 {ok, _} ->
                     true;
                 {error, _} ->
@@ -230,20 +236,21 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
 -spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
     BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, Repo, Auth) of
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             %% Push layers
-            case push_layers(Image, BaseUrl, Repo, Token) of
+            case push_layers(Image, BaseUrl, NormalizedRepo, Token) of
                 ok ->
                     %% Push config
-                    case push_config(Image, BaseUrl, Repo, Token) of
+                    case push_config(Image, BaseUrl, NormalizedRepo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
                             %% Push manifest
                             push_manifest(
                                 Image,
                                 BaseUrl,
-                                Repo,
+                                NormalizedRepo,
                                 Tag,
                                 Token,
                                 ConfigDigest,
@@ -272,6 +279,14 @@ registry_url(Registry) ->
         _ ->
             "https://" ++ binary_to_list(Registry)
     end.
+
+%% Normalize repository name for a given registry
+%% Docker Hub requires library/ prefix for official images
+-spec normalize_repo(binary(), binary()) -> binary().
+normalize_repo(~"docker.io", Repo) ->
+    normalize_docker_hub_repo(Repo);
+normalize_repo(_Registry, Repo) ->
+    Repo.
 
 %% Check if a manifest is a manifest list (multi-platform image index)
 -spec is_manifest_list(map()) -> boolean().
@@ -379,29 +394,43 @@ normalize_arch(Arch) ->
 
 %% Get authentication token
 -spec get_auth_token(binary(), binary(), map()) ->
-    {ok, binary() | none} | {error, term()}.
-get_auth_token(~"docker.io", Repo, Auth) ->
-    %% Docker Hub uses token authentication
-    docker_hub_auth(Repo, Auth);
+    {ok, binary() | {basic, binary()} | none} | {error, term()}.
+%% Direct token takes priority for all registries
 get_auth_token(_Registry, _Repo, #{token := Token}) ->
     {ok, Token};
-get_auth_token(_Registry, _Repo, #{username := User, password := Pass}) ->
-    %% Basic auth - encode as base64
+%% Docker Hub with username/password requires token exchange via known auth server
+get_auth_token(~"docker.io", Repo, #{username := _, password := _} = Auth) ->
+    docker_hub_auth(Repo, Auth);
+%% All other registries: discover auth via WWW-Authenticate challenge
+get_auth_token(Registry, Repo, #{username := _, password := _} = Auth) ->
+    discover_auth(Registry, Repo, Auth);
+%% No auth provided - try anonymous access
+get_auth_token(Registry, Repo, #{}) ->
+    discover_auth(Registry, Repo, #{}).
 
-    %% Keep interpolation
-    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-    {ok, {basic, Encoded}};
-get_auth_token(_Registry, _Repo, #{}) ->
-    {ok, none}.
+%% Normalize Docker Hub repository name
+%% Single-component names like "alpine" need "library/" prefix
+-spec normalize_docker_hub_repo(binary()) -> binary().
+normalize_docker_hub_repo(Repo) ->
+    case binary:match(Repo, <<"/">>) of
+        nomatch ->
+            %% Official image - add library/ prefix
+            <<"library/", Repo/binary>>;
+        _ ->
+            %% User/org image - use as-is
+            Repo
+    end.
 
 %% Docker Hub specific authentication
 -spec docker_hub_auth(binary(), map()) -> {ok, binary()} | {error, term()}.
 docker_hub_auth(Repo, Auth) ->
     %% Docker Hub requires getting a token from auth.docker.io
-    Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
+    %% Normalize repo name (add library/ prefix for official images)
+    NormalizedRepo = normalize_docker_hub_repo(Repo),
+    Scope = "repository:" ++ binary_to_list(NormalizedRepo) ++ ":pull,push",
     Url =
         "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
-            uri_string:quote(Scope),
+            encode_scope(Scope),
 
     Headers =
         case Auth of
@@ -412,7 +441,7 @@ docker_hub_auth(Repo, Auth) ->
                 []
         end,
 
-    case http_get(Url, Headers) of
+    case ?MODULE:http_get(Url, Headers) of
         {ok, Body} ->
             Response = ocibuild_json:decode(Body),
             case maps:find(~"token", Response) of
@@ -425,6 +454,217 @@ docker_hub_auth(Repo, Auth) ->
             Err
     end.
 
+%% Discover authentication via WWW-Authenticate challenge (standard OCI flow)
+%% 1. GET /v2/ to trigger 401 response with WWW-Authenticate header
+%% 2. Parse the challenge to get realm, service, scope
+%% 3. Exchange credentials at the realm for a Bearer token
+%%
+%% Note: Some registries (like GHCR) allow anonymous pull (returning 200 for /v2/)
+%% but require authentication for push. When credentials are provided, we always
+%% try to get a token using well-known endpoints for such registries.
+-spec discover_auth(binary(), binary(), map()) ->
+    {ok, binary() | {basic, binary()} | none} | {error, term()}.
+discover_auth(Registry, Repo, Auth) ->
+    BaseUrl = registry_url(Registry),
+    V2Url = BaseUrl ++ "/v2/",
+
+    ensure_started(),
+    Request = {V2Url, [{"Connection", "close"}]},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+
+    case httpc:request(get, Request, HttpOpts, Opts) of
+        {ok, {{_, 200, _}, RespHeaders, _}} ->
+            %% Anonymous access allowed for /v2/, but push may still require auth
+            %% If credentials provided, try to get a token anyway
+            case Auth of
+                #{username := _, password := _} ->
+                    %% Try to get WWW-Authenticate from response (some registries include it)
+                    %% Otherwise use well-known token endpoint
+                    case get_www_authenticate(RespHeaders) of
+                        {ok, WwwAuth} ->
+                            handle_www_authenticate(WwwAuth, Repo, Auth);
+                        error ->
+                            %% Use well-known token endpoint for registry
+                            use_wellknown_token_endpoint(Registry, Repo, Auth)
+                    end;
+                _ ->
+                    {ok, none}
+            end;
+        {ok, {{_, 401, _}, RespHeaders, _}} ->
+            %% Auth required - parse WWW-Authenticate challenge
+            case get_www_authenticate(RespHeaders) of
+                {ok, WwwAuth} ->
+                    handle_www_authenticate(WwwAuth, Repo, Auth);
+                error ->
+                    {error, no_www_authenticate_header}
+            end;
+        {ok, {{_, Status, Reason}, _, _}} ->
+            {error, {http_error, Status, Reason}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Handle WWW-Authenticate header (Bearer or Basic)
+-spec handle_www_authenticate(string(), binary(), map()) ->
+    {ok, binary() | {basic, binary()} | none} | {error, term()}.
+handle_www_authenticate(WwwAuth, Repo, Auth) ->
+    case parse_www_authenticate(WwwAuth) of
+        {bearer, Challenge} ->
+            exchange_token(Challenge, Repo, Auth);
+        basic ->
+            case Auth of
+                #{username := User, password := Pass} ->
+                    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                    {ok, {basic, Encoded}};
+                _ ->
+                    {error, auth_required}
+            end;
+        unknown ->
+            {error, {unknown_auth_scheme, WwwAuth}}
+    end.
+
+%% Well-known token endpoints for registries that allow anonymous /v2/ access
+-spec use_wellknown_token_endpoint(binary(), binary(), map()) ->
+    {ok, binary() | {basic, binary()}} | {error, term()}.
+use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{username := User, password := Pass}) ->
+    %% GHCR: Use Basic Auth directly for push operations
+    %% This works better with GITHUB_TOKEN than token exchange
+    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+    {ok, {basic, Encoded}};
+use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{}) ->
+    %% No credentials for GHCR
+    {ok, none};
+use_wellknown_token_endpoint(~"quay.io", Repo, Auth) ->
+    %% Quay.io token endpoint
+    Challenge = #{realm => "https://quay.io/v2/auth", service => "quay.io"},
+    exchange_token(Challenge, Repo, Auth);
+use_wellknown_token_endpoint(Registry, _Repo, _Auth) ->
+    %% Unknown registry - can't get token without WWW-Authenticate
+    {error, {no_token_endpoint_for_registry, Registry}}.
+
+%% Get WWW-Authenticate header from response
+-spec get_www_authenticate([{string(), string()}]) -> {ok, string()} | error.
+get_www_authenticate([]) ->
+    error;
+get_www_authenticate([{Key, Value} | Rest]) ->
+    case string:lowercase(Key) of
+        "www-authenticate" -> {ok, Value};
+        _ -> get_www_authenticate(Rest)
+    end.
+
+%% Parse WWW-Authenticate header
+%% Returns {bearer, #{realm => ..., service => ...}} | basic | unknown
+-spec parse_www_authenticate(string()) ->
+    {bearer, #{realm := string(), service => string()}} | basic | unknown.
+parse_www_authenticate(Header) ->
+    %% Normalize to lowercase for scheme comparison
+    case string:prefix(string:lowercase(Header), "bearer ") of
+        nomatch ->
+            case string:prefix(string:lowercase(Header), "basic") of
+                nomatch -> unknown;
+                _ -> basic
+            end;
+        _ ->
+            %% Extract the params part (after "Bearer ")
+            ParamsStr = string:slice(Header, 7),
+            Params = parse_auth_params(ParamsStr),
+            case maps:find(realm, Params) of
+                {ok, Realm} ->
+                    {bearer, Params#{realm => Realm}};
+                error ->
+                    unknown
+            end
+    end.
+
+%% Parse key="value" pairs from auth header
+-spec parse_auth_params(string()) -> #{atom() => string()}.
+parse_auth_params(Str) ->
+    %% Split on comma, then parse each key="value" pair
+    Parts = string:split(Str, ",", all),
+    lists:foldl(
+        fun(Part, Acc) ->
+            case parse_auth_param(string:trim(Part)) of
+                {Key, Value} -> Acc#{Key => Value};
+                error -> Acc
+            end
+        end,
+        #{},
+        Parts
+    ).
+
+%% Parse a single key="value" pair
+-spec parse_auth_param(string()) -> {atom(), string()} | error.
+parse_auth_param(Str) ->
+    case string:split(Str, "=", leading) of
+        [KeyStr, ValueStr] ->
+            Key = list_to_atom(string:lowercase(string:trim(KeyStr))),
+            %% Remove surrounding quotes if present
+            Value = string:trim(ValueStr, both, "\""),
+            {Key, Value};
+        _ ->
+            error
+    end.
+
+%% Exchange credentials for a Bearer token at the realm URL
+-spec exchange_token(#{realm := string(), atom() => string()}, binary(), map()) ->
+    {ok, binary()} | {error, term()}.
+exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
+    %% Build token URL with query params
+    Service = maps:get(service, Challenge, ""),
+    Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
+
+    %% Build query string
+    QueryParts = [
+        "service=" ++ uri_string:quote(Service),
+        "scope=" ++ encode_scope(Scope)
+    ],
+    QueryString = string:join(QueryParts, "&"),
+
+    %% Append query to realm URL
+    TokenUrl =
+        case string:find(Realm, "?") of
+            nomatch -> Realm ++ "?" ++ QueryString;
+            _ -> Realm ++ "&" ++ QueryString
+        end,
+
+    %% Add basic auth header if credentials provided
+    Headers =
+        case Auth of
+            #{username := User, password := Pass} ->
+                Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
+            _ ->
+                []
+        end,
+
+    case ?MODULE:http_get(TokenUrl, Headers) of
+        {ok, Body} ->
+            Response = ocibuild_json:decode(Body),
+            %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
+            case maps:find(~"token", Response) of
+                {ok, Token} ->
+                    {ok, Token};
+                error ->
+                    case maps:find(~"access_token", Response) of
+                        {ok, Token} ->
+                            {ok, Token};
+                        error ->
+                            {error, no_token_in_response}
+                    end
+            end;
+        {error, _Reason} = Err ->
+            Err
+    end.
+
+%% Encode scope parameter for auth token requests
+%% Uses uri_string:quote for proper encoding
+-spec encode_scope(string()) -> string().
+encode_scope(Scope) ->
+    %% Use uri_string:quote which properly encodes all special characters
+    %% except those allowed in query strings (unreserved chars + some sub-delims)
+    uri_string:quote(Scope).
+
 %% Build auth headers
 -spec auth_headers(binary() | {basic, binary()} | none) -> [{string(), string()}].
 auth_headers(none) ->
@@ -434,26 +674,98 @@ auth_headers({basic, Encoded}) ->
 auth_headers(Token) when is_binary(Token) ->
     [{"Authorization", "Bearer " ++ binary_to_list(Token)}].
 
-%% Push all layers
+%% Push all layers (including base image layers)
 -spec push_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
-push_layers(#{layers := Layers}, BaseUrl, Repo, Token) ->
-    %% Layers are stored in reverse order, reverse for correct push order
-    lists:foldl(
-        fun
-            (#{digest := Digest, data := Data}, ok) ->
-                push_blob(BaseUrl, Repo, Digest, Data, Token);
-            (_, {error, _} = Err) ->
-                Err
-        end,
-        ok,
-        lists:reverse(Layers)
-    ).
+push_layers(Image, BaseUrl, Repo, Token) ->
+    %% First push base image layers (if any) that don't already exist in target
+    case push_base_layers(Image, BaseUrl, Repo, Token) of
+        ok ->
+            %% Then push our new layers
+            Layers = maps:get(layers, Image, []),
+            %% Layers are stored in reverse order, reverse for correct push order
+            lists:foldl(
+                fun
+                    (#{digest := Digest, data := Data}, ok) ->
+                        push_blob(BaseUrl, Repo, Digest, Data, Token);
+                    (_, {error, _} = Err) ->
+                        Err
+                end,
+                ok,
+                lists:reverse(Layers)
+            );
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push base image layers to target registry
+-spec push_base_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
+push_base_layers(Image, BaseUrl, Repo, Token) ->
+    case maps:get(base_manifest, Image, undefined) of
+        undefined ->
+            %% No base image, nothing to do
+            ok;
+        BaseManifest ->
+            BaseLayers = maps:get(~"layers", BaseManifest, []),
+            BaseRef = maps:get(base, Image, none),
+            BaseAuth = maps:get(auth, Image, #{}),
+            push_base_layers_list(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token)
+    end.
+
+-spec push_base_layers_list(list(), term(), map(), string(), binary(), binary()) ->
+    ok | {error, term()}.
+push_base_layers_list([], _BaseRef, _BaseAuth, _BaseUrl, _Repo, _Token) ->
+    ok;
+push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token) ->
+    Digest = maps:get(~"digest", Layer),
+
+    %% Check if blob already exists in target registry
+    CheckUrl = io_lib:format(
+        "~s/v2/~s/blobs/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+    ),
+    Headers = auth_headers(Token),
+
+    case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
+        {ok, _} ->
+            %% Layer already exists in target, skip
+            push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
+        {error, _} ->
+            %% Need to download from source and upload to target
+            case download_and_upload_layer(BaseRef, BaseAuth, Digest, BaseUrl, Repo, Token) of
+                ok ->
+                    push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
+                {error, _} = Err ->
+                    Err
+            end
+    end.
+
+-spec download_and_upload_layer(term(), map(), binary(), string(), binary(), binary()) ->
+    ok | {error, term()}.
+download_and_upload_layer(none, _BaseAuth, _Digest, _BaseUrl, _Repo, _Token) ->
+    {error, no_base_ref};
+download_and_upload_layer({SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, BaseUrl, Repo, Token) ->
+    %% Download blob from source registry
+    case pull_blob(SrcRegistry, SrcRepo, Digest, BaseAuth) of
+        {ok, Data} ->
+            %% Upload to target registry
+            push_blob(BaseUrl, Repo, Digest, Data, Token);
+        {error, _} = Err ->
+            Err
+    end.
 
 %% Push config and return its digest and size
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->
     {ok, binary(), non_neg_integer()} | {error, term()}.
 push_config(#{config := Config}, BaseUrl, Repo, Token) ->
-    ConfigJson = ocibuild_json:encode(Config),
+    %% Reverse diff_ids and history which are stored in reverse order for O(1) append
+    Rootfs = maps:get(~"rootfs", Config),
+    DiffIds = maps:get(~"diff_ids", Rootfs, []),
+    History = maps:get(~"history", Config, []),
+    ExportConfig = Config#{
+        ~"rootfs" => Rootfs#{~"diff_ids" => lists:reverse(DiffIds)},
+        ~"history" => lists:reverse(History)
+    },
+    ConfigJson = ocibuild_json:encode(ExportConfig),
     Digest = ocibuild_digest:sha256(ConfigJson),
     case push_blob(BaseUrl, Repo, Digest, ConfigJson, Token) of
         ok ->
@@ -473,7 +785,7 @@ push_blob(BaseUrl, Repo, Digest, Data, Token) ->
         ),
     Headers = auth_headers(Token),
 
-    case http_head(lists:flatten(CheckUrl), Headers) of
+    case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
         {ok, _} ->
             %% Blob already exists
             ok;
@@ -498,7 +810,15 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                     {error, no_upload_location};
                 Location ->
                     %% Complete upload with PUT
-                    PutUrl = Location ++ "&digest=" ++ binary_to_list(Digest),
+                    %% The Location header may be relative or absolute
+                    AbsLocation = resolve_url(BaseUrl, Location),
+                    %% Use ? if no query params exist, & otherwise
+                    Separator =
+                        case lists:member($?, AbsLocation) of
+                            true -> "&";
+                            false -> "?"
+                        end,
+                    PutUrl = AbsLocation ++ Separator ++ "digest=" ++ binary_to_list(Digest),
                     PutHeaders =
                         Headers ++
                             [
@@ -528,8 +848,18 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
 ) ->
     ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
-    %% Layers are stored in reverse order, reverse for correct manifest order
-    LayerDescriptors =
+    %% Get base image layers if present (these already exist in registry)
+    BaseLayerDescriptors =
+        case maps:get(base_manifest, Image, undefined) of
+            undefined ->
+                [];
+            BaseManifest ->
+                %% Base manifest layers are already in the correct format
+                maps:get(~"layers", BaseManifest, [])
+        end,
+
+    %% Our layers are stored in reverse order, reverse for correct manifest order
+    NewLayerDescriptors =
         [
             #{
                 ~"mediaType" => MediaType,
@@ -543,6 +873,9 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
             } <-
                 lists:reverse(maps:get(layers, Image, []))
         ],
+
+    %% Combine: base layers first, then our new layers
+    LayerDescriptors = BaseLayerDescriptors ++ NewLayerDescriptors,
 
     {ManifestJson, _} =
         ocibuild_manifest:build(
@@ -568,6 +901,34 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
         {error, _} = Err ->
             Err
     end.
+
+%%%===================================================================
+%%% URL helpers
+%%%===================================================================
+
+%% Resolve a potentially relative URL against a base URL
+%% Returns absolute URL suitable for httpc
+-spec resolve_url(string(), string()) -> string().
+resolve_url(_BaseUrl, [$h, $t, $t, $p, $s, $: | _] = AbsUrl) ->
+    %% Already absolute (starts with https:)
+    AbsUrl;
+resolve_url(_BaseUrl, [$h, $t, $t, $p, $: | _] = AbsUrl) ->
+    %% Already absolute (starts with http:)
+    AbsUrl;
+resolve_url(BaseUrl, [$/ | _] = RelPath) ->
+    %% Relative path - extract scheme and host from BaseUrl
+    case uri_string:parse(BaseUrl) of
+        #{scheme := Scheme, host := Host, port := Port} ->
+            lists:flatten(io_lib:format("~s://~s:~B~s", [Scheme, Host, Port, RelPath]));
+        #{scheme := Scheme, host := Host} ->
+            lists:flatten(io_lib:format("~s://~s~s", [Scheme, Host, RelPath]));
+        _ ->
+            %% Fallback: prepend base URL
+            BaseUrl ++ RelPath
+    end;
+resolve_url(BaseUrl, RelUrl) ->
+    %% Assume relative URL without leading slash, append to base
+    BaseUrl ++ "/" ++ RelUrl.
 
 %%%===================================================================
 %%% HTTP helpers (using httpc)
@@ -692,7 +1053,7 @@ http_post(Url, Headers, Body) ->
     case httpc:request(post, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
-        {ok, {{_, Status, Reason}, _, _}} ->
+        {ok, {{_, Status, Reason}, _, _ResponseBody}} ->
             {error, {http_error, Status, Reason}};
         {error, Reason} ->
             {error, Reason}
@@ -751,7 +1112,7 @@ maybe_report_progress(ProgressFn, Info) when is_function(ProgressFn, 1) ->
     {ok, binary()} | {error, term()}.
 http_get_with_progress(Url, Headers, undefined, _Phase, _TotalBytes) ->
     %% No progress callback - use regular http_get
-    http_get(Url, Headers);
+    ?MODULE:http_get(Url, Headers);
 http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes) ->
     http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, 5).
 

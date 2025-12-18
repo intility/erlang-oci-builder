@@ -2,7 +2,7 @@ defmodule Ocibuild.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/intility/ocibuild"
+  @source_url "https://github.com/intility/erlang-oci-builder"
 
   def project do
     [

@@ -45,12 +45,15 @@ defmodule Mix.Tasks.Ocibuild do
 
   Set environment variables for registry authentication:
 
-      export OCIBUILD_TOKEN="your-token"
+  For pushing to registry:
 
-  Or:
+      export OCIBUILD_PUSH_USERNAME="user"
+      export OCIBUILD_PUSH_PASSWORD="pass"
 
-      export OCIBUILD_USERNAME="user"
-      export OCIBUILD_PASSWORD="pass"
+  For pulling private base images (optional, anonymous pull used if unset):
+
+      export OCIBUILD_PULL_USERNAME="user"
+      export OCIBUILD_PULL_PASSWORD="pass"
   """
 
   use Mix.Task
@@ -187,8 +190,14 @@ defmodule Mix.Tasks.Ocibuild do
     output_path =
       case opts[:output] do
         nil ->
-          safe_tag = String.replace(tag, ":", "-")
-          "#{safe_tag}.tar.gz"
+          # Extract just the image name (last path segment) for the filename
+          image_name =
+            tag
+            |> String.split("/")
+            |> List.last()
+            |> String.replace(":", "-")
+
+          "#{image_name}.tar.gz"
 
         path ->
           path
@@ -224,7 +233,7 @@ defmodule Mix.Tasks.Ocibuild do
       end
 
     {repo, image_tag} = parse_tag(tag)
-    auth = :ocibuild_rebar3.get_auth()
+    auth = :ocibuild_rebar3.get_push_auth()
 
     Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
 
