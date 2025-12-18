@@ -381,6 +381,8 @@ push_image(State, _Config, Tag, Image, Registry, Args) ->
     Result = ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth, PushOpts),
     %% Clear progress line after push (only in TTY mode)
     clear_progress_line(),
+    %% Stop the dedicated httpc profile to allow clean VM exit
+    ocibuild_registry:stop_httpc(),
     case Result of
         ok ->
             rebar_api:info("Push successful!", []),

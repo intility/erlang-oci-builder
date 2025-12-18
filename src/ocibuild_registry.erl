@@ -13,7 +13,8 @@ See: https://github.com/opencontainers/distribution-spec
     pull_manifest/3, pull_manifest/4, pull_manifest/5,
     pull_blob/3, pull_blob/4, pull_blob/5,
     push/5, push/6,
-    check_blob_exists/4
+    check_blob_exists/4,
+    stop_httpc/0
 ]).
 
 %% Retry utilities (shared with ocibuild_layout)
@@ -58,6 +59,8 @@ See: https://github.com/opencontainers/distribution-spec
 -define(DEFAULT_TIMEOUT, 30000).
 %% Default chunk size for chunked uploads: 5MB
 -define(DEFAULT_CHUNK_SIZE, 5 * 1024 * 1024).
+%% Dedicated httpc profile for ocibuild operations
+-define(HTTPC_PROFILE, ocibuild).
 %% Registry URL mappings
 -define(REGISTRY_URLS, #{
     ~"docker.io" => "https://registry-1.docker.io",
@@ -496,7 +499,7 @@ discover_auth(Registry, Repo, Auth) ->
     ensure_started(),
     Request = {V2Url, [{"Connection", "close"}]},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
 
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, 200, _}, RespHeaders, _}} ->
@@ -1233,21 +1236,31 @@ resolve_url(BaseUrl, RelUrl) ->
 %%% HTTP helpers (using httpc)
 %%%===================================================================
 
-%% Ensure inets is started
+%% Ensure inets/ssl are started and our httpc profile exists
 -spec ensure_started() -> ok.
 ensure_started() ->
     case inets:start() of
-        ok ->
-            ok;
-        {error, {already_started, _}} ->
-            ok
+        ok -> ok;
+        {error, {already_started, _}} -> ok
     end,
     case ssl:start() of
-        ok ->
-            ok;
-        {error, {already_started, _}} ->
-            ok
+        ok -> ok;
+        {error, {already_started, _}} -> ok
     end,
+    %% Start dedicated httpc profile for ocibuild
+    %% This allows us to stop just our connections without affecting other httpc users
+    case inets:start(httpc, [{profile, ?HTTPC_PROFILE}]) of
+        {ok, _Pid} -> ok;
+        {error, {already_started, _}} -> ok
+    end,
+    ok.
+
+-doc "Stop the ocibuild httpc profile to allow clean VM exit.".
+-spec stop_httpc() -> ok.
+stop_httpc() ->
+    %% Stop our dedicated profile - this closes all our connections
+    %% and allows the VM to exit cleanly without stopping inets/ssl entirely
+    _ = inets:stop(httpc, ?HTTPC_PROFILE),
     ok.
 
 %% Get SSL options for HTTPS requests
@@ -1278,7 +1291,7 @@ http_get(Url, Headers, RedirectsLeft) ->
     Request = {Url, AllHeaders},
     %% Disable autoredirect - we handle redirects manually to strip auth headers
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
@@ -1330,7 +1343,7 @@ http_head(Url, Headers) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
-    Opts = [{socket_opts, [{keepalive, false}]}],
+    Opts = [{socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
     case httpc:request(head, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, ResponseHeaders};
@@ -1348,7 +1361,7 @@ http_post(Url, Headers, Body) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
     case httpc:request(post, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
@@ -1371,7 +1384,7 @@ http_put(Url, Headers, Body, Timeout) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
     case httpc:request(put, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody};
@@ -1391,7 +1404,7 @@ http_patch(Url, Headers, Body, Timeout) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
     case httpc:request(patch, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, Status, normalize_headers(ResponseHeaders)};
@@ -1547,7 +1560,12 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
     Request = {Url, AllHeaders},
     %% Use streaming mode to receive chunks
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
-    Opts = [{sync, false}, {stream, self}, {socket_opts, [{keepalive, false}]}],
+    Opts = [
+        {sync, false},
+        {stream, self},
+        {socket_opts, [{keepalive, false}]},
+        {profile, ?HTTPC_PROFILE}
+    ],
 
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, RequestId} ->
