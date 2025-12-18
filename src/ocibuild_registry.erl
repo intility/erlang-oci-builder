@@ -473,12 +473,8 @@ discover_auth(Registry, Repo, Auth) ->
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
 
-    io:format(standard_error, "DEBUG: Checking ~s for auth challenge~n", [V2Url]),
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, 200, _}, RespHeaders, _}} ->
-            io:format(
-                standard_error, "DEBUG: Got 200 from /v2/, checking for WWW-Authenticate~n", []
-            ),
             %% Anonymous access allowed for /v2/, but push may still require auth
             %% If credentials provided, try to get a token anyway
             case Auth of
@@ -496,16 +492,11 @@ discover_auth(Registry, Repo, Auth) ->
                     {ok, none}
             end;
         {ok, {{_, 401, _}, RespHeaders, _}} ->
-            io:format(standard_error, "DEBUG: Got 401 from /v2/~n", []),
             %% Auth required - parse WWW-Authenticate challenge
             case get_www_authenticate(RespHeaders) of
                 {ok, WwwAuth} ->
-                    io:format(standard_error, "DEBUG: WWW-Authenticate: ~s~n", [WwwAuth]),
                     handle_www_authenticate(WwwAuth, Repo, Auth);
                 error ->
-                    io:format(
-                        standard_error, "DEBUG: No WWW-Authenticate header found~n", []
-                    ),
                     {error, no_www_authenticate_header}
             end;
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -539,7 +530,6 @@ handle_www_authenticate(WwwAuth, Repo, Auth) ->
 use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{username := User, password := Pass}) ->
     %% GHCR: Use Basic Auth directly for push operations
     %% This works better with GITHUB_TOKEN than token exchange
-    io:format(standard_error, "DEBUG: Using Basic Auth directly for GHCR~n", []),
     Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
     {ok, {basic, Encoded}};
 use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{}) ->
@@ -638,45 +628,32 @@ exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
             _ -> Realm ++ "&" ++ QueryString
         end,
 
-    io:format(standard_error, "DEBUG: Token URL: ~s~n", [TokenUrl]),
-
     %% Add basic auth header if credentials provided
     Headers =
         case Auth of
             #{username := User, password := Pass} ->
                 Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-                io:format(standard_error, "DEBUG: Using Basic auth for token exchange~n", []),
                 [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
             _ ->
-                io:format(standard_error, "DEBUG: No credentials for token exchange~n", []),
                 []
         end,
 
     case ?MODULE:http_get(TokenUrl, Headers) of
         {ok, Body} ->
-            io:format(standard_error, "DEBUG: Token response: ~s~n", [Body]),
             Response = ocibuild_json:decode(Body),
             %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
             case maps:find(~"token", Response) of
                 {ok, Token} ->
-                    io:format(standard_error, "DEBUG: Got token (~B bytes)~n", [byte_size(Token)]),
                     {ok, Token};
                 error ->
                     case maps:find(~"access_token", Response) of
                         {ok, Token} ->
-                            io:format(standard_error, "DEBUG: Got access_token (~B bytes)~n", [
-                                byte_size(Token)
-                            ]),
                             {ok, Token};
                         error ->
-                            io:format(standard_error, "DEBUG: No token in response: ~p~n", [
-                                maps:keys(Response)
-                            ]),
                             {error, no_token_in_response}
                     end
             end;
-        {error, Reason} = Err ->
-            io:format(standard_error, "DEBUG: Token exchange failed: ~p~n", [Reason]),
+        {error, _Reason} = Err ->
             Err
     end.
 
@@ -740,7 +717,6 @@ push_base_layers_list([], _BaseRef, _BaseAuth, _BaseUrl, _Repo, _Token) ->
     ok;
 push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token) ->
     Digest = maps:get(~"digest", Layer),
-    Size = maps:get(~"size", Layer),
 
     %% Check if blob already exists in target registry
     CheckUrl = io_lib:format(
@@ -752,12 +728,9 @@ push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token) -
     case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
         {ok, _} ->
             %% Layer already exists in target, skip
-            io:format(standard_error, "DEBUG: Base layer ~s already exists~n", [Digest]),
             push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
         {error, _} ->
             %% Need to download from source and upload to target
-            io:format(standard_error, "DEBUG: Downloading base layer ~s (~.2f MB)~n",
-                [Digest, Size / 1024 / 1024]),
             case download_and_upload_layer(BaseRef, BaseAuth, Digest, BaseUrl, Repo, Token) of
                 ok ->
                     push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
@@ -774,7 +747,6 @@ download_and_upload_layer({SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, Bas
     %% Download blob from source registry
     case pull_blob(SrcRegistry, SrcRepo, Digest, BaseAuth) of
         {ok, Data} ->
-            io:format(standard_error, "DEBUG: Uploading base layer ~s~n", [Digest]),
             %% Upload to target registry
             push_blob(BaseUrl, Repo, Digest, Data, Token);
         {error, _} = Err ->
@@ -793,9 +765,7 @@ push_config(#{config := Config}, BaseUrl, Repo, Token) ->
         ~"rootfs" => Rootfs#{~"diff_ids" => lists:reverse(DiffIds)},
         ~"history" => lists:reverse(History)
     },
-    io:format(standard_error, "DEBUG: Config rootfs (after reverse): ~p~n", [maps:get(~"rootfs", ExportConfig, undefined)]),
     ConfigJson = ocibuild_json:encode(ExportConfig),
-    io:format(standard_error, "DEBUG: ConfigJson: ~s~n", [ConfigJson]),
     Digest = ocibuild_digest:sha256(ConfigJson),
     case push_blob(BaseUrl, Repo, Digest, ConfigJson, Token) of
         ok ->
@@ -832,55 +802,30 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
     Headers = auth_headers(Token),
 
-    io:format(standard_error, "DEBUG: POST ~s~n", [lists:flatten(InitUrl)]),
-    io:format(standard_error, "DEBUG: Auth header type: ~p~n", [
-        case Token of
-            {basic, _} -> basic;
-            _ when is_binary(Token) -> bearer;
-            none -> none
-        end
-    ]),
-    Result = http_post(lists:flatten(InitUrl), Headers, <<>>),
-    io:format(standard_error, "DEBUG: POST result: ~p~n", [
-        case Result of
-            {ok, _, _} -> ok;
-            {error, E} -> {error, E}
-        end
-    ]),
-    case Result of
+    case http_post(lists:flatten(InitUrl), Headers, <<>>) of
         {ok, _, ResponseHeaders} ->
             %% Get upload location
             case proplists:get_value("location", ResponseHeaders) of
                 undefined ->
-                    io:format(standard_error, "DEBUG: No Location header in response~n", []),
-                    io:format(standard_error, "DEBUG: Response headers: ~p~n", [ResponseHeaders]),
                     {error, no_upload_location};
                 Location ->
                     %% Complete upload with PUT
                     %% The Location header may be relative or absolute
-                    io:format(standard_error, "DEBUG: Location header: ~s~n", [Location]),
                     AbsLocation = resolve_url(BaseUrl, Location),
                     %% Use ? if no query params exist, & otherwise
-                    Separator = case lists:member($?, AbsLocation) of
-                        true -> "&";
-                        false -> "?"
-                    end,
+                    Separator =
+                        case lists:member($?, AbsLocation) of
+                            true -> "&";
+                            false -> "?"
+                        end,
                     PutUrl = AbsLocation ++ Separator ++ "digest=" ++ binary_to_list(Digest),
-                    io:format(standard_error, "DEBUG: PUT ~s~n", [PutUrl]),
                     PutHeaders =
                         Headers ++
                             [
                                 {"Content-Type", "application/octet-stream"},
                                 {"Content-Length", integer_to_list(byte_size(Data))}
                             ],
-                    PutResult = http_put(PutUrl, PutHeaders, Data),
-                    io:format(standard_error, "DEBUG: PUT result: ~p~n", [
-                        case PutResult of
-                            {ok, _} -> ok;
-                            {error, PutErr} -> {error, PutErr}
-                        end
-                    ]),
-                    case PutResult of
+                    case http_put(PutUrl, PutHeaders, Data) of
                         {ok, _} ->
                             ok;
                         {error, _} = Err ->
@@ -904,12 +849,14 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     %% Get base image layers if present (these already exist in registry)
-    BaseLayerDescriptors = case maps:get(base_manifest, Image, undefined) of
-        undefined -> [];
-        BaseManifest ->
-            %% Base manifest layers are already in the correct format
-            maps:get(~"layers", BaseManifest, [])
-    end,
+    BaseLayerDescriptors =
+        case maps:get(base_manifest, Image, undefined) of
+            undefined ->
+                [];
+            BaseManifest ->
+                %% Base manifest layers are already in the correct format
+                maps:get(~"layers", BaseManifest, [])
+        end,
 
     %% Our layers are stored in reverse order, reverse for correct manifest order
     NewLayerDescriptors =
@@ -929,7 +876,6 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
 
     %% Combine: base layers first, then our new layers
     LayerDescriptors = BaseLayerDescriptors ++ NewLayerDescriptors,
-    io:format(standard_error, "DEBUG: LayerDescriptors: ~p~n", [LayerDescriptors]),
 
     {ManifestJson, _} =
         ocibuild_manifest:build(
@@ -946,19 +892,10 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
         "~s/v2/~s/manifests/~s",
         [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
     ),
-    io:format(standard_error, "DEBUG: ManifestJson: ~s~n", [ManifestJson]),
-    io:format(standard_error, "DEBUG: PUT manifest ~s~n", [lists:flatten(Url)]),
     Headers =
         auth_headers(Token) ++ [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
 
-    ManifestResult = http_put(lists:flatten(Url), Headers, ManifestJson),
-    io:format(standard_error, "DEBUG: Manifest PUT result: ~p~n", [
-        case ManifestResult of
-            {ok, _} -> ok;
-            {error, ManErr} -> {error, ManErr}
-        end
-    ]),
-    case ManifestResult of
+    case http_put(lists:flatten(Url), Headers, ManifestJson) of
         {ok, _} ->
             ok;
         {error, _} = Err ->
@@ -1116,10 +1053,7 @@ http_post(Url, Headers, Body) ->
     case httpc:request(post, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
-        {ok, {{_, Status, Reason}, _, ResponseBody}} ->
-            io:format(standard_error, "DEBUG: POST failed ~B ~s: ~p~n", [
-                Status, Reason, ResponseBody
-            ]),
+        {ok, {{_, Status, Reason}, _, _ResponseBody}} ->
             {error, {http_error, Status, Reason}};
         {error, Reason} ->
             {error, Reason}
