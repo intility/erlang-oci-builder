@@ -220,3 +220,26 @@ jobs:
 
           # Cleanup
           docker stop test-app
+
+      - name: Delete test image from GHCR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get package name (repo name, lowercase)
+          PACKAGE_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+
+          # Find version ID for the integration tag
+          VERSION_ID=$(gh api \
+            "/orgs/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions" \
+            --jq '.[] | select(.metadata.container.tags | index("integration")) | .id' \
+            2>/dev/null || echo "")
+
+          if [ -n "$VERSION_ID" ]; then
+            echo "Deleting package version $VERSION_ID (tag: integration)"
+            gh api --method DELETE \
+              "/orgs/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions/${VERSION_ID}" \
+              || echo "Failed to delete package (may require admin permissions)"
+          else
+            echo "No integration image found to delete"
+          fi
