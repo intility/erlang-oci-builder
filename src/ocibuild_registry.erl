@@ -844,14 +844,24 @@ push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
     end.
 
 %% Actually upload a blob - decides between monolithic and chunked based on size
+%% Falls back to monolithic if registry doesn't support chunked uploads (416 error)
 -spec do_push_blob(string(), binary(), binary(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
 do_push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
     ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
     case byte_size(Data) >= ChunkSize of
         true ->
-            %% Use chunked upload for large blobs
-            upload_blob_chunked(BaseUrl, Repo, Digest, Data, Token, Opts);
+            %% Try chunked upload for large blobs
+            case upload_blob_chunked(BaseUrl, Repo, Digest, Data, Token, Opts) of
+                ok ->
+                    ok;
+                {error, {http_error, 416, _}} ->
+                    %% Registry doesn't support chunked uploads (e.g., GHCR)
+                    %% Fall back to monolithic upload
+                    do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token);
+                {error, _} = Err ->
+                    Err
+            end;
         false ->
             %% Use monolithic upload for small blobs
             do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token)

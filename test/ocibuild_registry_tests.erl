@@ -501,3 +501,56 @@ chunk_upload_error_test() ->
         #{}
     ),
     ?assertMatch({error, {http_error, 400, _}}, Result).
+
+%% Test that 416 error falls back to monolithic upload (for registries like GHCR)
+chunked_upload_416_fallback_test() ->
+    Data = large_blob(),
+    Digest = ocibuild_digest:sha256(Data),
+
+    %% Track call sequence
+    CallRef = make_ref(),
+    put(CallRef, []),
+
+    meck:expect(ocibuild_registry, http_head, fun(_Url, _Headers) ->
+        %% Blob doesn't exist, needs upload
+        {error, {http_error, 404, "Not Found"}}
+    end),
+
+    %% POST creates upload session (called twice - once for chunked, once for monolithic fallback)
+    meck:expect(ocibuild_registry, http_post, fun(_Url, _Headers, <<>>) ->
+        Calls = get(CallRef),
+        put(CallRef, [post | Calls]),
+        {ok, <<>>, [{"location", "/v2/test/blobs/uploads/uuid-" ++ integer_to_list(length(Calls))}]}
+    end),
+
+    %% PATCH fails with 416 (registry doesn't support chunked uploads)
+    meck:expect(ocibuild_registry, http_patch, fun(_Url, _Headers, _Body, _Timeout) ->
+        Calls = get(CallRef),
+        put(CallRef, [patch | Calls]),
+        {ok, 416, []}
+    end),
+
+    %% PUT succeeds (for monolithic fallback)
+    meck:expect(ocibuild_registry, http_put, fun(Url, _Headers, Body) ->
+        Calls = get(CallRef),
+        put(CallRef, [put | Calls]),
+        %% Verify it's the full blob in monolithic upload
+        ?assertEqual(byte_size(Data), byte_size(Body)),
+        %% Verify the digest is in the URL
+        ?assert(string:find(Url, binary_to_list(Digest)) =/= nomatch),
+        {ok, 201}
+    end),
+
+    Result = ocibuild_registry:push_blob(
+        "https://registry.example.io",
+        ~"test/repo",
+        Digest,
+        Data,
+        ~"test-token",
+        #{}
+    ),
+
+    %% Verify call sequence: POST (chunked) -> PATCH (fails 416) -> POST (monolithic) -> PUT (success)
+    Calls = lists:reverse(get(CallRef)),
+    ?assertEqual([post, patch, post, put], Calls),
+    ?assertEqual(ok, Result).
