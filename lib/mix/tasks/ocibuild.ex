@@ -256,6 +256,8 @@ defmodule Mix.Tasks.Ocibuild do
     result = :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts)
     # Clear progress line after push
     :io.format(~c"\r\e[K", [])
+    # Stop httpc to ensure VM can exit cleanly
+    :inets.stop(:httpc, :default)
 
     case result do
       :ok ->

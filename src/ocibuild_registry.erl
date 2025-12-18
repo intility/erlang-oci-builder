@@ -858,19 +858,31 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
                 {error, {http_error, 416, _}} ->
                     %% Registry doesn't support chunked uploads (e.g., GHCR)
                     %% Fall back to monolithic upload
-                    do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token);
+                    do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token, Opts);
                 {error, _} = Err ->
                     Err
             end;
         false ->
             %% Use monolithic upload for small blobs
-            do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token)
+            do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token, Opts)
     end.
 
 %% Monolithic upload - single PUT request
--spec do_push_blob_monolithic(string(), binary(), binary(), binary(), binary()) ->
+-spec do_push_blob_monolithic(string(), binary(), binary(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
-do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token) ->
+do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token, Opts) ->
+    ProgressFn = maps:get(progress, Opts, undefined),
+    LayerIndex = maps:get(layer_index, Opts, 0),
+    TotalLayers = maps:get(total_layers, Opts, 1),
+    TotalSize = byte_size(Data),
+    %% Report initial progress (0%)
+    maybe_report_progress(ProgressFn, #{
+        phase => uploading,
+        layer_index => LayerIndex,
+        total_layers => TotalLayers,
+        bytes_sent => 0,
+        total_bytes => TotalSize
+    }),
     %% Start upload session
     InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
     Headers = auth_headers(Token),
@@ -902,6 +914,14 @@ do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token) ->
                     PutTimeout = 60000 + (byte_size(Data) div 100),
                     case ?MODULE:http_put(PutUrl, PutHeaders, Data, PutTimeout) of
                         {ok, _} ->
+                            %% Report final progress (100%)
+                            maybe_report_progress(ProgressFn, #{
+                                phase => uploading,
+                                layer_index => LayerIndex,
+                                total_layers => TotalLayers,
+                                bytes_sent => TotalSize,
+                                total_bytes => TotalSize
+                            }),
                             ok;
                         {error, _} = Err ->
                             Err
