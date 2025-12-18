@@ -499,9 +499,9 @@ discover_auth(Registry, Repo, Auth) ->
     ensure_started(),
     Request = {V2Url, [{"Connection", "close"}]},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
 
-    case httpc:request(get, Request, HttpOpts, Opts) of
+    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, 200, _}, RespHeaders, _}} ->
             %% Anonymous access allowed for /v2/, but push may still require auth
             %% If credentials provided, try to get a token anyway
@@ -1291,8 +1291,8 @@ http_get(Url, Headers, RedirectsLeft) ->
     Request = {Url, AllHeaders},
     %% Disable autoredirect - we handle redirects manually to strip auth headers
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
-    case httpc:request(get, Request, HttpOpts, Opts) of
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
         {ok, {{_, Status, _}, RespHeaders, _}} when
@@ -1343,8 +1343,8 @@ http_head(Url, Headers) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
-    Opts = [{socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
-    case httpc:request(head, Request, HttpOpts, Opts) of
+    Opts = [{socket_opts, [{keepalive, false}]}],
+    case httpc:request(head, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, ResponseHeaders};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -1361,8 +1361,8 @@ http_post(Url, Headers, Body) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
-    case httpc:request(post, Request, HttpOpts, Opts) of
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(post, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _ResponseBody}} ->
@@ -1384,8 +1384,8 @@ http_put(Url, Headers, Body, Timeout) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
-    case httpc:request(put, Request, HttpOpts, Opts) of
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(put, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -1404,8 +1404,8 @@ http_patch(Url, Headers, Body, Timeout) ->
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
-    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}, {profile, ?HTTPC_PROFILE}],
-    case httpc:request(patch, Request, HttpOpts, Opts) of
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(patch, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, Status, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -1563,11 +1563,10 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
     Opts = [
         {sync, false},
         {stream, self},
-        {socket_opts, [{keepalive, false}]},
-        {profile, ?HTTPC_PROFILE}
+        {socket_opts, [{keepalive, false}]}
     ],
 
-    case httpc:request(get, Request, HttpOpts, Opts) of
+    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, RequestId} ->
             receive_stream(
                 RequestId, ProgressFn, Phase, TotalBytes, <<>>, Url, Headers, RedirectsLeft
