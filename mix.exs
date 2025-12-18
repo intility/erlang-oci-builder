@@ -36,7 +36,7 @@ defmodule Ocibuild.MixProject do
   defp package do
     [
       name: "ocibuild",
-      licenses: ["Apache-2.0"],
+      licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files: ~w(lib src include priv mix.exs rebar.config README.md LICENSE CHANGELOG.md)
     ]
