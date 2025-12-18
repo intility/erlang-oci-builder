@@ -142,7 +142,8 @@ defmodule Mix.Tasks.Ocibuild do
 
         # Build image with Elixir-appropriate start command
         pull_auth = :ocibuild_rebar3.get_pull_auth()
-        build_opts = %{auth: pull_auth}
+        progress_fn = :ocibuild_rebar3.make_progress_callback()
+        build_opts = %{auth: pull_auth, progress: progress_fn}
 
         case :ocibuild_release.build_image(
                to_binary(base_image),
@@ -156,11 +157,15 @@ defmodule Mix.Tasks.Ocibuild do
                build_opts
              ) do
           {:ok, image} ->
+            # Clear progress line after build
+            :io.format(~c"\r\e[K", [])
             # Add description annotation if provided
             image_with_descr = add_description_annotation(image, opts, ocibuild_config)
             output_image(image_with_descr, tag, opts, ocibuild_config)
 
           {:error, reason} ->
+            # Clear progress line on error too
+            :io.format(~c"\r\e[K", [])
             Mix.raise("Failed to build image: #{inspect(reason)}")
         end
 
@@ -235,19 +240,24 @@ defmodule Mix.Tasks.Ocibuild do
   defp push_image(image, tag, registry, opts) do
     {repo, image_tag} = parse_tag(tag)
     auth = :ocibuild_rebar3.get_push_auth()
+    progress_fn = :ocibuild_rebar3.make_progress_callback()
 
-    # Build push options with chunk_size if provided
+    # Build push options with chunk_size and progress callback
     push_opts =
       case opts[:chunk_size] do
-        nil -> %{}
-        chunk_size_mb -> %{chunk_size: chunk_size_mb * 1024 * 1024}
+        nil -> %{progress: progress_fn}
+        chunk_size_mb -> %{chunk_size: chunk_size_mb * 1024 * 1024, progress: progress_fn}
       end
 
     Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
 
     repo_tag = "#{repo}:#{image_tag}"
 
-    case :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts) do
+    result = :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts)
+    # Clear progress line after push
+    :io.format(~c"\r\e[K", [])
+
+    case result do
       :ok ->
         Mix.shell().info("Push successful!")
         :ok

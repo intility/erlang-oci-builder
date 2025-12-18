@@ -70,10 +70,13 @@ export OCIBUILD_PULL_PASSWORD="pass"
 %% These delegate to ocibuild_release but are kept for backward compatibility
 -export([collect_release_files/1, build_image/7, build_image/8, get_push_auth/0, get_pull_auth/0]).
 
+%% Progress display - shared with Mix task for consistent output
+-export([make_progress_callback/0, format_progress/2, format_bytes/1]).
+
 %% Exports for testing
 -ifdef(TEST).
--export([format_bytes/1, format_progress/2, parse_tag/1]).
--export([find_relx_release/1, get_base_image/2, make_progress_callback/0]).
+-export([parse_tag/1]).
+-export([find_relx_release/1, get_base_image/2]).
 -endif.
 
 -define(PROVIDER, ocibuild).
@@ -360,16 +363,23 @@ push_image(State, _Config, Tag, Image, Registry, Args) ->
     %% Get auth from environment (for pushing)
     Auth = get_push_auth(),
 
+    %% Create progress callback for terminal display
+    ProgressFn = make_progress_callback(),
+
     %% Build push options
-    PushOpts =
+    PushOpts0 =
         case proplists:get_value(chunk_size, Args) of
             undefined -> #{};
             ChunkSizeMB -> #{chunk_size => ChunkSizeMB * 1024 * 1024}
         end,
+    PushOpts = PushOpts0#{progress => ProgressFn},
 
     rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
 
-    case ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth, PushOpts) of
+    Result = ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth, PushOpts),
+    %% Clear progress line after push
+    io:format("\r\e[K", []),
+    case Result of
         ok ->
             rebar_api:info("Push successful!", []),
             {ok, State};
@@ -420,16 +430,22 @@ get_pull_auth() ->
             #{token => list_to_binary(Token)}
     end.
 
-%% @private Create a progress callback for terminal display
+%% @doc Create a progress callback for terminal display.
+%% Used by both rebar3 and Mix task for consistent output.
+-spec make_progress_callback() -> ocibuild_registry:progress_callback().
 make_progress_callback() ->
-    fun(#{phase := Phase, bytes_received := Received, total_bytes := Total}) ->
+    fun(Info) ->
+        #{phase := Phase, total_bytes := Total} = Info,
+        %% For downloads use bytes_received, for uploads use bytes_sent
+        Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
         PhaseStr =
             case Phase of
                 manifest -> "Fetching manifest";
                 config -> "Fetching config  ";
-                layer -> "Downloading layer"
+                layer -> "Downloading layer";
+                uploading -> "Uploading layer  "
             end,
-        ProgressStr = format_progress(Received, Total),
+        ProgressStr = format_progress(Bytes, Total),
         %% Use carriage return to overwrite the line
         io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr])
     end.
