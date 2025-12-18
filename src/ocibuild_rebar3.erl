@@ -459,12 +459,31 @@ make_progress_callback() ->
     fun(Info) ->
         #{phase := Phase, total_bytes := Total} = Info,
         Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
+        LayerIndex = maps:get(layer_index, Info, 0),
         %% Only print meaningful progress (Total > 0 and Bytes > 0)
         HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
         %% In TTY: show all progress updates (animated)
         %% In CI: only show final state (Bytes == Total) to avoid duplicate lines
         IsComplete = Bytes =:= Total,
-        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete),
+        %% In CI mode, track completed phases to avoid duplicate 100% prints
+        %% (callback may be called multiple times at completion)
+        AlreadyPrinted =
+            case IsTTY of
+                true ->
+                    false;
+                false when IsComplete ->
+                    Key = {ocibuild_progress_done, Phase, LayerIndex},
+                    case get(Key) of
+                        true ->
+                            true;
+                        _ ->
+                            put(Key, true),
+                            false
+                    end;
+                false ->
+                    false
+            end,
+        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete) andalso not AlreadyPrinted,
         case ShouldPrint of
             true ->
                 PhaseStr =
