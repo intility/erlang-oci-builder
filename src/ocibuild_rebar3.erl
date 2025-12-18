@@ -103,7 +103,9 @@ init(State) ->
                 {push, $p, "push", string, "Push to registry (e.g., ghcr.io/myorg)"},
                 {base, undefined, "base", string, "Override base image"},
                 {release, undefined, "release", string, "Release name (if multiple)"},
-                {desc, $d, "desc", string, "Image description (manifest annotation)"}
+                {desc, $d, "desc", string, "Image description (manifest annotation)"},
+                {chunk_size, undefined, "chunk-size", integer,
+                    "Chunk size in MB for uploads (default: 5)"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -344,23 +346,30 @@ output_image(State, Args, Config, Tag, Image) ->
                     rebar_api:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, State};
                 _ ->
-                    push_image(State, Config, Tag, Image, list_to_binary(PushRegistry))
+                    push_image(State, Config, Tag, Image, list_to_binary(PushRegistry), Args)
             end;
         {error, Reason} ->
             {error, {?MODULE, {save_failed, Reason}}}
     end.
 
 %% @private Push image to registry
-push_image(State, _Config, Tag, Image, Registry) ->
+push_image(State, _Config, Tag, Image, Registry, Args) ->
     %% Parse tag to get repository and tag parts
     {Repo, ImageTag} = parse_tag(Tag),
 
     %% Get auth from environment (for pushing)
     Auth = get_push_auth(),
 
+    %% Build push options
+    PushOpts =
+        case proplists:get_value(chunk_size, Args) of
+            undefined -> #{};
+            ChunkSizeMB -> #{chunk_size => ChunkSizeMB * 1024 * 1024}
+        end,
+
     rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
 
-    case ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth) of
+    case ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth, PushOpts) of
         ok ->
             rebar_api:info("Push successful!", []),
             {ok, State};

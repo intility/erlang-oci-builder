@@ -69,23 +69,24 @@ User API (ocibuild.erl)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting.
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers.
 
-**Not Implemented:** Multi-platform images, chunked uploads for very large layers, zstd compression.
+**Not Implemented:** Multi-platform images, resumable uploads, zstd compression.
 
 ## CLI Reference
 
 Both `rebar3 ocibuild` and `mix ocibuild` support:
 
-| Option       | Short | Description                                   |
-|--------------|-------|-----------------------------------------------|
-| `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
-| `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
-| `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
-| `--desc`     | `-d`  | Image description (OCI manifest annotation)   |
-| `--base`     |       | Override base image                           |
-| `--release`  |       | Release name (if multiple configured)         |
-| `--cmd`      | `-c`  | Release start command (Elixir only)           |
+| Option         | Short | Description                                   |
+|----------------|-------|-----------------------------------------------|
+| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
+| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
+| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
+| `--desc`       | `-d`  | Image description (OCI manifest annotation)   |
+| `--base`       |       | Override base image                           |
+| `--release`    |       | Release name (if multiple configured)         |
+| `--cmd`        | `-c`  | Release start command (Elixir only)           |
+| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)     |
 
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
 files to support the new functionality.

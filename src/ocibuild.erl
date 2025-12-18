@@ -40,7 +40,7 @@ memory limits.
 %% API - Configuration
 -export([entrypoint/2, cmd/2, env/2, workdir/2, expose/2, label/3, user/2, annotation/3]).
 %% API - Output
--export([push/3, push/4, save/2, save/3, export/2]).
+-export([push/3, push/4, push/5, save/2, save/3, export/2]).
 
 %% Types
 -export_type([image/0, layer/0, auth/0, base_ref/0]).
@@ -348,8 +348,28 @@ ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>, Auth).
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth()) ->
     ok | {error, term()}.
 push(Image, Registry, RepoTag, Auth) ->
+    push(Image, Registry, RepoTag, Auth, #{}).
+
+-doc """
+Push the image to a container registry with authentication and options.
+
+Options:
+- `chunk_size`: Size in bytes for chunked uploads (default: 5MB). Blobs >= this size
+  use OCI chunked upload. Set to a large value to disable chunked uploads.
+- `progress`: A callback function for upload progress updates.
+
+Example:
+```
+Auth = #{username => <<"user">>, password => <<"pass">>},
+Opts = #{chunk_size => 10 * 1024 * 1024},  % 10MB chunks
+ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth, Opts).
+```
+""".
+-spec push(image(), Registry :: binary(), RepoTag :: binary(), auth(), map()) ->
+    ok | {error, term()}.
+push(Image, Registry, RepoTag, Auth, Opts) ->
     {Repo, Tag} = parse_repo_tag(RepoTag),
-    ocibuild_registry:push(Image, Registry, Repo, Tag, Auth).
+    ocibuild_registry:push(Image, Registry, Repo, Tag, Auth, Opts).
 
 -doc """
 Save the image as a tarball.

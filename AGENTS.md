@@ -347,8 +347,29 @@ Implements OCI Distribution Specification for pulling/pushing.
 
 **Features:**
 - Automatic retry with exponential backoff for transient failures
-- Progress callback support for download tracking
+- Progress callback support for download and upload tracking
 - Layer existence check before upload (deduplication)
+- Chunked uploads for large layers (OCI Distribution Spec compliant)
+
+**Chunked Upload:**
+
+Layers >= 5MB (configurable) are uploaded using OCI chunked upload:
+
+```
+1. POST /v2/{repo}/blobs/uploads/  → Get upload session URL
+2. PATCH {url} with Content-Range  → Upload chunks (5MB default)
+3. PUT {url}?digest={digest}       → Complete upload with final chunk
+```
+
+Options:
+- `chunk_size`: Size in bytes for chunked uploads (default: 5MB)
+- `progress`: Callback function for upload progress updates
+
+Example with chunked upload options:
+```erlang
+Opts = #{chunk_size => 10 * 1024 * 1024},  % 10MB chunks
+ocibuild_registry:push(Image, Registry, Repo, Tag, Auth, Opts).
+```
 
 ---
 
@@ -418,9 +439,10 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 
 ### Medium Priority
 
-2. **Streaming/Chunked Uploads**
-   - Large layers should use chunked upload API
-   - Current implementation loads entire layer in memory
+2. **Resumable Uploads**
+   - Chunked uploads are implemented but resume capability is not
+   - If upload fails mid-way, must restart from beginning
+   - Would need session persistence for true resumability
 
 3. **Better Error Messages**
    - Some registry errors could be more descriptive

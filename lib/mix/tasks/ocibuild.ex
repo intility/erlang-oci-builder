@@ -21,6 +21,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
+    * `--chunk-size` - Chunk size in MB for uploads (default: 5)
 
   ## Configuration
 
@@ -70,7 +71,8 @@ defmodule Mix.Tasks.Ocibuild do
           base: :string,
           release: :string,
           cmd: :string,
-          desc: :string
+          desc: :string,
+          chunk_size: :integer
         ]
       )
 
@@ -219,7 +221,7 @@ defmodule Mix.Tasks.Ocibuild do
         Mix.shell().info("Image saved successfully")
 
         if push_registry do
-          push_image(image, tag, push_registry)
+          push_image(image, tag, push_registry, opts)
         else
           Mix.shell().info("\nTo load the image:\n  podman load < #{output_path}")
           :ok
@@ -230,15 +232,22 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  defp push_image(image, tag, registry) do
+  defp push_image(image, tag, registry, opts) do
     {repo, image_tag} = parse_tag(tag)
     auth = :ocibuild_rebar3.get_push_auth()
+
+    # Build push options with chunk_size if provided
+    push_opts =
+      case opts[:chunk_size] do
+        nil -> %{}
+        chunk_size_mb -> %{chunk_size: chunk_size_mb * 1024 * 1024}
+      end
 
     Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
 
     repo_tag = "#{repo}:#{image_tag}"
 
-    case :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth) do
+    case :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts) do
       :ok ->
         Mix.shell().info("Push successful!")
         :ok
