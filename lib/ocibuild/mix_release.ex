@@ -88,8 +88,15 @@ defmodule Ocibuild.MixRelease do
       tag: get_tag(ocibuild_config, release.name, release.version) |> to_binary(),
       output: nil,
       push: get_push(ocibuild_config),
-      chunk_size: Keyword.get(ocibuild_config, :chunk_size)
+      chunk_size: get_chunk_size(ocibuild_config)
     }
+  end
+
+  defp get_chunk_size(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :chunk_size) do
+      nil -> nil
+      size when is_integer(size) -> size * 1024 * 1024
+    end
   end
 
   defp get_description(ocibuild_config) do
@@ -113,8 +120,12 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
-  defp format_error({:release_not_found, reason}), do: "Failed to find release: #{inspect(reason)}"
-  defp format_error({:collect_failed, reason}), do: "Failed to collect release files: #{inspect(reason)}"
+  defp format_error({:release_not_found, reason}),
+    do: "Failed to find release: #{inspect(reason)}"
+
+  defp format_error({:collect_failed, reason}),
+    do: "Failed to collect release files: #{inspect(reason)}"
+
   defp format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
   defp format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
   defp format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"

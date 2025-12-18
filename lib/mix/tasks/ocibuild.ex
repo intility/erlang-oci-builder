@@ -134,7 +134,8 @@ defmodule Mix.Tasks.Ocibuild do
       release_name: release_name,
       release_path: to_charlist(release_path),
       # Configuration with CLI overrides
-      base_image: get_opt(opts, :base, ocibuild_config, :base_image, "debian:slim") |> to_binary(),
+      base_image:
+        get_opt(opts, :base, ocibuild_config, :base_image, "debian:slim") |> to_binary(),
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),
@@ -144,8 +145,15 @@ defmodule Mix.Tasks.Ocibuild do
       tag: get_tag(opts, ocibuild_config, release_name, config[:version]) |> to_binary(),
       output: get_opt_binary(opts, :output),
       push: get_opt_binary(opts, :push),
-      chunk_size: opts[:chunk_size]
+      chunk_size: get_chunk_size(opts)
     }
+  end
+
+  defp get_chunk_size(opts) do
+    case opts[:chunk_size] do
+      nil -> nil
+      size when is_integer(size) -> size * 1024 * 1024
+    end
   end
 
   defp get_opt(opts, opt_key, config, config_key, default) do
@@ -184,8 +192,12 @@ defmodule Mix.Tasks.Ocibuild do
     """
   end
 
-  defp format_error({:release_not_found, reason}), do: "Failed to find release: #{inspect(reason)}"
-  defp format_error({:collect_failed, reason}), do: "Failed to collect release files: #{inspect(reason)}"
+  defp format_error({:release_not_found, reason}),
+    do: "Failed to find release: #{inspect(reason)}"
+
+  defp format_error({:collect_failed, reason}),
+    do: "Failed to collect release files: #{inspect(reason)}"
+
   defp format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
   defp format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
   defp format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"

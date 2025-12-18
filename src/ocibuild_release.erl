@@ -201,20 +201,13 @@ run(AdapterModule, AdapterState, Opts) ->
 ) -> {ok, term()} | {error, term()}.
 do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, ChunkSize) ->
     %% Determine output path
+    %% Handle both undefined (Erlang) and nil (Elixir) for missing values
     OutputPath =
         case OutputOpt of
             undefined ->
-                %% Generate from tag: extract image name, replace : with -
-                TagStr = binary_to_list(Tag),
-                ImageName = lists:last(string:split(TagStr, "/", all)),
-                SafeName = lists:map(
-                    fun
-                        ($:) -> $-;
-                        (C) -> C
-                    end,
-                    ImageName
-                ),
-                SafeName ++ ".tar.gz";
+                default_output_path(Tag);
+            nil ->
+                default_output_path(Tag);
             Path ->
                 binary_to_list(Path)
         end,
@@ -226,8 +219,12 @@ do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, Chun
             AdapterModule:info("Image saved successfully", []),
 
             %% Push if requested
+            %% Handle both undefined (Erlang) and nil (Elixir)
             case PushRegistry of
                 undefined ->
+                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    {ok, AdapterState};
+                nil ->
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
                 _ ->
@@ -236,6 +233,19 @@ do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, Chun
         {error, SaveError} ->
             {error, {save_failed, SaveError}}
     end.
+
+%% @private Generate default output path from tag
+default_output_path(Tag) ->
+    TagStr = binary_to_list(Tag),
+    ImageName = lists:last(string:split(TagStr, "/", all)),
+    SafeName = lists:map(
+        fun
+            ($:) -> $-;
+            (C) -> C
+        end,
+        ImageName
+    ),
+    SafeName ++ ".tar.gz".
 
 %% @private Push image to registry
 -spec do_push(
@@ -251,10 +261,12 @@ do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
     Auth = get_push_auth(),
 
     %% Build push options
+    %% ChunkSize is expected to be in bytes already (or undefined/nil)
     PushOpts =
         case ChunkSize of
             undefined -> #{};
-            Size -> #{chunk_size => Size * 1024 * 1024}
+            nil -> #{};
+            Size when is_integer(Size) -> #{chunk_size => Size}
         end,
 
     AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
