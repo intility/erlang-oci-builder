@@ -63,21 +63,23 @@ export OCIBUILD_PULL_PASSWORD="pass"
 %% available at runtime when used as a rebar3 plugin. The "behaviour provider
 %% undefined" warning during standalone compilation is expected and harmless.
 -behaviour(provider).
+-behaviour(ocibuild_adapter).
 
+%% Provider callbacks
 -export([init/1, do/1, format_error/1]).
 
-%% Exported for use by Mix task (Elixir integration)
-%% These delegate to ocibuild_release but are kept for backward compatibility
--export([collect_release_files/1, build_image/7, build_image/8, get_push_auth/0, get_pull_auth/0]).
+%% Adapter callbacks (ocibuild_adapter behaviour)
+-export([get_config/1, find_release/2, info/2, console/2, error/2]).
 
-%% Progress display - shared with Mix task for consistent output
+%% Legacy exports for backward compatibility (delegate to ocibuild_release)
+-export([collect_release_files/1, build_image/7, build_image/8]).
+-export([get_push_auth/0, get_pull_auth/0]).
 -export([
     make_progress_callback/0, format_progress/2, format_bytes/1, is_tty/0, clear_progress_line/0
 ]).
 
 %% Exports for testing
 -ifdef(TEST).
--export([parse_tag/1]).
 -export([find_relx_release/1, get_base_image/2]).
 -endif.
 
@@ -200,11 +202,11 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
 %%%===================================================================
 
 %% @private Main build logic
-do_build(State, Args, Config, Tag) ->
+do_build(State, _Args, Config, Tag) ->
     rebar_api:info("Building OCI image: ~s", [Tag]),
 
-    %% Find release
-    case find_release(State, Args) of
+    %% Find release using adapter callback
+    case find_release(State, #{}) of
         {ok, ReleaseName, ReleasePath} ->
             rebar_api:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
 
@@ -212,48 +214,12 @@ do_build(State, Args, Config, Tag) ->
             case collect_release_files(ReleasePath) of
                 {ok, Files} ->
                     rebar_api:info("Collected ~p files from release", [length(Files)]),
-                    build_and_output(State, Args, Config, Tag, ReleaseName, Files);
+                    build_and_output(State, Config, Tag, ReleaseName, Files);
                 {error, Reason} ->
                     {error, {?MODULE, Reason}}
             end;
         {error, Reason} ->
             {error, {?MODULE, Reason}}
-    end.
-
-%% @private Find the release directory
-find_release(State, Args) ->
-    RelxConfig = rebar_state:get(State, relx, []),
-
-    %% Get release name from args or config
-    case get_release_name(Args, RelxConfig) of
-        {ok, ReleaseName} ->
-            %% Build the release path
-            BaseDir = rebar_dir:base_dir(State),
-            ReleasePath = filename:join([BaseDir, "rel", ReleaseName]),
-
-            case filelib:is_dir(ReleasePath) of
-                true ->
-                    {ok, ReleaseName, ReleasePath};
-                false ->
-                    {error, {release_not_found, ReleaseName, ReleasePath}}
-            end;
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-%% @private Extract release name from args or relx config
-get_release_name(Args, RelxConfig) ->
-    case proplists:get_value(release, Args) of
-        undefined ->
-            %% Try to get from relx config
-            case find_relx_release(RelxConfig) of
-                {ok, Name} ->
-                    {ok, Name};
-                error ->
-                    {error, {no_release_configured, RelxConfig}}
-            end;
-        Name ->
-            {ok, Name}
     end.
 
 %% @private Find release definition in relx config
@@ -267,13 +233,17 @@ find_relx_release([_ | Rest]) ->
     find_relx_release(Rest).
 
 %% @private Build image and output
-build_and_output(State, Args, Config, Tag, ReleaseName, Files) ->
-    %% Get configuration options
-    BaseImage = get_base_image(Args, Config),
-    Workdir = proplists:get_value(workdir, Config, ?DEFAULT_WORKDIR),
-    EnvMap = proplists:get_value(env, Config, #{}),
-    ExposePorts = proplists:get_value(expose, Config, []),
-    Labels = proplists:get_value(labels, Config, #{}),
+build_and_output(State, _Config, Tag, ReleaseName, Files) ->
+    %% Get normalized configuration from adapter
+    AdapterConfig = get_config(State),
+    #{
+        base_image := BaseImage,
+        workdir := Workdir,
+        env := EnvMap,
+        expose := ExposePorts,
+        labels := Labels,
+        description := Description
+    } = AdapterConfig,
 
     rebar_api:info("Base image: ~s", [BaseImage]),
 
@@ -281,13 +251,13 @@ build_and_output(State, Args, Config, Tag, ReleaseName, Files) ->
     case build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) of
         {ok, Image0} ->
             %% Add description annotation if provided
-            Image = add_description_annotation(Args, Config, Image0),
-            output_image(State, Args, Config, Tag, Image);
+            Image = ocibuild_release:add_description(Image0, Description),
+            output_image(State, Tag, Image);
         {error, Reason} ->
             {error, {?MODULE, Reason}}
     end.
 
-%% @private Get base image from args or config
+%% @private Get base image from args or config (used by get_config)
 get_base_image(Args, Config) ->
     case proplists:get_value(base, Args) of
         undefined ->
@@ -296,32 +266,15 @@ get_base_image(Args, Config) ->
             list_to_binary(Base)
     end.
 
-%% @private Add description annotation if provided via CLI or config
-add_description_annotation(Args, Config, Image) ->
-    case proplists:get_value(desc, Args) of
-        undefined ->
-            %% Check config for description
-            case proplists:get_value(description, Config) of
-                undefined ->
-                    Image;
-                Descr ->
-                    ocibuild:annotation(
-                        Image, ~"org.opencontainers.image.description", list_to_binary(Descr)
-                    )
-            end;
-        Descr ->
-            ocibuild:annotation(
-                Image, ~"org.opencontainers.image.description", list_to_binary(Descr)
-            )
-    end.
-
 %% @private Output the image (save and/or push)
-output_image(State, Args, Config, Tag, Image) ->
-    PushRegistry = proplists:get_value(push, Args),
+output_image(State, Tag, Image) ->
+    %% Get config from adapter
+    AdapterConfig = get_config(State),
+    #{output := OutputOpt, push := PushRegistry, chunk_size := ChunkSize} = AdapterConfig,
 
     %% Determine output path
     OutputPath =
-        case proplists:get_value(output, Args) of
+        case OutputOpt of
             undefined ->
                 %% Extract just the image name (last path segment) for the filename
                 TagStr = binary_to_list(Tag),
@@ -335,13 +288,12 @@ output_image(State, Args, Config, Tag, Image) ->
                 ),
                 SafeName ++ ".tar.gz";
             Path ->
-                Path
+                binary_to_list(Path)
         end,
 
     %% Save tarball
     rebar_api:info("Saving image to ~s", [OutputPath]),
-    SaveOpts = #{tag => Tag},
-    case ocibuild:save(Image, OutputPath, SaveOpts) of
+    case ocibuild_release:save_image(Image, OutputPath, Tag) of
         ok ->
             rebar_api:info("Image saved successfully", []),
 
@@ -351,39 +303,31 @@ output_image(State, Args, Config, Tag, Image) ->
                     rebar_api:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, State};
                 _ ->
-                    push_image(State, Config, Tag, Image, list_to_binary(PushRegistry), Args)
+                    push_to_registry(State, Tag, Image, PushRegistry, ChunkSize)
             end;
         {error, Reason} ->
             {error, {?MODULE, {save_failed, Reason}}}
     end.
 
 %% @private Push image to registry
-push_image(State, _Config, Tag, Image, Registry, Args) ->
+push_to_registry(State, Tag, Image, Registry, ChunkSize) ->
     %% Parse tag to get repository and tag parts
-    {Repo, ImageTag} = parse_tag(Tag),
+    {Repo, ImageTag} = ocibuild_release:parse_tag(Tag),
 
     %% Get auth from environment (for pushing)
-    Auth = get_push_auth(),
-
-    %% Create progress callback for terminal display
-    ProgressFn = make_progress_callback(),
+    Auth = ocibuild_release:get_push_auth(),
 
     %% Build push options
-    PushOpts0 =
-        case proplists:get_value(chunk_size, Args) of
+    PushOpts =
+        case ChunkSize of
             undefined -> #{};
-            ChunkSizeMB -> #{chunk_size => ChunkSizeMB * 1024 * 1024}
+            Size -> #{chunk_size => Size}
         end,
-    PushOpts = PushOpts0#{progress => ProgressFn},
 
     rebar_api:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
 
-    Result = ocibuild:push(Image, Registry, <<Repo/binary, ":", ImageTag/binary>>, Auth, PushOpts),
-    %% Clear progress line after push (only in TTY mode)
-    clear_progress_line(),
-    %% Stop the dedicated httpc profile to allow clean VM exit
-    ocibuild_registry:stop_httpc(),
-    case Result of
+    RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
+    case ocibuild_release:push_image(Image, Registry, RepoTag, Auth, PushOpts) of
         ok ->
             rebar_api:info("Push successful!", []),
             {ok, State};
@@ -391,143 +335,147 @@ push_image(State, _Config, Tag, Image, Registry, Args) ->
             {error, {?MODULE, {push_failed, Reason}}}
     end.
 
-%% @private Parse tag into repo and tag parts
-parse_tag(Tag) ->
-    case binary:split(Tag, ~":") of
-        [Repo, ImageTag] ->
-            {Repo, ImageTag};
-        [Repo] ->
-            {Repo, ~"latest"}
-    end.
+%%%===================================================================
+%%% Legacy API (delegate to ocibuild_release for backward compatibility)
+%%%===================================================================
 
-%% @private Get authentication for pushing images
+-doc "Get authentication for pushing images. Delegates to ocibuild_release.".
 -spec get_push_auth() -> map().
-get_push_auth() ->
-    case os:getenv("OCIBUILD_PUSH_TOKEN") of
-        false ->
-            case {os:getenv("OCIBUILD_PUSH_USERNAME"), os:getenv("OCIBUILD_PUSH_PASSWORD")} of
-                {false, _} ->
-                    #{};
-                {_, false} ->
-                    #{};
-                {User, Pass} ->
-                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
-            end;
-        Token ->
-            #{token => list_to_binary(Token)}
-    end.
+get_push_auth() -> ocibuild_release:get_push_auth().
 
-%% @private Get authentication for pulling base images
+-doc "Get authentication for pulling base images. Delegates to ocibuild_release.".
 -spec get_pull_auth() -> map().
-get_pull_auth() ->
-    case os:getenv("OCIBUILD_PULL_TOKEN") of
-        false ->
-            case {os:getenv("OCIBUILD_PULL_USERNAME"), os:getenv("OCIBUILD_PULL_PASSWORD")} of
-                {false, _} ->
-                    #{};
-                {_, false} ->
-                    #{};
-                {User, Pass} ->
-                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
-            end;
-        Token ->
-            #{token => list_to_binary(Token)}
-    end.
+get_pull_auth() -> ocibuild_release:get_pull_auth().
 
-%% @doc Create a progress callback for terminal display.
-%% Used by both rebar3 and Mix task for consistent output.
-%% @doc Check if stdout is connected to a TTY (terminal).
-%% Returns true for interactive terminals, false for CI/pipes.
+-doc "Check if stdout is connected to a TTY. Delegates to ocibuild_release.".
 -spec is_tty() -> boolean().
-is_tty() ->
-    case io:columns() of
-        {ok, _} -> true;
-        {error, _} -> false
-    end.
+is_tty() -> ocibuild_release:is_tty().
 
-%% @doc Clear the progress line if in TTY mode.
-%% In CI mode (non-TTY), progress is printed with newlines so no clearing needed.
+-doc "Clear the progress line if in TTY mode. Delegates to ocibuild_release.".
 -spec clear_progress_line() -> ok.
-clear_progress_line() ->
-    case is_tty() of
-        true -> io:format("\r\e[K", []);
-        false -> ok
-    end.
+clear_progress_line() -> ocibuild_release:clear_progress_line().
 
+-doc "Create a progress callback. Delegates to ocibuild_release.".
 -spec make_progress_callback() -> ocibuild_registry:progress_callback().
-make_progress_callback() ->
-    %% Capture TTY state once at callback creation
-    IsTTY = is_tty(),
-    fun(Info) ->
-        #{phase := Phase, total_bytes := Total} = Info,
-        Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
-        LayerIndex = maps:get(layer_index, Info, 0),
-        %% Only print meaningful progress (Total > 0 and Bytes > 0)
-        HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
-        %% In TTY: show all progress updates (animated)
-        %% In CI: only show final state (Bytes == Total) to avoid duplicate lines
-        IsComplete = Bytes =:= Total,
-        %% In CI mode, track completed phases to avoid duplicate 100% prints
-        %% (callback may be called multiple times at completion)
-        AlreadyPrinted =
-            case IsTTY of
-                true ->
-                    false;
-                false when IsComplete ->
-                    Key = {ocibuild_progress_done, Phase, LayerIndex},
-                    case get(Key) of
-                        true ->
-                            true;
-                        _ ->
-                            put(Key, true),
-                            false
-                    end;
-                false ->
-                    false
-            end,
-        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete) andalso not AlreadyPrinted,
-        case ShouldPrint of
-            true ->
-                PhaseStr =
-                    case Phase of
-                        manifest -> "Fetching manifest";
-                        config -> "Fetching config  ";
-                        layer -> "Downloading layer";
-                        uploading -> "Uploading layer  "
-                    end,
-                ProgressStr = format_progress(Bytes, Total),
-                case IsTTY of
-                    true ->
-                        %% TTY: use carriage return to update in place
-                        io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
-                    false ->
-                        %% CI: print with newline (only called for final state)
-                        io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
-                end;
-            false ->
-                ok
-        end
+make_progress_callback() -> ocibuild_release:make_progress_callback().
+
+-doc "Format progress as a string with bar. Delegates to ocibuild_release.".
+format_progress(Received, Total) -> ocibuild_release:format_progress(Received, Total).
+
+-doc "Format bytes as human-readable string. Delegates to ocibuild_release.".
+format_bytes(Bytes) -> ocibuild_release:format_bytes(Bytes).
+
+%%%===================================================================
+%%% Adapter Callbacks (ocibuild_adapter behaviour)
+%%%===================================================================
+
+-doc "Get normalized configuration from rebar state.".
+-spec get_config(rebar_state:t()) -> ocibuild_adapter:config().
+get_config(State) ->
+    {Args, _} = rebar_state:command_parsed_args(State),
+    Config = rebar_state:get(State, ocibuild, []),
+    #{
+        base_image => get_base_image(Args, Config),
+        workdir => proplists:get_value(workdir, Config, ?DEFAULT_WORKDIR),
+        env => proplists:get_value(env, Config, #{}),
+        expose => proplists:get_value(expose, Config, []),
+        labels => proplists:get_value(labels, Config, #{}),
+        cmd => ~"foreground",
+        description => get_description(Args, Config),
+        tag => get_tag(Args),
+        output => get_output(Args),
+        push => get_push_registry(Args),
+        chunk_size => get_chunk_size(Args)
+    }.
+
+%% @private Get description from args or config
+get_description(Args, Config) ->
+    case proplists:get_value(desc, Args) of
+        undefined ->
+            case proplists:get_value(description, Config) of
+                undefined -> undefined;
+                Descr -> list_to_binary(Descr)
+            end;
+        Descr ->
+            list_to_binary(Descr)
     end.
 
-%% @private Format progress as a string with bar
-format_progress(Received, unknown) ->
-    io_lib:format("~s", [format_bytes(Received)]);
-format_progress(Received, Total) when is_integer(Total), Total > 0 ->
-    Percent = min(100, (Received * 100) div Total),
-    BarWidth = 30,
-    Filled = (Percent * BarWidth) div 100,
-    Empty = BarWidth - Filled,
-    Bar = lists:duplicate(Filled, $=) ++ lists:duplicate(Empty, $\s),
-    io_lib:format("[~s] ~3B% ~s/~s", [Bar, Percent, format_bytes(Received), format_bytes(Total)]);
-format_progress(Received, _) ->
-    io_lib:format("~s", [format_bytes(Received)]).
+%% @private Get tag from args
+get_tag(Args) ->
+    case proplists:get_value(tag, Args) of
+        undefined -> undefined;
+        Tag -> list_to_binary(Tag)
+    end.
 
-%% @private Format bytes as human-readable string
-format_bytes(Bytes) when Bytes < 1024 ->
-    io_lib:format("~B B", [Bytes]);
-format_bytes(Bytes) when Bytes < 1024 * 1024 ->
-    io_lib:format("~.1f KB", [Bytes / 1024]);
-format_bytes(Bytes) when Bytes < 1024 * 1024 * 1024 ->
-    io_lib:format("~.1f MB", [Bytes / (1024 * 1024)]);
-format_bytes(Bytes) ->
-    io_lib:format("~.2f GB", [Bytes / (1024 * 1024 * 1024)]).
+%% @private Get output path from args
+get_output(Args) ->
+    case proplists:get_value(output, Args) of
+        undefined -> undefined;
+        Path -> list_to_binary(Path)
+    end.
+
+%% @private Get push registry from args
+get_push_registry(Args) ->
+    case proplists:get_value(push, Args) of
+        undefined -> undefined;
+        Registry -> list_to_binary(Registry)
+    end.
+
+%% @private Get chunk size from args
+get_chunk_size(Args) ->
+    case proplists:get_value(chunk_size, Args) of
+        undefined -> undefined;
+        Size -> Size * 1024 * 1024
+    end.
+
+-doc "Find release directory from rebar state.".
+-spec find_release(rebar_state:t(), map()) ->
+    {ok, binary(), file:filename()} | {error, term()}.
+find_release(State, Opts) ->
+    {Args, _} = rebar_state:command_parsed_args(State),
+    RelxConfig = rebar_state:get(State, relx, []),
+
+    %% Get release name from opts, args, or config
+    ReleaseName =
+        case maps:get(release, Opts, undefined) of
+            undefined -> proplists:get_value(release, Args);
+            OptName -> OptName
+        end,
+
+    case get_release_name_internal(ReleaseName, RelxConfig) of
+        {ok, ResolvedName} ->
+            BaseDir = rebar_dir:base_dir(State),
+            ReleasePath = filename:join([BaseDir, "rel", ResolvedName]),
+            case filelib:is_dir(ReleasePath) of
+                true ->
+                    {ok, list_to_binary(ResolvedName), ReleasePath};
+                false ->
+                    {error, {release_not_found, ResolvedName, ReleasePath}}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @private Internal release name lookup
+get_release_name_internal(undefined, RelxConfig) ->
+    case find_relx_release(RelxConfig) of
+        {ok, Name} -> {ok, Name};
+        error -> {error, {no_release_configured, RelxConfig}}
+    end;
+get_release_name_internal(Name, _RelxConfig) ->
+    {ok, Name}.
+
+-doc "Log an informational message using rebar_api.".
+-spec info(io:format(), [term()]) -> ok.
+info(Format, Args) ->
+    rebar_api:info(Format, Args).
+
+-doc "Print a message to the console using rebar_api.".
+-spec console(io:format(), [term()]) -> ok.
+console(Format, Args) ->
+    rebar_api:console(Format, Args).
+
+-doc "Log an error message using rebar_api.".
+-spec error(io:format(), [term()]) -> ok.
+error(Format, Args) ->
+    rebar_api:error(Format, Args).

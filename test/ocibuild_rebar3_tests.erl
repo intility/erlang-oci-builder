@@ -279,14 +279,14 @@ to_binary_atom_test() ->
     ?assertEqual(~"myatom", ocibuild_release:to_binary(myatom)).
 
 %%%===================================================================
-%%% parse_tag tests (using exported function)
+%%% parse_tag tests (moved to ocibuild_release)
 %%%===================================================================
 
 parse_tag_exported_simple_test() ->
-    ?assertEqual({~"myapp", ~"1.0.0"}, ocibuild_rebar3:parse_tag(~"myapp:1.0.0")).
+    ?assertEqual({~"myapp", ~"1.0.0"}, ocibuild_release:parse_tag(~"myapp:1.0.0")).
 
 parse_tag_exported_no_version_test() ->
-    ?assertEqual({~"myapp", ~"latest"}, ocibuild_rebar3:parse_tag(~"myapp")).
+    ?assertEqual({~"myapp", ~"latest"}, ocibuild_release:parse_tag(~"myapp")).
 
 %%%===================================================================
 %%% build_image with custom cmd tests

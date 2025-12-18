@@ -141,8 +141,8 @@ defmodule Mix.Tasks.Ocibuild do
         Mix.shell().info("  Collected #{length(files)} files from release")
 
         # Build image with Elixir-appropriate start command
-        pull_auth = :ocibuild_rebar3.get_pull_auth()
-        progress_fn = :ocibuild_rebar3.make_progress_callback()
+        pull_auth = :ocibuild_release.get_pull_auth()
+        progress_fn = :ocibuild_release.make_progress_callback()
         build_opts = %{auth: pull_auth, progress: progress_fn}
 
         case :ocibuild_release.build_image(
@@ -158,14 +158,14 @@ defmodule Mix.Tasks.Ocibuild do
              ) do
           {:ok, image} ->
             # Clear progress line after build (only in TTY mode)
-            :ocibuild_rebar3.clear_progress_line()
+            :ocibuild_release.clear_progress_line()
             # Add description annotation if provided
             image_with_descr = add_description_annotation(image, opts, ocibuild_config)
             output_image(image_with_descr, tag, opts, ocibuild_config)
 
           {:error, reason} ->
             # Clear progress line on error too
-            :ocibuild_rebar3.clear_progress_line()
+            :ocibuild_release.clear_progress_line()
             Mix.raise("Failed to build image: #{inspect(reason)}")
         end
 
@@ -238,9 +238,9 @@ defmodule Mix.Tasks.Ocibuild do
   end
 
   defp push_image(image, tag, registry, opts) do
-    {repo, image_tag} = parse_tag(tag)
-    auth = :ocibuild_rebar3.get_push_auth()
-    progress_fn = :ocibuild_rebar3.make_progress_callback()
+    {repo, image_tag} = :ocibuild_release.parse_tag(to_binary(tag))
+    auth = :ocibuild_release.get_push_auth()
+    progress_fn = :ocibuild_release.make_progress_callback()
 
     # Build push options with chunk_size and progress callback
     push_opts =
@@ -255,7 +255,7 @@ defmodule Mix.Tasks.Ocibuild do
 
     result = :ocibuild.push(image, to_binary(registry), to_binary(repo_tag), auth, push_opts)
     # Clear progress line after push (only in TTY mode)
-    :ocibuild_rebar3.clear_progress_line()
+    :ocibuild_release.clear_progress_line()
     # Stop the dedicated httpc profile to allow clean VM exit
     :ocibuild_registry.stop_httpc()
 
@@ -266,13 +266,6 @@ defmodule Mix.Tasks.Ocibuild do
 
       {:error, reason} ->
         Mix.raise("Failed to push image: #{inspect(reason)}")
-    end
-  end
-
-  defp parse_tag(tag) do
-    case String.split(tag, ":") do
-      [repo, image_tag] -> {repo, image_tag}
-      [repo] -> {repo, "latest"}
     end
   end
 
@@ -302,26 +295,11 @@ defmodule Mix.Tasks.Ocibuild do
   defp add_description_annotation(image, opts, ocibuild_config) do
     descr =
       cond do
-        opts[:desc] ->
-          opts[:desc]
-
-        Keyword.has_key?(ocibuild_config, :description) ->
-          Keyword.get(ocibuild_config, :description)
-
-        true ->
-          nil
+        opts[:desc] -> to_binary(opts[:desc])
+        Keyword.has_key?(ocibuild_config, :description) -> to_binary(Keyword.get(ocibuild_config, :description))
+        true -> :undefined
       end
 
-    case descr do
-      nil ->
-        image
-
-      description ->
-        :ocibuild.annotation(
-          image,
-          "org.opencontainers.image.description",
-          to_binary(description)
-        )
-    end
+    :ocibuild_release.add_description(image, descr)
   end
 end

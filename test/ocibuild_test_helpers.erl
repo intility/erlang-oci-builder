@@ -40,6 +40,9 @@ make_temp_dir(Prefix) ->
         ok ->
             TmpDir;
         {error, eexist} ->
+            %% Clean up existing directory and recreate it
+            cleanup_temp_dir(TmpDir),
+            ok = file:make_dir(TmpDir),
             TmpDir
     end.
 

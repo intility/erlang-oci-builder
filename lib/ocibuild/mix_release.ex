@@ -82,7 +82,7 @@ defmodule Ocibuild.MixRelease do
         Mix.shell().info("  Collected #{length(files)} files")
 
         # Build image with Elixir-appropriate start command
-        pull_auth = :ocibuild_rebar3.get_pull_auth()
+        pull_auth = :ocibuild_release.get_pull_auth()
         build_opts = %{auth: pull_auth}
 
         case :ocibuild_release.build_image(
@@ -141,8 +141,8 @@ defmodule Ocibuild.MixRelease do
   end
 
   defp push_image(image, tag, registry) do
-    {repo, image_tag} = parse_tag(tag)
-    auth = :ocibuild_rebar3.get_push_auth()
+    {repo, image_tag} = :ocibuild_release.parse_tag(to_binary(tag))
+    auth = :ocibuild_release.get_push_auth()
 
     Mix.shell().info("  Pushing to #{registry}/#{repo}:#{image_tag}")
 
@@ -154,13 +154,6 @@ defmodule Ocibuild.MixRelease do
 
       {:error, reason} ->
         Mix.raise("Failed to push OCI image: #{inspect(reason)}")
-    end
-  end
-
-  defp parse_tag(tag) do
-    case String.split(tag, ":") do
-      [repo, image_tag] -> {repo, image_tag}
-      [repo] -> {repo, "latest"}
     end
   end
 
@@ -176,16 +169,12 @@ defmodule Ocibuild.MixRelease do
 
   # Add description annotation if configured
   defp add_description_annotation(image, ocibuild_config) do
-    case Keyword.get(ocibuild_config, :description) do
-      nil ->
-        image
+    descr =
+      case Keyword.get(ocibuild_config, :description) do
+        nil -> :undefined
+        description -> to_binary(description)
+      end
 
-      description ->
-        :ocibuild.annotation(
-          image,
-          "org.opencontainers.image.description",
-          to_binary(description)
-        )
-    end
+    :ocibuild_release.add_description(image, descr)
   end
 end

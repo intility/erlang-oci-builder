@@ -32,20 +32,42 @@ rebar3 fmt -w
 ```
 src/
 ├── ocibuild.erl          → Public API (from, copy, push, save, annotation, etc.)
-├── ocibuild_rebar3.erl   → Rebar3 provider (rebar3 ocibuild command)
-├── ocibuild_release.erl  → Shared release handling for rebar3/Mix
+├── ocibuild_adapter.erl  → Behaviour for build system adapters
+├── ocibuild_release.erl  → Shared release handling (file collection, image building,
+│                           auth, progress display, save/push operations)
+├── ocibuild_rebar3.erl   → Rebar3 provider (implements ocibuild_adapter)
+├── ocibuild_mix.erl      → Mix adapter (implements ocibuild_adapter)
 ├── ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar format)
 ├── ocibuild_layer.erl    → OCI layer creation (tar + gzip + SHA256)
 ├── ocibuild_digest.erl   → SHA256 digest utilities
 ├── ocibuild_json.erl     → JSON encode/decode (OTP 27 native + fallback)
 ├── ocibuild_manifest.erl → OCI manifest generation (with annotations support)
 ├── ocibuild_layout.erl   → Export to directory or tarball
-├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry)
+├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry, dedicated profile)
 └── ocibuild_cache.erl    → Layer caching for base images
 
 lib/
 ├── mix/tasks/ocibuild.ex → Mix task (mix ocibuild command)
 └── ocibuild/mix_release.ex → Mix release step integration
+```
+
+**Adapter Pattern:**
+```
+                    ocibuild_release.erl
+           (Shared: auth, progress, save, push, etc.)
+                          ▲
+                          │ uses
+    ┌─────────────────────┼─────────────────────┐
+    │                     │                     │
+ocibuild_rebar3    ocibuild_mix         (Future adapters)
+(rebar3 provider)  (Mix integration)    (Gleam, LFE, etc.)
+    │                     │
+    └──────────┬──────────┘
+               │
+       ocibuild_adapter (behaviour)
+         - get_config/1
+         - find_release/2
+         - info/2, console/2, error/2
 ```
 
 **Data Flow:**
@@ -66,6 +88,8 @@ User API (ocibuild.erl)
 3. **OTP 27+ Target**: Uses native `json` module with fallback for OTP 25+.
 4. **Zero Dependencies**: Only OTP stdlib (crypto, zlib, inets, ssl).
 5. **Layer Caching**: Base image layers cached in `_build/ocibuild_cache/` for faster rebuilds.
+6. **Adapter Pattern**: Build system integrations implement `ocibuild_adapter` behaviour to onboard new BEAM build systems (Gleam, LFE, etc.) with minimal effort.
+7. **Dedicated httpc Profile**: Uses a dedicated `ocibuild` httpc profile to isolate HTTP connections and allow clean VM shutdown.
 
 ## Current Status
 
@@ -190,6 +214,19 @@ always update `CLAUDE.md` and `AGENTS.md` to reflect the new reality.
 2. Implement function using `set_config_field/3`
 3. Add test to `ocibuild_tests.erl`
 
+### Implement a new build system adapter
+
+1. Create a new module implementing `ocibuild_adapter` behaviour
+2. Implement required callbacks:
+   - `get_config/1` - Extract configuration from build system state
+   - `find_release/2` - Locate the release directory
+   - `info/2`, `console/2`, `error/2` - Logging functions
+3. Use `ocibuild_release` functions for shared functionality:
+   - `get_pull_auth/0`, `get_push_auth/0` - Authentication
+   - `make_progress_callback/0`, `clear_progress_line/0` - Progress display
+   - `save_image/3`, `push_image/5` - Output operations
+   - `parse_tag/1`, `add_description/2` - Utilities
+
 ### Debug tar output
 
 ```erlang
@@ -208,5 +245,7 @@ file:write_file("/tmp/test.tar", Tar).
 
 1. `AGENTS.md` - Comprehensive development guide with OCI spec details
 2. `src/ocibuild.erl` - Public API
-3. `src/ocibuild_tar.erl` - Core tar implementation
-4. `test/ocibuild_tests.erl` - Usage examples
+3. `src/ocibuild_adapter.erl` - Adapter behaviour definition
+4. `src/ocibuild_release.erl` - Shared release handling functions
+5. `src/ocibuild_tar.erl` - Core tar implementation
+6. `test/ocibuild_tests.erl` - Usage examples
