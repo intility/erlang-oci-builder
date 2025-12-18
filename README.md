@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="https://avatars.githubusercontent.com/u/35199565" width="124px"/><br/>
+  <img src="logo.png" width="124px"/><br/>
   Build and Publish OCI Container Images
 </h1>
 
