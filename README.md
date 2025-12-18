@@ -169,6 +169,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 | `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
 | `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
 | `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
+| `--desc`     | `-d`  | Image description (OCI manifest annotation)   |
 | `--base`     |       | Override base image                           |
 | `--release`  |       | Release name (if multiple configured)         |
 | `--cmd`      | `-c`  | Release start command (Elixir only)           |
@@ -191,7 +192,8 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
     {expose, [8080, 443]},                 % Ports to expose
     {labels, #{                            % Image labels
         ~"org.opencontainers.image.source" => ~"https://github.com/..."
-    }}
+    }},
+    {description, "My application"}        % OCI manifest annotation
 ]}.
 ```
 
@@ -212,7 +214,8 @@ def project do
       expose: [8080, 443],                 # Ports to expose
       labels: %{                           # Image labels
         "org.opencontainers.image.source" => "https://github.com/..."
-      }
+      },
+      description: "My application"        # OCI manifest annotation
     ]
   ]
 end

@@ -21,6 +21,7 @@ rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
   * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Required.
   * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
   * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
+  * `-d, --desc` - Image description (OCI manifest annotation)
   * `--base` - Override base image
   * `--release` - Release name (if multiple configured)
 
@@ -34,7 +35,8 @@ Add to your `rebar.config`:
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
-    {labels, #{}}
+    {labels, #{}},
+    {description, "My awesome application"}
 ]}.
 ```
 
@@ -100,7 +102,8 @@ init(State) ->
                 {output, $o, "output", string, "Output tarball path"},
                 {push, $p, "push", string, "Push to registry (e.g., ghcr.io/myorg)"},
                 {base, undefined, "base", string, "Override base image"},
-                {release, undefined, "release", string, "Release name (if multiple)"}
+                {release, undefined, "release", string, "Release name (if multiple)"},
+                {desc, $d, "desc", string, "Image description (manifest annotation)"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -269,7 +272,9 @@ build_and_output(State, Args, Config, Tag, ReleaseName, Files) ->
 
     %% Build the image
     case build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) of
-        {ok, Image} ->
+        {ok, Image0} ->
+            %% Add description annotation if provided
+            Image = add_description_annotation(Args, Config, Image0),
             output_image(State, Args, Config, Tag, Image);
         {error, Reason} ->
             {error, {?MODULE, Reason}}
@@ -282,6 +287,25 @@ get_base_image(Args, Config) ->
             proplists:get_value(base_image, Config, ?DEFAULT_BASE_IMAGE);
         Base ->
             list_to_binary(Base)
+    end.
+
+%% @private Add description annotation if provided via CLI or config
+add_description_annotation(Args, Config, Image) ->
+    case proplists:get_value(desc, Args) of
+        undefined ->
+            %% Check config for description
+            case proplists:get_value(description, Config) of
+                undefined ->
+                    Image;
+                Descr ->
+                    ocibuild:annotation(
+                        Image, ~"org.opencontainers.image.description", list_to_binary(Descr)
+                    )
+            end;
+        Descr ->
+            ocibuild:annotation(
+                Image, ~"org.opencontainers.image.description", list_to_binary(Descr)
+            )
     end.
 
 %% @private Output the image (save and/or push)

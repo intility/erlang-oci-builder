@@ -881,6 +881,9 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     %% Combine: base layers first, then our new layers
     LayerDescriptors = BaseLayerDescriptors ++ NewLayerDescriptors,
 
+    %% Get annotations from image
+    Annotations = maps:get(annotations, Image, #{}),
+
     {ManifestJson, _} =
         ocibuild_manifest:build(
             #{
@@ -889,7 +892,8 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
                 ~"digest" => ConfigDigest,
                 ~"size" => ConfigSize
             },
-            LayerDescriptors
+            LayerDescriptors,
+            Annotations
         ),
 
     Url = io_lib:format(

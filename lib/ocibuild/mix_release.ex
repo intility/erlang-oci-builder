@@ -18,10 +18,11 @@ defmodule Ocibuild.MixRelease do
           ocibuild: [
             base_image: "debian:slim",
             push: "ghcr.io/myorg",  # Registry to push to (omit to skip push)
-            # tag: "myapp:1.0.0",  # Optional, defaults to release_name:version
+            tag: "myapp:1.0.0",     # Optional, defaults to release_name:version
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
-            expose: [8080]
+            expose: [8080],
+            description: "My awesome application"
           ]
         ]
       end
@@ -41,6 +42,7 @@ defmodule Ocibuild.MixRelease do
     * `:env` - Environment variables map
     * `:expose` - Ports to expose
     * `:labels` - Image labels map
+    * `:description` - Image description (OCI manifest annotation)
   """
 
   @doc """
@@ -95,7 +97,9 @@ defmodule Ocibuild.MixRelease do
                build_opts
              ) do
           {:ok, image} ->
-            output_image(image, tag, push_registry)
+            # Add description annotation if configured
+            image_with_descr = add_description_annotation(image, ocibuild_config)
+            output_image(image_with_descr, tag, push_registry)
             release
 
           {:error, reason} ->
@@ -169,4 +173,19 @@ defmodule Ocibuild.MixRelease do
   defp to_binary(value) when is_atom(value), do: Atom.to_string(value)
   defp to_binary(value) when is_list(value), do: to_string(value)
   defp to_binary(value), do: to_string(value)
+
+  # Add description annotation if configured
+  defp add_description_annotation(image, ocibuild_config) do
+    case Keyword.get(ocibuild_config, :description) do
+      nil ->
+        image
+
+      description ->
+        :ocibuild.annotation(
+          image,
+          "org.opencontainers.image.description",
+          to_binary(description)
+        )
+    end
+  end
 end

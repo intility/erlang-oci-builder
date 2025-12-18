@@ -9,7 +9,7 @@ Compliant with the OCI Image Specification.
 See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 """.
 
--export([build/2]).
+-export([build/2, build/3]).
 -export([media_type/0, config_media_type/0, layer_media_type/0, layer_media_type/1]).
 
 -type descriptor() ::
@@ -23,7 +23,8 @@ See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
         schemaVersion := integer(),
         mediaType := binary(),
         config := descriptor(),
-        layers := [descriptor()]
+        layers := [descriptor()],
+        annotations => map()
     }.
 
 -export_type([manifest/0, descriptor/0]).
@@ -31,13 +32,23 @@ See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 -doc "Build an OCI image manifest from config and layer descriptors.".
 -spec build(descriptor(), [descriptor()]) -> {binary(), binary()}.
 build(ConfigDescriptor, LayerDescriptors) ->
-    Manifest =
+    build(ConfigDescriptor, LayerDescriptors, #{}).
+
+-doc "Build an OCI image manifest from config and layer descriptors with annotations.".
+-spec build(descriptor(), [descriptor()], map()) -> {binary(), binary()}.
+build(ConfigDescriptor, LayerDescriptors, Annotations) ->
+    BaseManifest =
         #{
             ~"schemaVersion" => 2,
             ~"mediaType" => media_type(),
             ~"config" => ConfigDescriptor,
             ~"layers" => LayerDescriptors
         },
+    Manifest =
+        case map_size(Annotations) of
+            0 -> BaseManifest;
+            _ -> BaseManifest#{~"annotations" => Annotations}
+        end,
     Json = ocibuild_json:encode(Manifest),
     Digest = ocibuild_digest:sha256(Json),
     {Json, Digest}.

@@ -17,6 +17,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Defaults to release_name:version
     * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
     * `-c, --cmd` - Release start command (default: "start"). Use "daemon" for background
+    * `-d, --desc` - Image description (OCI manifest annotation)
     * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
@@ -34,7 +35,8 @@ defmodule Mix.Tasks.Ocibuild do
             env: %{"LANG" => "C.UTF-8"},
             expose: [8080],
             labels: %{},
-            cmd: "start"  # Release command: "start" (Elixir default), "daemon", etc.
+            cmd: "start",  # Release command: "start" (Elixir default), "daemon", etc.
+            description: "My awesome application"  # OCI manifest annotation
           ]
         ]
       end
@@ -60,14 +62,15 @@ defmodule Mix.Tasks.Ocibuild do
   def run(args) do
     {opts, _remaining, _invalid} =
       OptionParser.parse(args,
-        aliases: [t: :tag, p: :push, o: :output, c: :cmd],
+        aliases: [t: :tag, p: :push, o: :output, c: :cmd, d: :desc],
         switches: [
           tag: :string,
           output: :string,
           push: :string,
           base: :string,
           release: :string,
-          cmd: :string
+          cmd: :string,
+          desc: :string
         ]
       )
 
@@ -151,7 +154,9 @@ defmodule Mix.Tasks.Ocibuild do
                build_opts
              ) do
           {:ok, image} ->
-            output_image(image, tag, opts, ocibuild_config)
+            # Add description annotation if provided
+            image_with_descr = add_description_annotation(image, opts, ocibuild_config)
+            output_image(image_with_descr, tag, opts, ocibuild_config)
 
           {:error, reason} ->
             Mix.raise("Failed to build image: #{inspect(reason)}")
@@ -271,4 +276,31 @@ defmodule Mix.Tasks.Ocibuild do
   defp to_binary(value) when is_atom(value), do: Atom.to_string(value)
   defp to_binary(value) when is_list(value), do: to_string(value)
   defp to_binary(value), do: to_string(value)
+
+  # Add description annotation if provided via CLI or config
+  defp add_description_annotation(image, opts, ocibuild_config) do
+    descr =
+      cond do
+        opts[:desc] ->
+          opts[:desc]
+
+        Keyword.has_key?(ocibuild_config, :description) ->
+          Keyword.get(ocibuild_config, :description)
+
+        true ->
+          nil
+      end
+
+    case descr do
+      nil ->
+        image
+
+      description ->
+        :ocibuild.annotation(
+          image,
+          "org.opencontainers.image.description",
+          to_binary(description)
+        )
+    end
+  end
 end

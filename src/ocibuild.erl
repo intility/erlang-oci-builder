@@ -38,7 +38,7 @@ memory limits.
 %% API - Adding content
 -export([add_layer/2, copy/3]).
 %% API - Configuration
--export([entrypoint/2, cmd/2, env/2, workdir/2, expose/2, label/3, user/2]).
+-export([entrypoint/2, cmd/2, env/2, workdir/2, expose/2, label/3, user/2, annotation/3]).
 %% API - Output
 -export([push/3, push/4, save/2, save/3, export/2]).
 
@@ -52,7 +52,8 @@ memory limits.
         base_config => map(),
         auth => auth() | #{},
         layers := [layer()],
-        config := map()
+        config := map(),
+        annotations => map()
     }.
 
 -type base_ref() :: {Registry :: binary(), Repo :: binary(), Ref :: binary()}.
@@ -292,11 +293,28 @@ expose(#{config := Config} = Image, Port) when is_binary(Port) ->
     NewExposed = ExposedPorts#{PortKey => #{}},
     Image#{config := set_config_field(Config, ~"ExposedPorts", NewExposed)}.
 
--doc "Add a label to the image.".
+-doc "Add a label to the image config.".
 -spec label(image(), binary(), binary()) -> image().
 label(#{config := Config} = Image, Key, Value) when is_binary(Key), is_binary(Value) ->
     Labels = get_config_field(Config, ~"Labels", #{}),
     Image#{config := set_config_field(Config, ~"Labels", Labels#{Key => Value})}.
+
+-doc """
+Add an annotation to the image manifest.
+
+Annotations are key-value metadata stored in the manifest (not the config).
+Some registries like GHCR display these on the package page.
+
+Common OCI annotations:
+- `org.opencontainers.image.description` - Human-readable description
+- `org.opencontainers.image.source` - URL to source code
+- `org.opencontainers.image.version` - Version of the packaged software
+- `org.opencontainers.image.authors` - Contact details of maintainers
+""".
+-spec annotation(image(), binary(), binary()) -> image().
+annotation(Image, Key, Value) when is_binary(Key), is_binary(Value) ->
+    Annotations = maps:get(annotations, Image, #{}),
+    Image#{annotations => Annotations#{Key => Value}}.
 
 -doc "Set the user to run as.".
 -spec user(image(), binary()) -> image().

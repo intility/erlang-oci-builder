@@ -54,6 +54,7 @@ export_directory(Image, Path) ->
         %% Build all the components
         {ConfigJson, ConfigDigest} = build_config_blob(Image),
         LayerDescriptors = build_layer_descriptors(Image),
+        Annotations = maps:get(annotations, Image, #{}),
         {ManifestJson, ManifestDigest} =
             ocibuild_manifest:build(
                 #{
@@ -62,7 +63,8 @@ export_directory(Image, Path) ->
                     ~"digest" => ConfigDigest,
                     ~"size" => byte_size(ConfigJson)
                 },
-                LayerDescriptors
+                LayerDescriptors,
+                Annotations
             ),
 
         %% Write oci-layout
@@ -134,6 +136,7 @@ save_tarball(Image, Path, Opts) ->
         %% Build all the blobs and metadata
         {ConfigJson, ConfigDigest} = build_config_blob(Image),
         LayerDescriptors = build_layer_descriptors(Image),
+        Annotations = maps:get(annotations, Image, #{}),
         {ManifestJson, ManifestDigest} =
             ocibuild_manifest:build(
                 #{
@@ -142,7 +145,8 @@ save_tarball(Image, Path, Opts) ->
                     ~"digest" => ConfigDigest,
                     ~"size" => byte_size(ConfigJson)
                 },
-                LayerDescriptors
+                LayerDescriptors,
+                Annotations
             ),
 
         %% Build oci-layout

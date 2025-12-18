@@ -123,6 +123,7 @@ Build an OCI image from release files with custom start command and options.
 Options:
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
+- `annotations` - Map of manifest annotations (e.g., `#{<<"org.opencontainers.image.description">> => <<"...">>}`)
 """.
 -spec build_image(
     BaseImage :: binary(),
@@ -194,7 +195,18 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
                 Labels
             ),
 
-        {ok, Image6}
+        %% Add annotations
+        Annotations = maps:get(annotations, Opts, #{}),
+        Image7 =
+            maps:fold(
+                fun(Key, Value, Img) ->
+                    ocibuild:annotation(Img, to_binary(Key), to_binary(Value))
+                end,
+                Image6,
+                Annotations
+            ),
+
+        {ok, Image7}
     catch
         throw:Reason ->
             {error, Reason};
