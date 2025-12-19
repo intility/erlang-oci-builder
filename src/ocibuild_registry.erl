@@ -1250,11 +1250,19 @@ ensure_started() ->
     case persistent_term:get(?HTTPC_KEY, undefined) of
         undefined ->
             {ok, Pid} = inets:start(httpc, [{profile, ?HTTPC_PROFILE}], stand_alone),
+            %% Register the process so httpc:request/5 can find it by profile name
+            %% stand_alone mode doesn't register automatically
+            true = register(httpc_profile_name(?HTTPC_PROFILE), Pid),
             persistent_term:put(?HTTPC_KEY, Pid),
             ok;
         _Pid ->
             ok
     end.
+
+%% Generate the registered name for an httpc profile (same as OTP internal)
+-spec httpc_profile_name(atom()) -> atom().
+httpc_profile_name(Profile) ->
+    list_to_atom("httpc_" ++ atom_to_list(Profile)).
 
 -doc "Stop the stand_alone httpc to allow clean VM exit.".
 -spec stop_httpc() -> ok.
@@ -1263,6 +1271,8 @@ stop_httpc() ->
         undefined ->
             ok;
         Pid ->
+            %% Unregister the profile name first
+            _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
             _ = inets:stop(stand_alone, Pid),
             _ = persistent_term:erase(?HTTPC_KEY),
             ok
