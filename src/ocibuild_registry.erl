@@ -59,8 +59,9 @@ See: https://github.com/opencontainers/distribution-spec
 -define(DEFAULT_TIMEOUT, 30000).
 %% Default chunk size for chunked uploads: 5MB
 -define(DEFAULT_CHUNK_SIZE, 5 * 1024 * 1024).
-%% Dedicated httpc profile for ocibuild operations
+%% Stand-alone httpc profile for ocibuild (not supervised by inets)
 -define(HTTPC_PROFILE, ocibuild).
+-define(HTTPC_KEY, {?MODULE, httpc_pid}).
 %% Registry URL mappings
 -define(REGISTRY_URLS, #{
     ~"docker.io" => "https://registry-1.docker.io",
@@ -1236,32 +1237,36 @@ resolve_url(BaseUrl, RelUrl) ->
 %%% HTTP helpers (using httpc)
 %%%===================================================================
 
-%% Ensure inets/ssl are started and our httpc profile exists
+%% Ensure ssl is started and our stand_alone httpc is running
 -spec ensure_started() -> ok.
 ensure_started() ->
-    case inets:start() of
-        ok -> ok;
-        {error, {already_started, _}} -> ok
-    end,
+    %% SSL is needed for HTTPS
     case ssl:start() of
         ok -> ok;
         {error, {already_started, _}} -> ok
     end,
-    %% Start dedicated httpc profile for ocibuild
-    %% This allows us to stop just our connections without affecting other httpc users
-    case inets:start(httpc, [{profile, ?HTTPC_PROFILE}]) of
-        {ok, _Pid} -> ok;
-        {error, {already_started, _}} -> ok
-    end,
-    ok.
+    %% Start httpc in stand_alone mode (not supervised by inets)
+    %% This allows clean shutdown when we're done
+    case persistent_term:get(?HTTPC_KEY, undefined) of
+        undefined ->
+            {ok, Pid} = inets:start(httpc, [{profile, ?HTTPC_PROFILE}], stand_alone),
+            persistent_term:put(?HTTPC_KEY, Pid),
+            ok;
+        _Pid ->
+            ok
+    end.
 
--doc "Stop the ocibuild httpc profile to allow clean VM exit.".
+-doc "Stop the stand_alone httpc to allow clean VM exit.".
 -spec stop_httpc() -> ok.
 stop_httpc() ->
-    %% Stop our dedicated profile - this closes all our connections
-    %% and allows the VM to exit cleanly without stopping inets/ssl entirely
-    _ = inets:stop(httpc, ?HTTPC_PROFILE),
-    ok.
+    case persistent_term:get(?HTTPC_KEY, undefined) of
+        undefined ->
+            ok;
+        Pid ->
+            _ = inets:stop(stand_alone, Pid),
+            _ = persistent_term:erase(?HTTPC_KEY),
+            ok
+    end.
 
 %% Get SSL options for HTTPS requests
 -spec ssl_opts() -> [ssl:tls_client_option()].
