@@ -972,8 +972,8 @@ upload_chunk(Session, ChunkData, RangeStart, RangeEnd, Token) ->
                 {"Content-Range", format_content_range(RangeStart, RangeEnd)},
                 {"Content-Length", integer_to_list(byte_size(ChunkData))}
             ],
-    %% Use longer timeout for large chunks
-    Timeout = max(?DEFAULT_TIMEOUT, byte_size(ChunkData) div 1000),
+    %% Use longer timeout for large chunks: base 60s + 1ms per 100 bytes
+    Timeout = max(?DEFAULT_TIMEOUT, 60000 + (byte_size(ChunkData) div 100)),
     case ?MODULE:http_patch(UploadUrl, Headers, ChunkData, Timeout) of
         {ok, 202, ResponseHeaders} ->
             %% Parse Range header to get bytes uploaded
@@ -1019,7 +1019,9 @@ complete_upload(Session, Digest, Token, FinalChunk) ->
                 {"Content-Type", "application/octet-stream"},
                 {"Content-Length", integer_to_list(byte_size(FinalChunk))}
             ],
-    case ?MODULE:http_put(PutUrl, Headers, FinalChunk) of
+    %% Use adaptive timeout: base 60s + 1ms per 100 bytes
+    PutTimeout = max(?DEFAULT_TIMEOUT, 60000 + (byte_size(FinalChunk) div 100)),
+    case ?MODULE:http_put(PutUrl, Headers, FinalChunk, PutTimeout) of
         {ok, _} ->
             ok;
         {error, _} = Err ->
@@ -1285,13 +1287,20 @@ stop_httpc() ->
             _ = persistent_term:erase(?HTTPC_KEY),
             %% Stop httpc in a separate process to avoid EXIT signal propagation
             %% The spawn will unregister the name and stop the httpc process
-            spawn(fun() ->
+            CleanupPid = spawn(fun() ->
                 _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
                 _ = inets:stop(stand_alone, Pid)
             end),
-            %% Give the spawned process a moment to start the cleanup
-            timer:sleep(100),
-            ok
+            %% Wait synchronously for cleanup process to finish, with a timeout
+            Ref = erlang:monitor(process, CleanupPid),
+            receive
+                {'DOWN', Ref, process, CleanupPid, _Reason} ->
+                    ok
+            after ?DEFAULT_TIMEOUT ->
+                %% Cleanup took too long; stop waiting but keep going
+                erlang:demonitor(Ref, [flush]),
+                ok
+            end
     end.
 
 %% Get SSL options for HTTPS requests

@@ -333,8 +333,8 @@ large_blob_chunked_test() ->
     end),
 
     %% Mock http_put for final chunk (3MB remaining)
-    %% Note: complete_upload calls ?MODULE:http_put/3, so we mock arity 3
-    meck:expect(ocibuild_registry, http_put, fun(_Url, _Headers, Body) ->
+    %% complete_upload calls ?MODULE:http_put/4 with adaptive timeout
+    meck:expect(ocibuild_registry, http_put, 4, fun(_Url, _Headers, Body, _Timeout) ->
         ExpectedFinalSize = 8 * 1024 * 1024 - 5 * 1024 * 1024,
         ?assertEqual(ExpectedFinalSize, byte_size(Body)),
         {ok, <<>>}
@@ -380,7 +380,7 @@ multi_chunk_content_range_test() ->
         {ok, 202, [{"range", io_lib:format("0-~B", [CurrentEnd])}]}
     end),
 
-    meck:expect(ocibuild_registry, http_put, fun(_Url, _Headers, _Body) ->
+    meck:expect(ocibuild_registry, http_put, 4, fun(_Url, _Headers, _Body, _Timeout) ->
         {ok, <<>>}
     end),
 
@@ -417,7 +417,7 @@ progress_callback_test() ->
         {ok, 202, [{"range", "0-5242879"}]}
     end),
 
-    meck:expect(ocibuild_registry, http_put, fun(_Url, _Headers, _Body) ->
+    meck:expect(ocibuild_registry, http_put, 4, fun(_Url, _Headers, _Body, _Timeout) ->
         {ok, <<>>}
     end),
 

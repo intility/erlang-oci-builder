@@ -267,7 +267,7 @@ find_release(State, Opts) ->
                 true ->
                     {ok, list_to_binary(ResolvedName), ReleasePath};
                 false ->
-                    {error, {release_not_found, ResolvedName, ReleasePath}}
+                    {error, {release_not_found, {ResolvedName, ReleasePath}}}
             end;
         {error, Reason} ->
             {error, Reason}
