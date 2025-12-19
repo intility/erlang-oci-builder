@@ -333,6 +333,7 @@ large_blob_chunked_test() ->
     end),
 
     %% Mock http_put for final chunk (3MB remaining)
+    %% Note: complete_upload calls ?MODULE:http_put/3, so we mock arity 3
     meck:expect(ocibuild_registry, http_put, fun(_Url, _Headers, Body) ->
         ExpectedFinalSize = 8 * 1024 * 1024 - 5 * 1024 * 1024,
         ?assertEqual(ExpectedFinalSize, byte_size(Body)),
@@ -527,7 +528,7 @@ chunked_upload_416_fallback_test() ->
     meck:expect(ocibuild_registry, http_patch, fun(_Url, _Headers, _Body, _Timeout) ->
         Calls = get(CallRef),
         put(CallRef, [patch | Calls]),
-        {ok, 416, []}
+        {error, {http_error, 416, "Unexpected status from PATCH"}}
     end),
 
     %% PUT succeeds (for monolithic fallback) - note: http_put/4 is used with timeout

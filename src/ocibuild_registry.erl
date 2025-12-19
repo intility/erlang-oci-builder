@@ -1247,14 +1247,24 @@ ensure_started() ->
     end,
     %% Start httpc in stand_alone mode (not supervised by inets)
     %% This allows clean shutdown when we're done
+    ProfileName = httpc_profile_name(?HTTPC_PROFILE),
     case persistent_term:get(?HTTPC_KEY, undefined) of
         undefined ->
-            {ok, Pid} = inets:start(httpc, [{profile, ?HTTPC_PROFILE}], stand_alone),
-            %% Register the process so httpc:request/5 can find it by profile name
-            %% stand_alone mode doesn't register automatically
-            true = register(httpc_profile_name(?HTTPC_PROFILE), Pid),
-            persistent_term:put(?HTTPC_KEY, Pid),
-            ok;
+            %% Check if a process is already registered under the profile name
+            %% (e.g., from a previous crashed instance or test scenario)
+            case whereis(ProfileName) of
+                ExistingPid when is_pid(ExistingPid) ->
+                    %% Reuse existing registered process
+                    persistent_term:put(?HTTPC_KEY, ExistingPid),
+                    ok;
+                undefined ->
+                    {ok, Pid} = inets:start(httpc, [{profile, ?HTTPC_PROFILE}], stand_alone),
+                    %% Register the process so httpc:request/5 can find it by profile name
+                    %% stand_alone mode doesn't register automatically
+                    true = register(ProfileName, Pid),
+                    persistent_term:put(?HTTPC_KEY, Pid),
+                    ok
+            end;
         _Pid ->
             ok
     end.
