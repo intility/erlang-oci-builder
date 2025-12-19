@@ -43,14 +43,7 @@ jobs:
             exit 1
           fi
 
-      - name: Configure Hex authentication
+      - name: Publish to Hex.pm
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: |
-          mkdir -p ~/.config/rebar3
-          cat > ~/.config/rebar3/hex.config << EOF
-          {<<"hexpm">>, #{api_key => <<"$HEX_API_KEY">>, repo_key => <<"$HEX_API_KEY">>}}.
-          EOF
-
-      - name: Publish to Hex.pm
         run: rebar3 hex publish --yes
