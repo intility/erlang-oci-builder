@@ -1271,10 +1271,16 @@ stop_httpc() ->
         undefined ->
             ok;
         Pid ->
-            %% Unregister the profile name first
-            _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
-            _ = inets:stop(stand_alone, Pid),
+            %% Clear the persistent_term first so no new requests use this pid
             _ = persistent_term:erase(?HTTPC_KEY),
+            %% Stop httpc in a separate process to avoid EXIT signal propagation
+            %% The spawn will unregister the name and stop the httpc process
+            spawn(fun() ->
+                _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
+                _ = inets:stop(stand_alone, Pid)
+            end),
+            %% Give the spawned process a moment to start the cleanup
+            timer:sleep(100),
             ok
     end.
 
