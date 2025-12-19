@@ -151,8 +151,15 @@ defmodule Mix.Tasks.Ocibuild do
 
   defp get_chunk_size(opts) do
     case opts[:chunk_size] do
-      nil -> nil
-      size when is_integer(size) -> size * 1024 * 1024
+      nil ->
+        nil
+
+      size when is_integer(size) and size >= 1 and size <= 100 ->
+        size * 1024 * 1024
+
+      size ->
+        IO.warn("--chunk-size #{size} MB out of range (1-100), using default")
+        nil
     end
   end
 

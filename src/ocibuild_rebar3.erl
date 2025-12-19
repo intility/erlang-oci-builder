@@ -129,7 +129,7 @@ do(State) ->
 -spec format_error(term()) -> iolist().
 format_error(missing_tag) ->
     "Missing required --tag (-t) option. Usage: rebar3 ocibuild -t myapp:1.0.0";
-format_error({release_not_found, {Name, Path}}) ->
+format_error({release_not_found, {Name, Path}}) when is_list(Name), is_list(Path) ->
     io_lib:format("Release '~s' not found at ~s. Run 'rebar3 release' first.", [Name, Path]);
 format_error({release_not_found, Reason}) ->
     io_lib:format("Failed to find release: ~p", [Reason]);
@@ -238,11 +238,18 @@ get_push_registry(Args) ->
         Registry -> list_to_binary(Registry)
     end.
 
-%% @private Get chunk size from args
+%% @private Get chunk size from args (validated to 1-100 MB)
 get_chunk_size(Args) ->
     case proplists:get_value(chunk_size, Args) of
-        undefined -> undefined;
-        Size -> Size * 1024 * 1024
+        undefined ->
+            undefined;
+        Size when is_integer(Size), Size >= 1, Size =< 100 ->
+            Size * 1024 * 1024;
+        Size ->
+            io:format(
+                "Warning: chunk_size ~p MB out of range (1-100), using default~n", [Size]
+            ),
+            undefined
     end.
 
 -doc "Find release directory from rebar state.".

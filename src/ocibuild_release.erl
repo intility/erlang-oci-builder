@@ -219,12 +219,15 @@ do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, Chun
             AdapterModule:info("Image saved successfully", []),
 
             %% Push if requested
-            %% Handle both undefined (Erlang) and nil (Elixir)
+            %% Handle both undefined (Erlang) and nil (Elixir), and empty binary
             case PushRegistry of
                 undefined ->
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
                 nil ->
+                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    {ok, AdapterState};
+                <<>> ->
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
                 _ ->
@@ -266,7 +269,8 @@ do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
         case ChunkSize of
             undefined -> #{};
             nil -> #{};
-            Size when is_integer(Size) -> #{chunk_size => Size}
+            Size when is_integer(Size), Size > 0 -> #{chunk_size => Size};
+            _ -> #{}
         end,
 
     AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),

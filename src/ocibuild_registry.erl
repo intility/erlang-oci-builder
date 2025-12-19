@@ -1466,7 +1466,7 @@ normalize_headers(Headers) ->
 %% Format Content-Range header value for chunked upload
 %% OCI spec uses format: "start-end" (inclusive, 0-indexed)
 -spec format_content_range(non_neg_integer(), non_neg_integer()) -> string().
-format_content_range(Start, End) ->
+format_content_range(Start, End) when Start =< End ->
     lists:flatten(io_lib:format("~B-~B", [Start, End])).
 
 %% Parse Range header from response (e.g., "0-1048575" -> 1048576 bytes uploaded)

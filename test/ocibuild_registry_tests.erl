@@ -297,10 +297,8 @@ small_blob_monolithic_test() ->
         ~"test-token",
         #{}
     ),
-    ?assertEqual(ok, Result),
-
-    %% Verify http_patch was never called
-    ?assertEqual(0, meck:num_calls(ocibuild_registry, http_patch, '_')).
+    %% If http_patch was called, the mock would throw and fail the test
+    ?assertEqual(ok, Result).
 
 large_blob_chunked_test() ->
     %% Large blob (8MB) with default 5MB chunk size should use chunked
@@ -438,6 +436,7 @@ progress_callback_test() ->
 
     %% Collect progress messages
     Progress = collect_progress([]),
+    %% Expect at least 2 updates (start and final); extra intermediate updates are ok
     ?assert(length(Progress) >= 2),
 
     %% Verify progress structure
