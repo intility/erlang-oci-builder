@@ -43,7 +43,10 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to Hex.pm
+      - name: Authenticate to Hex.pm organization
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: rebar3 hex organization auth hexpm:intility --key $HEX_API_KEY
+
+      - name: Publish to Hex.pm
         run: rebar3 hex publish --repo hexpm:intility --yes
