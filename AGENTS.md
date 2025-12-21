@@ -12,22 +12,24 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 
 ### Feature Comparison with Similar Tools
 
-| Feature                       | ocibuild        | ko (Go)     | jib (Java)        | .NET Containers |
-|-------------------------------|-----------------|-------------|-------------------|-----------------|
-| No Docker required            | ✅              | ✅          | ✅                | ✅              |
-| Push to registries            | ✅              | ✅          | ✅                | ✅              |
-| Layer caching                 | ✅              | ✅          | ✅                | ✅              |
-| Tarball export                | ✅              | ✅          | ✅                | ✅              |
-| OCI annotations               | ✅              | ✅          | ✅                | ✅              |
-| Build system integration      | ✅ (rebar3/Mix) | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
-| **Multi-platform images**     | ❌              | ✅          | ✅                | ✅              |
-| **Smart dependency layering** | ❌              | N/A         | ✅                | ✅              |
-| **SBOM generation**           | ❌              | ✅          | ❌                | ❌              |
-| **Reproducible builds**       | Partial         | ✅          | ✅                | ✅              |
-| **Non-root by default**       | ❌              | ✅          | ❌                | ✅              |
-| **Base image digest labels**  | ❌              | ✅          | ✅                | ✅              |
-| **Image signing**             | ❌              | ✅ (cosign) | ❌                | ❌              |
-| Zstd compression              | ❌              | ✅          | ❌                | ❌              |
+| Feature                       | ocibuild          | ko (Go)     | jib (Java)        | .NET Containers |
+|-------------------------------|-------------------|-------------|-------------------|-----------------|
+| No Docker required            | ✅                | ✅          | ✅                | ✅              |
+| Push to registries            | ✅                | ✅          | ✅                | ✅              |
+| Layer caching                 | ✅                | ✅          | ✅                | ✅              |
+| Tarball export                | ✅                | ✅          | ✅                | ✅              |
+| OCI annotations               | ✅                | ✅          | ✅                | ✅              |
+| Build system integration      | ✅ (rebar3/Mix)   | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
+| **Multi-platform images**     | 🔜 Planned (P1)   | ✅          | ✅                | ✅              |
+| **Reproducible builds**       | 🔜 Planned (P2)   | ✅          | ✅                | ✅              |
+| **Smart dependency layering** | 🔜 Planned (P3)   | N/A         | ✅                | ✅              |
+| **Non-root by default**       | 🔜 Planned (P4)   | ✅          | ❌                | ✅              |
+| **Auto OCI annotations**      | 🔜 Planned (P5)   | ✅          | ✅                | ✅              |
+| **SBOM generation**           | 🔜 Planned (P6)   | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
+| **Image signing**             | 🔜 Planned (P7)   | ✅ (cosign) | ❌                | ❌              |
+| Zstd compression              | ❌ Future         | ✅          | ❌                | ❌              |
+
+Legend: ✅ Implemented | 🔜 Planned (P# = Priority) | ❌ Not implemented
 
 **References:**
 - [ko: Easy Go Containers](https://ko.build/)
@@ -466,66 +468,566 @@ All competing tools support building `linux/amd64` + `linux/arm64` images. This 
 - Apple Silicon development → Linux deployment
 - AWS Graviton / Azure ARM instances
 
-**Implementation:**
-- Add support for OCI Image Index (manifest list)
-- New module: `ocibuild_index.erl` for manifest list generation
-- Extend `push/5` to push multi-platform images
-- Add `--platform` CLI option (e.g., `--platform=linux/amd64,linux/arm64`)
+**Approach:** Use base image with ERTS (`include_erts: false`)
 
-### Priority 2: Smart Dependency Layering
+BEAM bytecode is platform-independent, but ERTS is native code. For multi-platform builds:
+- User sets `include_erts: false` in release config
+- Uses base image with ERTS (e.g., `erlang:27-alpine`, `elixir:1.17-alpine`)
+- ocibuild pulls platform-specific base image variants
+- Application layer is identical across platforms (only base layers differ)
 
-**Impact:** Faster CI/CD, smaller uploads
+**Validation Checks:**
 
-jib separates Java apps into distinct layers (dependencies vs application code). For BEAM apps:
+1. **ERTS Check (Error):** If `--platform` specifies multiple platforms and release contains `erts-*` directory, fail with build-system-specific error:
+
+   For rebar3:
+   ```
+   Error: Multi-platform builds require include_erts set to false.
+   Found bundled ERTS in release directory.
+
+   Fix in rebar.config:
+     {relx, [
+         {include_erts, false},
+         {system_libs, false}
+     ]}.
+
+   Then use a base image with ERTS:
+     {ocibuild, [{base_image, "erlang:27-alpine"}]}.
+   ```
+
+   For Mix:
+   ```
+   Error: Multi-platform builds require include_erts set to false.
+   Found bundled ERTS in release directory.
+
+   Fix in mix.exs:
+     releases: [
+       myapp: [
+         include_erts: false,
+         include_src: false
+       ]
+     ]
+
+   Then use a base image with ERTS:
+     ocibuild: [base_image: "elixir:1.17-alpine"]
+   ```
+
+2. **NIF Check (Warning):** If `.so` files found in `lib/*/priv/`, warn that native code may cause platform compatibility issues.
+
 ```
-Layer 1: Base image
-Layer 2: ERTS + stdlib (rarely changes)
-Layer 3: Dependencies (lib/*)
-Layer 4: Application code (changes often)
+--platform linux/amd64,linux/arm64
+              │
+              ▼
+    ┌─────────────────────┐
+    │ has_bundled_erts?   │
+    └─────────────────────┘
+        │           │
+       yes          no
+        │           │
+        ▼           ▼
+   ❌ ERROR    ┌──────────────┐
+               │ has_nifs?    │
+               └──────────────┘
+                   │       │
+                  yes      no
+                   │       │
+                   ▼       ▼
+              ⚠️ WARN    ✅ OK
 ```
 
-When only app code changes, registries only store/transfer Layer 4.
+**Implementation Steps:**
 
-**Implementation:**
-- Analyze release directory structure
-- Separate deps from app code based on `rebar.lock` / `mix.lock`
-- Add `--layering=smart` CLI option (default: single layer for backwards compatibility)
+1. **Handle Image Index on pull** (`ocibuild_registry.erl`):
+   - Detect when base image returns an index vs single manifest
+   - Add `Platform` parameter to `pull_manifest/5`
+   - Select platform-specific manifest from index
 
-### Priority 3: Non-Root by Default
+2. **Add platform to image type** (`ocibuild.erl`):
+   ```erlang
+   -opaque image() :: #{
+       ...
+       platform => #{os := binary(), architecture := binary()}
+   }.
+   ```
 
-**Impact:** Security best practice
+3. **New module: `ocibuild_index.erl`**:
+   - `create/1` - takes list of platform-specific images, returns index
+   - `to_json/1` - serialize index to JSON with platform descriptors
+   - Media type: `application/vnd.oci.image.index.v1+json`
 
-.NET containers and ko default to non-root for security.
+4. **Validation functions** (`ocibuild_release.erl`):
+   - `validate_multiplatform/2` - check for bundled ERTS (error)
+   - `check_for_nifs/1` - detect native code in deps (warning)
 
-**Implementation:**
-- Default `user/2` to UID 65534 (nobody) when not explicitly set
-- Add `--root` CLI flag to opt-in to root user
-- Document security implications
+5. **Extend push for indexes** (`ocibuild_registry.erl`):
+   - Push each platform's layers + config + manifest
+   - Create and push the index
+   - Tag points to index digest
 
-### Priority 4: Reproducible Builds
+6. **CLI support**:
+   - Add `--platform` option (e.g., `--platform linux/amd64,linux/arm64`)
+   - Update `ocibuild_rebar3.erl` and `lib/mix/tasks/ocibuild.ex`
+
+**API Design:**
+
+```erlang
+%% Build for multiple platforms
+{ok, Images} = ocibuild:from(<<"alpine:3.19">>, #{
+    platforms => [<<"linux/amd64">>, <<"linux/arm64">>]
+}),
+%% Returns list of images, one per platform
+Images2 = [ocibuild:entrypoint(I, [...]) || I <- Images],
+ok = ocibuild:push_multi(Images2, Registry, Repo, Tag, Auth).
+```
+
+**CLI Usage:**
+
+```bash
+rebar3 ocibuild --push ghcr.io/myorg --platform linux/amd64,linux/arm64
+mix ocibuild --push ghcr.io/myorg --platform linux/amd64,linux/arm64
+```
+
+### Priority 2: Reproducible Builds
 
 **Impact:** Build verification, security audits
 
-ko and jib produce identical images from identical inputs. Currently ocibuild uses `iso8601_now()` for timestamps (non-deterministic).
+ko and jib produce identical images from identical inputs. Currently ocibuild has non-deterministic timestamps and file ordering.
 
-**Implementation:**
-- Support `SOURCE_DATE_EPOCH` environment variable
-- When set, use epoch timestamp instead of current time
-- Ensure consistent ordering of files in layers
+**Approach:** Support `SOURCE_DATE_EPOCH` environment variable ([spec](https://reproducible-builds.org/docs/source-date-epoch/))
 
-### Priority 5: Auto-Populate OCI Labels
+```bash
+# Set to git commit timestamp for reproducible builds
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+rebar3 ocibuild --push ghcr.io/myorg
+```
+
+No CLI flag - environment variable only (it's the standard).
+
+**Sources of Non-Determinism:**
+
+| Source | Fix |
+|--------|-----|
+| Config `created` timestamp | Use `SOURCE_DATE_EPOCH` |
+| History `created` timestamps | Use `SOURCE_DATE_EPOCH` |
+| TAR file `mtime` headers | Use `SOURCE_DATE_EPOCH` for all files |
+| File ordering in TAR | Sort alphabetically by path |
+
+**Implementation Steps:**
+
+1. **Read SOURCE_DATE_EPOCH** (`ocibuild_release.erl` or new utility):
+   ```erlang
+   get_source_date() ->
+       case os:getenv("SOURCE_DATE_EPOCH") of
+           false ->
+               erlang:system_time(second);
+           Epoch ->
+               list_to_integer(Epoch)
+       end.
+   ```
+
+2. **Update TAR creation** (`ocibuild_tar.erl`):
+   - Accept optional timestamp parameter
+   - Sort files alphabetically before building archive
+   - Use provided timestamp for all mtime headers
+   ```erlang
+   -spec create(Files, Opts) -> binary() when
+       Files :: [{Path, Content, Mode}],
+       Opts :: #{mtime => non_neg_integer()}.
+   ```
+
+3. **Update config timestamps** (`ocibuild.erl` / `ocibuild_manifest.erl`):
+   - Use `SOURCE_DATE_EPOCH` for `created` field in config
+   - Use `SOURCE_DATE_EPOCH` for history entries
+
+4. **Consistent file ordering** (`ocibuild_release.erl`):
+   ```erlang
+   collect_release_files(ReleasePath) ->
+       Files = collect_files_recursive(ReleasePath),
+       %% Sort for reproducibility
+       lists:sort(fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end, Files).
+   ```
+
+### Priority 3: Smart Dependency Layering
+
+**Impact:** Faster CI/CD, smaller uploads
+
+jib separates Java apps into distinct layers (dependencies vs application code). When only app code changes, registries only store/transfer the app layer.
+
+**Layer Structure:**
+
+With ERTS (`include_erts: true`, single-platform):
+```
+Base image (e.g., debian:slim)
+  └── Layer 1: ERTS + system libs (erts-*, lib/stdlib-*, lib/kernel-*)
+        └── Layer 2: Dependencies (lib/* from lock file)
+              └── Layer 3: Application code (lib/myapp-*, bin/, releases/)
+```
+
+Without ERTS (`include_erts: false`, multi-platform):
+```
+Base image (e.g., erlang:27-alpine, provides ERTS)
+  └── Layer 1: Dependencies (lib/* from lock file)
+        └── Layer 2: Application code (lib/myapp-*, bin/, releases/)
+```
+
+This is the default behavior, not an option. Layer count is determined by whether ERTS is present.
+
+**Implementation Steps:**
+
+1. **New adapter callback** (`ocibuild_adapter.erl`):
+   ```erlang
+   -callback get_dependencies(State :: term()) ->
+       {ok, [#{name := binary(), version := binary(), source := binary()}]} |
+       {error, term()}.
+   %% Returns full dependency info from lock file
+   %% e.g., [#{name => <<"cowboy">>, version => <<"2.10.0">>, source => <<"hex">>}, ...]
+   ```
+
+   This keeps build system logic in adapters, enabling future Gleam/LFE support.
+   Same callback is reused for SBOM generation (Priority 6).
+
+2. **Classify lib directories** (`ocibuild_release.erl`):
+   ```erlang
+   classify_libs(ReleasePath, Deps) ->
+       LibPath = filename:join(ReleasePath, "lib"),
+       {ok, Dirs} = file:list_dir(LibPath),
+       DepNames = [maps:get(name, D) || D <- Deps],
+
+       lists:partition(
+           fun(Dir) ->
+               %% "cowboy-2.10.0" -> "cowboy"
+               AppName = extract_app_name(Dir),
+               lists:member(AppName, DepNames)
+           end,
+           Dirs
+       ).
+       %% Returns {DepDirs, AppDirs}
+   ```
+
+3. **Build layers based on ERTS presence** (`ocibuild_release.erl`):
+   ```erlang
+   build_layers(ReleasePath, Deps) ->
+       {DepDirs, AppDirs} = classify_libs(ReleasePath, Deps),
+
+       case has_bundled_erts(ReleasePath) of
+           true ->
+               [
+                   build_erts_layer(ReleasePath),
+                   build_deps_layer(ReleasePath, DepDirs),
+                   build_app_layer(ReleasePath, AppDirs)
+               ];
+           false ->
+               [
+                   build_deps_layer(ReleasePath, DepDirs),
+                   build_app_layer(ReleasePath, AppDirs)
+               ]
+       end.
+   ```
+
+4. **Implement adapter callbacks:**
+
+   For rebar3 (`ocibuild_rebar3.erl`):
+   - Parse `rebar.lock` to extract dependency names
+
+   For Mix (`ocibuild_mix.erl`):
+   - Parse `mix.lock` to extract dependency names
+
+**Lock File Parsing:**
+
+rebar.lock format:
+```erlang
+{<<"cowboy">>, {pkg, <<"cowboy">>, <<"2.10.0">>}, 0}.
+```
+
+mix.lock format:
+```elixir
+%{"cowboy": {:hex, :cowboy, "2.10.0", ...}}
+```
+
+### Priority 4: Non-Root by Default
+
+**Impact:** Security best practice
+
+.NET containers and ko default to non-root for security. Running as root inside containers is a security risk.
+
+**Approach:** Single `--uid` option, defaults to 65534 (nobody)
+
+```bash
+# Default: runs as nobody (65534)
+rebar3 ocibuild --push ghcr.io/myorg
+
+# Explicit non-root UID
+rebar3 ocibuild --push ghcr.io/myorg --uid 1000
+
+# Run as root (UID 0)
+rebar3 ocibuild --push ghcr.io/myorg --uid 0
+```
+
+**Implementation Steps:**
+
+1. **Add `--uid` CLI option** (default: 65534):
+   - Update `ocibuild_rebar3.erl` and `lib/mix/tasks/ocibuild.ex`
+   - Config option: `{uid, 65534}` / `uid: 65534`
+
+2. **Set User in image config** (`ocibuild.erl`):
+   ```erlang
+   %% When building release image, apply UID
+   Image = ocibuild:user(Image0, integer_to_binary(Uid))
+   ```
+
+   Resulting config:
+   ```json
+   {
+     "config": {
+       "User": "65534"
+     }
+   }
+   ```
+
+3. **File permissions**: Keep current behavior (root owns files, world-readable). BEAM files only need to be readable, not writable. If the app needs writable directories (logs, mnesia), users should either:
+   - Mount a volume at runtime
+   - Use a base image with appropriate directory permissions
+
+### Priority 5: Auto-Populate OCI Annotations
 
 **Impact:** Image provenance, debugging
 
-.NET adds useful labels automatically from build context.
+.NET and ko add useful labels automatically from build context. The OCI spec defines standard annotation keys that are VCS-agnostic.
 
-**Implementation:**
-- Auto-detect git repository info
-- Add labels when available:
-  - `org.opencontainers.image.source` — Repository URL
-  - `org.opencontainers.image.revision` — Git commit SHA
-  - `org.opencontainers.image.base.digest` — Base image digest
-- Add `--no-git-labels` flag to disable
+**Annotations to populate:**
+
+| Annotation | Source |
+|------------|--------|
+| `org.opencontainers.image.source` | VCS remote URL |
+| `org.opencontainers.image.revision` | VCS revision (commit SHA, SVN rev, etc.) |
+| `org.opencontainers.image.version` | App version from build system |
+| `org.opencontainers.image.created` | Build timestamp |
+| `org.opencontainers.image.base.name` | Base image reference |
+| `org.opencontainers.image.base.digest` | Base image digest |
+
+**Approach:** VCS behaviour with pluggable adapters
+
+The OCI spec is VCS-agnostic. Use a behaviour to support Git now, others later:
+
+```erlang
+%% ocibuild_vcs.erl
+-callback detect(Path :: file:filename()) -> boolean().
+-callback get_source_url(Path :: file:filename()) -> {ok, binary()} | {error, term()}.
+-callback get_revision(Path :: file:filename()) -> {ok, binary()} | {error, term()}.
+```
+
+**Implementation Steps:**
+
+1. **New behaviour** (`ocibuild_vcs.erl`):
+   ```erlang
+   -spec detect(Path) -> {ok, module()} | not_found.
+   detect(Path) ->
+       Adapters = [ocibuild_vcs_git], % Add more later
+       find_vcs(Path, Adapters).
+   ```
+
+2. **Git adapter** (`ocibuild_vcs_git.erl`):
+   - `detect/1` - check for `.git/` directory
+   - `get_source_url/1` - try CI env vars first (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`), fall back to `git remote get-url origin`
+   - `get_revision/1` - try CI env vars first (`GITHUB_SHA`, `CI_COMMIT_SHA`), fall back to `git rev-parse HEAD`
+
+3. **Version from adapter** (`ocibuild_adapter.erl`):
+   ```erlang
+   -callback get_app_version(State :: term()) -> {ok, binary()} | {error, term()}.
+   ```
+   - rebar3: parse `.app.src` for `{vsn, "1.2.3"}`
+   - Mix: get from `Mix.Project.config()[:version]`
+
+4. **Base image info** (`ocibuild.erl`):
+   - Already have base image reference and digest after `from/1`
+   - Store in image record, add as annotations
+
+5. **CLI opt-out**:
+   - `--no-vcs-annotations` flag to disable VCS detection
+   - Config option: `{vcs_annotations, false}` / `vcs_annotations: false`
+
+**Future VCS adapters:**
+- `ocibuild_vcs_hg.erl` - Mercurial
+- `ocibuild_vcs_svn.erl` - Subversion
+- `ocibuild_vcs_fossil.erl` - Fossil
+
+### Priority 6: SBOM Generation
+
+**Impact:** Supply chain security, compliance
+
+Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko all use SPDX format.
+
+**Format:** SPDX 2.2 (ISO/IEC 5962:2021) - no CycloneDX, keep it simple.
+
+**SBOM Contents:**
+- Application name + version
+- All dependencies from `rebar.lock` / `mix.lock` (name, version, source)
+- ERTS version (if included)
+- OTP version
+- Base image reference + digest
+
+**Default Behavior:**
+
+SBOM is always generated, embedded, and attached. No flags needed.
+
+| Output | Behavior |
+|--------|----------|
+| Embed in image | Always (at `/sbom.spdx.json`) |
+| Attach as OCI artifact | Always (via referrers API) |
+| Export to file | Optional: `--sbom <path>` |
+
+```bash
+# SBOM embedded + attached automatically
+rebar3 ocibuild --push ghcr.io/myorg
+
+# Also export to file
+rebar3 ocibuild --push ghcr.io/myorg --sbom myapp.spdx.json
+```
+
+**Implementation Steps:**
+
+1. **New module** (`ocibuild_sbom.erl`):
+   ```erlang
+   -spec generate(Deps, AppInfo, Opts) -> {ok, binary()} | {error, term()}.
+   %% Generates SPDX 2.2 JSON
+   ```
+
+2. **Lock file parsing via adapter** (`ocibuild_adapter.erl`):
+
+   Reuse the `get_dependencies/1` callback (consolidates with Priority 2's `get_dependency_apps/1`):
+   ```erlang
+   -callback get_dependencies(State :: term()) ->
+       {ok, [#{name := binary(), version := binary(), source := binary()}]} |
+       {error, term()}.
+   ```
+   - rebar3: parse `rebar.lock`
+   - Mix: parse `mix.lock`
+
+   This single callback serves both:
+   - **Smart layering** (Priority 2): extract app names to classify lib dirs
+   - **SBOM generation** (Priority 6): full dependency info for SPDX output
+
+3. **Separate file output**: Write JSON to specified path
+
+4. **Embed in image**: Add layer containing `/sbom.spdx.json`
+
+5. **OCI artifact attachment** (`ocibuild_registry.erl`):
+   - Push SBOM as separate blob
+   - Create referrer manifest with `artifactType: application/spdx+json`
+   - Link via `subject` field to image manifest
+   - Uses [OCI Referrers API](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers)
+
+**SPDX 2.2 Structure:**
+```json
+{
+  "spdxVersion": "SPDX-2.2",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "myapp-1.0.0",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-myapp",
+      "name": "myapp",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "https://github.com/myorg/myapp"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-cowboy",
+      "name": "cowboy",
+      "versionInfo": "2.10.0",
+      "externalRefs": [{
+        "referenceType": "purl",
+        "referenceLocator": "pkg:hex/cowboy@2.10.0"
+      }]
+    }
+  ]
+}
+```
+
+### Priority 7: Image Signing
+
+**Impact:** Supply chain security, compliance
+
+Sign images to prove authenticity and enable verification by Kubernetes admission controllers (Kyverno, OPA Gatekeeper).
+
+**Approach:** Native key-based signing using Erlang's `crypto` module
+
+Zero external dependencies. Uses same OCI artifact push mechanism as SBOM (Priority 6).
+
+```bash
+# Sign with key file
+rebar3 ocibuild --push ghcr.io/myorg --sign-key cosign.key
+
+# Or via environment variable
+OCIBUILD_SIGN_KEY=/path/to/key.pem rebar3 ocibuild --push ghcr.io/myorg
+```
+
+**How It Works:**
+
+```
+┌─────────────────┐
+│  Image Manifest │
+│  sha256:abc123  │
+└────────┬────────┘
+         │ sign with private key (ECDSA P-256)
+         ▼
+┌─────────────────┐
+│   Signature     │──► Push as OCI artifact (referrer)
+└─────────────────┘
+```
+
+**Implementation Steps:**
+
+1. **Key loading** (`ocibuild_sign.erl`):
+   ```erlang
+   -spec load_private_key(Path :: file:filename()) ->
+       {ok, crypto:key()} | {error, term()}.
+   %% Support PEM-encoded ECDSA P-256 keys (cosign default)
+   ```
+
+2. **Signature generation**:
+   ```erlang
+   -spec sign(ManifestDigest :: binary(), PrivateKey :: crypto:key()) ->
+       {ok, binary()} | {error, term()}.
+   %% Uses crypto:sign/4 with ECDSA P-256 + SHA256
+   ```
+
+3. **Create signature payload** (cosign-compatible format):
+   ```json
+   {
+     "critical": {
+       "identity": {"docker-reference": "ghcr.io/myorg/myapp"},
+       "image": {"docker-manifest-digest": "sha256:abc123..."},
+       "type": "cosign container image signature"
+     },
+     "optional": {}
+   }
+   ```
+
+4. **Push as OCI artifact** (`ocibuild_registry.erl`):
+   - Reuse referrer push from SBOM
+   - `artifactType: application/vnd.dev.cosign.simplesigning.v1+json`
+   - Signature in layer, payload in config
+
+5. **CLI options**:
+   - `--sign-key <path>` - path to private key file
+   - Config: `{sign_key, "/path/to/key.pem"}` / `sign_key: "/path/to/key.pem"`
+   - Environment: `OCIBUILD_SIGN_KEY`
+
+**Key Generation** (for documentation):
+```bash
+# Generate cosign-compatible key pair
+cosign generate-key-pair
+# Or with openssl
+openssl ecparam -genkey -name prime256v1 -noout -out cosign.key
+openssl ec -in cosign.key -pubout -out cosign.pub
+```
+
+**Verification** (user runs separately):
+```bash
+cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
+```
+
+**Future Enhancement:** Keyless signing via Sigstore/Fulcio (would require HTTP calls to Sigstore services, could shell out to cosign).
 
 ### Future Considerations
 
@@ -537,13 +1039,6 @@ ko and jib produce identical images from identical inputs. Currently ocibuild us
 **Zstd Compression:**
 - Defined in media types but not implemented
 - Would need zstd NIF or pure Erlang implementation
-
-**SBOM Generation:**
-- Generate Software Bill of Materials from `rebar.lock` / `mix.lock`
-- Output in SPDX or CycloneDX format
-
-**Image Signing:**
-- Cosign/Notary support for supply chain security
 
 **Layer Squashing:**
 - Combine multiple layers into one for smaller images
