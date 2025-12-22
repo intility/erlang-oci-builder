@@ -22,6 +22,9 @@ See: https://github.com/opencontainers/distribution-spec
 %% Retry utilities (shared with ocibuild_layout)
 -export([is_retriable_error/1, with_retry/2]).
 
+%% Platform detection (shared with ocibuild_release)
+-export([get_target_platform/0]).
+
 %% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
 -export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3, http_put/4]).
 
@@ -65,6 +68,8 @@ See: https://github.com/opencontainers/distribution-spec
 %% Stand-alone httpc profile for ocibuild (not supervised by inets)
 -define(HTTPC_PROFILE, ocibuild).
 -define(HTTPC_KEY, {?MODULE, httpc_pid}).
+%% Maximum concurrent uploads (to avoid rate limiting)
+-define(MAX_CONCURRENT_UPLOADS, 4).
 
 %% State record for chunked upload loop
 -record(upload_state, {
@@ -269,7 +274,9 @@ pull_blob(Registry, Repo, Digest, Auth, Opts) ->
     TotalBytes = maps:get(size, Opts, unknown),
     LayerIndex = maps:get(layer_index, Opts, 0),
     TotalLayers = maps:get(total_layers, Opts, 1),
-    pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, layer, TotalBytes, LayerIndex, TotalLayers).
+    pull_blob_internal(
+        Registry, Repo, Digest, Auth, ProgressFn, layer, TotalBytes, LayerIndex, TotalLayers
+    ).
 
 %% Internal blob pull with progress support
 -spec pull_blob_internal(
@@ -284,7 +291,9 @@ pull_blob(Registry, Repo, Digest, Auth, Opts) ->
     non_neg_integer()
 ) ->
     {ok, binary()} | {error, term()}.
-pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes, LayerIndex, TotalLayers) ->
+pull_blob_internal(
+    Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes, LayerIndex, TotalLayers
+) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
@@ -297,7 +306,9 @@ pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes, 
             Headers = auth_headers(Token),
             ProgressOpts = #{layer_index => LayerIndex, total_layers => TotalLayers},
             case
-                http_get_with_progress(lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes, ProgressOpts)
+                http_get_with_progress(
+                    lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes, ProgressOpts
+                )
             of
                 {ok, Data} ->
                     %% Verify downloaded content matches expected digest
@@ -410,12 +421,28 @@ push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
             Err
     end.
 
-%% Push all platform images and collect their manifest descriptors
+%% Push all platform images in parallel and collect their manifest descriptors
 -spec push_platform_images([ocibuild:image()], string(), binary(), term(), push_opts(), list()) ->
     {ok, [{ocibuild:platform(), binary(), non_neg_integer()}]} | {error, term()}.
-push_platform_images([], _BaseUrl, _Repo, _Token, _Opts, Acc) ->
-    {ok, lists:reverse(Acc)};
-push_platform_images([Image | Rest], BaseUrl, Repo, Token, Opts, Acc) ->
+push_platform_images([], _BaseUrl, _Repo, _Token, _Opts, _Acc) ->
+    {ok, []};
+push_platform_images(Images, BaseUrl, Repo, Token, Opts, _Acc) ->
+    %% Push all platform images in parallel
+    PushFn = fun(Image) ->
+        push_single_platform_image(Image, BaseUrl, Repo, Token, Opts)
+    end,
+    try
+        Results = ocibuild_layout:pmap_bounded(PushFn, Images, ?MAX_CONCURRENT_UPLOADS),
+        {ok, Results}
+    catch
+        error:{platform_push_failed, Reason} ->
+            {error, Reason}
+    end.
+
+%% Push a single platform image (layers, config, manifest) and return descriptor
+-spec push_single_platform_image(ocibuild:image(), string(), binary(), term(), push_opts()) ->
+    {ocibuild:platform(), binary(), non_neg_integer()}.
+push_single_platform_image(Image, BaseUrl, Repo, Token, Opts) ->
     Platform = maps:get(platform, Image, #{os => ~"linux", architecture => ~"amd64"}),
     %% Push layers
     case push_layers(Image, BaseUrl, Repo, Token, Opts) of
@@ -430,18 +457,15 @@ push_platform_images([Image | Rest], BaseUrl, Repo, Token, Opts, Acc) ->
                         )
                     of
                         {ok, ManifestDigest, ManifestSize} ->
-                            Descriptor = {Platform, ManifestDigest, ManifestSize},
-                            push_platform_images(Rest, BaseUrl, Repo, Token, Opts, [
-                                Descriptor | Acc
-                            ]);
-                        {error, _} = Err ->
-                            Err
+                            {Platform, ManifestDigest, ManifestSize};
+                        {error, Err} ->
+                            error({platform_push_failed, {manifest_failed, Platform, Err}})
                     end;
-                {error, _} = Err ->
-                    Err
+                {error, Err} ->
+                    error({platform_push_failed, {config_failed, Platform, Err}})
             end;
-        {error, _} = Err ->
-            Err
+        {error, Err} ->
+            error({platform_push_failed, {layers_failed, Platform, Err}})
     end.
 
 %% Push a manifest without tagging (returns digest and size)
@@ -493,7 +517,7 @@ push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
             Annotations
         ),
 
-    ManifestDigest = ocibuild_digest:from_binary(ManifestJson),
+    ManifestDigest = ocibuild_digest:sha256(ManifestJson),
     ManifestSize = byte_size(ManifestJson),
 
     %% Push manifest by digest (not by tag)
@@ -859,14 +883,10 @@ handle_www_authenticate(WwwAuth, Repo, Auth) ->
 %% Well-known token endpoints for registries that allow anonymous /v2/ access
 -spec use_wellknown_token_endpoint(binary(), binary(), map()) ->
     {ok, binary() | {basic, binary()}} | {error, term()}.
-use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{username := User, password := Pass}) ->
-    %% GHCR: Use Basic Auth directly for push operations
-    %% This works better with GITHUB_TOKEN than token exchange
-    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-    {ok, {basic, Encoded}};
-use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{}) ->
-    %% No credentials for GHCR
-    {ok, none};
+use_wellknown_token_endpoint(~"ghcr.io", Repo, Auth) ->
+    %% GHCR token endpoint - use standard OAuth2 token exchange
+    Challenge = #{~"realm" => "https://ghcr.io/token", ~"service" => "ghcr.io"},
+    exchange_token(Challenge, Repo, Auth);
 use_wellknown_token_endpoint(~"quay.io", Repo, Auth) ->
     %% Quay.io token endpoint
     Challenge = #{~"realm" => "https://quay.io/v2/auth", ~"service" => "quay.io"},
@@ -1009,42 +1029,81 @@ auth_headers({basic, Encoded}) ->
 auth_headers(Token) when is_binary(Token) ->
     [{"Authorization", "Bearer " ++ binary_to_list(Token)}].
 
-%% Push all layers (including base image layers)
+%% Push all layers (including base image layers) in parallel
 -spec push_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
 push_layers(Image, BaseUrl, Repo, Token, Opts) ->
     %% First push base image layers (if any) that don't already exist in target
     case push_base_layers(Image, BaseUrl, Repo, Token, Opts) of
         ok ->
-            %% Then push our new layers
-            Layers = maps:get(layers, Image, []),
-            %% Layers are stored in reverse order, reverse for correct push order
+            %% Then push our new layers in parallel
+            push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts);
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push app layers in parallel with bounded concurrency
+-spec push_app_layers_parallel(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
+    ok | {error, term()}.
+push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
+    Layers = maps:get(layers, Image, []),
+    case Layers of
+        [] ->
+            ok;
+        _ ->
+            %% Layers are stored in reverse order, reverse for correct indexing
             ReversedLayers = lists:reverse(Layers),
             TotalLayers = length(ReversedLayers),
-            push_layers_with_index(ReversedLayers, BaseUrl, Repo, Token, Opts, 0, TotalLayers);
-        {error, _} = Err ->
-            Err
+            Platform = maps:get(platform, Image, undefined),
+
+            %% Create indexed list: [{1, Layer1}, {2, Layer2}, ...]
+            IndexedLayers = lists:zip(lists:seq(1, TotalLayers), ReversedLayers),
+
+            PushFn = fun({Index, #{digest := Digest, data := Data, size := Size}}) ->
+                %% Register progress bar for this upload
+                Label = make_upload_label(Index, TotalLayers, Platform),
+                ProgressRef = ocibuild_progress:register_bar(#{
+                    label => Label,
+                    total => Size
+                }),
+
+                %% Create a progress callback for this layer
+                ProgressCallback = fun(Info) ->
+                    BytesSent = maps:get(bytes_sent, Info, 0),
+                    ocibuild_progress:update(ProgressRef, BytesSent)
+                end,
+
+                LayerOpts = Opts#{
+                    layer_index => Index,
+                    total_layers => TotalLayers,
+                    progress => ProgressCallback
+                },
+                Result = push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts),
+                ocibuild_progress:complete(ProgressRef),
+                case Result of
+                    ok -> ok;
+                    {error, Reason} -> error({upload_failed, Digest, Reason})
+                end
+            end,
+
+            try
+                ocibuild_layout:pmap_bounded(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
+                ok
+            catch
+                error:{upload_failed, Digest, Reason} ->
+                    {error, {upload_failed, Digest, Reason}}
+            end
     end.
 
-%% Push layers with index tracking for progress
--spec push_layers_with_index(
-    [map()], string(), binary(), binary(), push_opts(), non_neg_integer(), non_neg_integer()
-) ->
-    ok | {error, term()}.
-push_layers_with_index([], _BaseUrl, _Repo, _Token, _Opts, _Index, _Total) ->
-    ok;
-push_layers_with_index(
-    [#{digest := Digest, data := Data} | Rest], BaseUrl, Repo, Token, Opts, Index, Total
-) ->
-    LayerOpts = Opts#{layer_index => Index, total_layers => Total},
-    case push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts) of
-        ok ->
-            push_layers_with_index(Rest, BaseUrl, Repo, Token, Opts, Index + 1, Total);
-        {error, _} = Err ->
-            Err
-    end.
+%% Create a label for layer upload progress
+-spec make_upload_label(pos_integer(), pos_integer(), ocibuild:platform() | undefined) -> binary().
+make_upload_label(Index, Total, undefined) ->
+    iolist_to_binary(io_lib:format("Upload ~B/~B", [Index, Total]));
+make_upload_label(Index, Total, Platform) ->
+    Arch = get_platform_arch(Platform),
+    iolist_to_binary(io_lib:format("Upload ~B/~B (~s)", [Index, Total, Arch])).
 
-%% Push base image layers to target registry
+%% Push base image layers to target registry in parallel
 -spec push_base_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
 push_base_layers(Image, BaseUrl, Repo, Token, Opts) ->
@@ -1054,54 +1113,173 @@ push_base_layers(Image, BaseUrl, Repo, Token, Opts) ->
             ok;
         BaseManifest ->
             BaseLayers = maps:get(~"layers", BaseManifest, []),
-            BaseRef = maps:get(base, Image, none),
-            BaseAuth = maps:get(auth, Image, #{}),
-            push_base_layers_list(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts)
-    end.
-
--spec push_base_layers_list(list(), term(), map(), string(), binary(), binary(), push_opts()) ->
-    ok | {error, term()}.
-push_base_layers_list([], _BaseRef, _BaseAuth, _BaseUrl, _Repo, _Token, _Opts) ->
-    ok;
-push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts) ->
-    Digest = maps:get(~"digest", Layer),
-
-    %% Check if blob already exists in target registry
-    CheckUrl = io_lib:format(
-        "~s/v2/~s/blobs/~s",
-        [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
-    ),
-    Headers = auth_headers(Token),
-
-    case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
-        {ok, _} ->
-            %% Layer already exists in target, skip
-            push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts);
-        {error, _} ->
-            %% Need to download from source and upload to target
-            case download_and_upload_layer(BaseRef, BaseAuth, Digest, BaseUrl, Repo, Token, Opts) of
-                ok ->
-                    push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts);
-                {error, _} = Err ->
-                    Err
+            case BaseLayers of
+                [] ->
+                    ok;
+                _ ->
+                    BaseRef = maps:get(base, Image, none),
+                    BaseAuth = maps:get(auth, Image, #{}),
+                    Platform = maps:get(platform, Image, undefined),
+                    push_base_layers_parallel(
+                        BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts, Platform
+                    )
             end
     end.
 
--spec download_and_upload_layer(term(), map(), binary(), string(), binary(), binary(), push_opts()) ->
-    ok | {error, term()}.
-download_and_upload_layer(none, _BaseAuth, _Digest, _BaseUrl, _Repo, _Token, _Opts) ->
-    {error, no_base_ref};
-download_and_upload_layer(
-    {SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, BaseUrl, Repo, Token, Opts
+%% Push base layers in parallel with bounded concurrency
+-spec push_base_layers_parallel(
+    list(),
+    term(),
+    map(),
+    string(),
+    binary(),
+    binary(),
+    push_opts(),
+    ocibuild:platform() | undefined
 ) ->
-    %% Download blob from source registry
-    case pull_blob(SrcRegistry, SrcRepo, Digest, BaseAuth) of
-        {ok, Data} ->
-            %% Upload to target registry
-            push_blob(BaseUrl, Repo, Digest, Data, Token, Opts);
-        {error, _} = Err ->
-            Err
+    ok | {error, term()}.
+push_base_layers_parallel(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts, Platform) ->
+    Headers = auth_headers(Token),
+    TotalLayers = length(BaseLayers),
+
+    %% Create indexed list with size info
+    IndexedLayers = lists:zip(lists:seq(1, TotalLayers), BaseLayers),
+
+    PushFn = fun({Index, Layer}) ->
+        Digest = maps:get(~"digest", Layer),
+        Size = maps:get(~"size", Layer, 0),
+
+        %% Check if blob already exists in target registry
+        CheckUrl = io_lib:format(
+            "~s/v2/~s/blobs/~s",
+            [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+        ),
+
+        case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
+            {ok, _} ->
+                %% Layer already exists in target, skip
+                ok;
+            {error, _} ->
+                %% Need to download from source and upload to target
+                download_and_upload_layer_with_progress(
+                    BaseRef,
+                    BaseAuth,
+                    Digest,
+                    Size,
+                    BaseUrl,
+                    Repo,
+                    Token,
+                    Opts,
+                    Index,
+                    TotalLayers,
+                    Platform
+                )
+        end
+    end,
+
+    try
+        ocibuild_layout:pmap_bounded(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
+        ok
+    catch
+        error:{base_layer_upload_failed, Digest, Reason} ->
+            {error, {base_layer_upload_failed, Digest, Reason}}
     end.
+
+-spec download_and_upload_layer_with_progress(
+    term(),
+    map(),
+    binary(),
+    non_neg_integer(),
+    string(),
+    binary(),
+    binary(),
+    push_opts(),
+    pos_integer(),
+    pos_integer(),
+    ocibuild:platform() | undefined
+) ->
+    ok.
+download_and_upload_layer_with_progress(
+    none, _BaseAuth, Digest, _Size, _BaseUrl, _Repo, _Token, _Opts, _Index, _Total, _Platform
+) ->
+    error({base_layer_upload_failed, Digest, no_base_ref});
+download_and_upload_layer_with_progress(
+    {SrcRegistry, SrcRepo, _SrcRef},
+    BaseAuth,
+    Digest,
+    Size,
+    BaseUrl,
+    Repo,
+    Token,
+    Opts,
+    Index,
+    TotalLayers,
+    Platform
+) ->
+    %% Check cache first - layers from save operation may already be cached
+    case ocibuild_cache:get(Digest) of
+        {ok, CachedData} ->
+            %% Layer is cached, just upload it
+            Label = make_base_layer_label(Index, TotalLayers, Platform),
+            ProgressRef = ocibuild_progress:register_bar(#{
+                label => Label,
+                total => Size
+            }),
+            ProgressCallback = fun(Info) ->
+                BytesSent = maps:get(bytes_sent, Info, 0),
+                ocibuild_progress:update(ProgressRef, BytesSent)
+            end,
+            LayerOpts = Opts#{progress => ProgressCallback},
+            Result = push_blob(BaseUrl, Repo, Digest, CachedData, Token, LayerOpts),
+            ocibuild_progress:complete(ProgressRef),
+            case Result of
+                ok -> ok;
+                {error, Reason} -> error({base_layer_upload_failed, Digest, Reason})
+            end;
+        {error, _} ->
+            %% Not in cache, download from source registry
+            Label = make_base_layer_label(Index, TotalLayers, Platform),
+            ProgressRef = ocibuild_progress:register_bar(#{
+                label => Label,
+                total => Size
+            }),
+            case pull_blob(SrcRegistry, SrcRepo, Digest, BaseAuth) of
+                {ok, Data} ->
+                    %% Cache for future use
+                    _ = ocibuild_cache:put(Digest, Data),
+                    %% Create progress callback for upload
+                    ProgressCallback = fun(Info) ->
+                        BytesSent = maps:get(bytes_sent, Info, 0),
+                        ocibuild_progress:update(ProgressRef, BytesSent)
+                    end,
+                    LayerOpts = Opts#{progress => ProgressCallback},
+                    Result = push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts),
+                    ocibuild_progress:complete(ProgressRef),
+                    case Result of
+                        ok -> ok;
+                        {error, Reason} -> error({base_layer_upload_failed, Digest, Reason})
+                    end;
+                {error, Reason} ->
+                    ocibuild_progress:complete(ProgressRef),
+                    error({base_layer_upload_failed, Digest, Reason})
+            end
+    end.
+
+%% Create a label for base layer transfer progress
+-spec make_base_layer_label(pos_integer(), pos_integer(), ocibuild:platform() | undefined) ->
+    binary().
+make_base_layer_label(Index, Total, undefined) ->
+    iolist_to_binary(io_lib:format("Base ~B/~B", [Index, Total]));
+make_base_layer_label(Index, Total, Platform) ->
+    Arch = get_platform_arch(Platform),
+    iolist_to_binary(io_lib:format("Base ~B/~B (~s)", [Index, Total, Arch])).
+
+%% Get architecture from platform map (handles both atom and binary keys)
+-spec get_platform_arch(map()) -> binary().
+get_platform_arch(#{~"architecture" := Arch}) -> Arch;
+get_platform_arch(#{architecture := Arch}) when is_binary(Arch) -> Arch;
+get_platform_arch(#{architecture := Arch}) when is_list(Arch) -> list_to_binary(Arch);
+get_platform_arch(_) -> <<"unknown">>.
 
 %% Push config and return its digest and size
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->
@@ -1886,7 +2064,9 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts
     {ok, binary()} | {error, term()}.
 http_get_with_progress_internal(_Url, _Headers, _ProgressFn, _Phase, _TotalBytes, _ProgressOpts, 0) ->
     {error, too_many_redirects};
-http_get_with_progress_internal(Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts, RedirectsLeft) ->
+http_get_with_progress_internal(
+    Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts, RedirectsLeft
+) ->
     ensure_started(),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},

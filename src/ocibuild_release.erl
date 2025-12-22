@@ -47,6 +47,8 @@ Security features:
 %% Public API - Progress Display
 -export([
     make_progress_callback/0,
+    start_progress_coordinator/0,
+    stop_progress_coordinator/0,
     format_progress/2,
     format_bytes/1,
     is_tty/0,
@@ -144,7 +146,8 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Build image(s)
         AdapterModule:info("Base image: ~s", [BaseImage]),
         Cmd = maps:get(cmd, Opts, DefaultCmd),
-        ProgressFn = make_progress_callback(),
+        %% Start progress manager for parallel multi-line display
+        _ = ocibuild_progress:start_manager(),
         PullAuth = get_pull_auth(),
         BuildOpts = #{
             release_name => ReleaseName,
@@ -154,21 +157,20 @@ run(AdapterModule, AdapterState, Opts) ->
             labels => Labels,
             cmd => Cmd,
             description => Description,
-            auth => PullAuth,
-            progress => ProgressFn
+            auth => PullAuth
         },
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
-        clear_progress_line(),
-        %% Output the image(s)
+        %% Output the image(s) - this is where layer downloads happen for save
         OutputOpts = #{
             tag => Tag,
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
-            platforms => Platforms,
-            progress => ProgressFn
+            platforms => Platforms
         },
-        do_output(AdapterModule, AdapterState, Images, OutputOpts)
+        Result = do_output(AdapterModule, AdapterState, Images, OutputOpts),
+        ocibuild_progress:stop_manager(),
+        Result
     else
         false ->
             {error, missing_tag};
@@ -185,18 +187,25 @@ run(AdapterModule, AdapterState, Opts) ->
     end.
 
 %% @private Parse platform option string into list of platforms
+%% If no platform specified, auto-detects the current system platform
 -spec parse_platform_option(binary() | undefined | nil) ->
     {ok, [ocibuild:platform()]} | {error, term()}.
 parse_platform_option(undefined) ->
-    {ok, []};
+    {ok, [detect_current_platform()]};
 parse_platform_option(nil) ->
-    {ok, []};
+    {ok, [detect_current_platform()]};
 parse_platform_option(<<>>) ->
-    {ok, []};
+    {ok, [detect_current_platform()]};
 parse_platform_option(PlatformStr) when is_binary(PlatformStr) ->
     ocibuild:parse_platforms(PlatformStr);
 parse_platform_option(Value) ->
     {error, {invalid_platform_value, Value}}.
+
+%% @private Detect current system platform
+-spec detect_current_platform() -> ocibuild:platform().
+detect_current_platform() ->
+    {Os, Arch} = ocibuild_registry:get_target_platform(),
+    #{os => Os, architecture => Arch}.
 
 %% @private Validate platform requirements (ERTS check, NIF warning)
 -spec validate_platform_requirements(module(), file:filename(), [ocibuild:platform()]) ->
@@ -214,6 +223,10 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
 
 %% @private Build image(s) for specified platforms
 %%
+%% Always treats platforms as a list. Returns a list of images.
+%% The output format (single vs multi-platform index) is determined later
+%% based on whether the original request was for multiple platforms.
+%%
 %% Opts must contain: release_name, workdir, env, expose, labels, cmd
 %% Optional: description, auth, progress
 -spec build_platform_images(
@@ -221,48 +234,37 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
     Files :: [{binary(), binary(), non_neg_integer()}],
     Platforms :: [ocibuild:platform()],
     Opts :: map()
-) -> {ok, ocibuild:image() | [ocibuild:image()]} | {error, term()}.
-build_platform_images(BaseImage, Files, [], Opts) ->
-    %% No platforms specified - single platform build
-    build_single_platform_image(BaseImage, Files, Opts);
-build_platform_images(BaseImage, Files, [_SinglePlatform], Opts) ->
-    %% Single platform specified - use single platform build path
-    build_single_platform_image(BaseImage, Files, Opts);
-build_platform_images(BaseImage, Files, Platforms, Opts) when length(Platforms) > 1 ->
-    %% Multi-platform build - use ocibuild:from/3 with platforms option
+) -> {ok, [ocibuild:image()]} | {error, term()}.
+build_platform_images(~"scratch", Files, Platforms, Opts) ->
+    %% Scratch base image - create empty images for each platform
+    Description = maps:get(description, Opts, undefined),
+    Images = [
+        begin
+            {ok, BaseImg} = ocibuild:scratch(),
+            ImgWithPlatform = BaseImg#{platform => Platform},
+            add_description(configure_release_image(ImgWithPlatform, Files, Opts), Description)
+        end
+     || Platform <- Platforms
+    ],
+    {ok, Images};
+build_platform_images(BaseImage, Files, Platforms, Opts) ->
     PullAuth = maps:get(auth, Opts, #{}),
-    ProgressFn = maps:get(progress, Opts, fun(_) -> ok end),
+    Description = maps:get(description, Opts, undefined),
 
-    %% Pass platform maps via the platforms option in ocibuild:from/3
-    case ocibuild:from(BaseImage, PullAuth, #{progress => ProgressFn, platforms => Platforms}) of
+    %% Always use the platforms list - ocibuild:from/3 handles both single and multi
+    case ocibuild:from(BaseImage, PullAuth, #{platforms => Platforms}) of
         {ok, BaseImages} when is_list(BaseImages) ->
             %% Apply release files and configuration to each platform image
             ConfiguredImages = [
-                configure_release_image(BaseImg, Files, Opts)
+                add_description(configure_release_image(BaseImg, Files, Opts), Description)
              || BaseImg <- BaseImages
             ],
             {ok, ConfiguredImages};
         {ok, SingleImage} ->
             %% Fallback: got single image, configure it
-            Image = configure_release_image(SingleImage, Files, Opts),
+            Image = add_description(configure_release_image(SingleImage, Files, Opts), Description),
             {ok, [Image]};
         {error, _} = Error ->
-            Error
-    end.
-
-%% @private Build a single platform image using build_image/3
--spec build_single_platform_image(
-    BaseImage :: binary(),
-    Files :: [{binary(), binary(), non_neg_integer()}],
-    Opts :: map()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_single_platform_image(BaseImage, Files, Opts) ->
-    Description = maps:get(description, Opts, undefined),
-    case build_image(BaseImage, Files, Opts) of
-        {ok, Image0} ->
-            Image = add_description(Image0, Description),
-            {ok, Image};
-        Error ->
             Error
     end.
 
@@ -373,6 +375,8 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
                 false ->
+                    %% Clear progress bars before push to start fresh
+                    ocibuild_progress:clear(),
                     PushOpts = #{chunk_size => ChunkSize},
                     do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
             end;
@@ -419,10 +423,21 @@ default_output_path(Tag) ->
     Registry :: binary(),
     Opts :: map()
 ) -> {ok, term()} | {error, term()}.
-do_push(AdapterModule, AdapterState, Images, Tag, Registry, Opts) ->
-    {Repo, ImageTag} = parse_tag(Tag),
+do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
+    {ImageName, ImageTag} = parse_tag(Tag),
     Auth = get_push_auth(),
     ChunkSize = maps:get(chunk_size, Opts, undefined),
+
+    %% Parse push destination: "ghcr.io/org" -> {Registry, Namespace}
+    %% The registry is the first component, namespace is the rest
+    {Registry, Namespace} = parse_push_destination(PushDest),
+
+    %% Combine namespace with image name to form full repo path
+    Repo =
+        case Namespace of
+            <<>> -> ImageName;
+            _ -> <<Namespace/binary, "/", ImageName/binary>>
+        end,
 
     %% Build push options (ChunkSize is expected to be in bytes already or undefined/nil)
     PushOpts =
@@ -582,10 +597,16 @@ do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labe
                 _ ->
                     PullAuth = maps:get(auth, Opts, #{}),
                     ProgressFn = maps:get(progress, Opts, undefined),
-                    PullOpts =
+                    PlatformOpt = maps:get(platform, Opts, undefined),
+                    PullOpts0 =
                         case ProgressFn of
                             undefined -> #{};
                             _ -> #{progress => ProgressFn}
+                        end,
+                    PullOpts =
+                        case PlatformOpt of
+                            undefined -> PullOpts0;
+                            _ -> PullOpts0#{platform => PlatformOpt}
                         end,
                     case ocibuild:from(BaseImage, PullAuth, PullOpts) of
                         {ok, Img} ->
@@ -926,6 +947,34 @@ parse_tag(Tag) ->
     end.
 
 -doc """
+Parse a push destination into registry host and namespace.
+
+Examples:
+- `<<"ghcr.io/intility">>` -> `{<<"ghcr.io">>, <<"intility">>}`
+- `<<"ghcr.io">>` -> `{<<"ghcr.io">>, <<>>}`
+- `<<"docker.io/myorg">>` -> `{<<"docker.io">>, <<"myorg">>}`
+- `<<"localhost:5000/myorg">>` -> `{<<"localhost:5000">>, <<"myorg">>}`
+""".
+-spec parse_push_destination(binary()) -> {Registry :: binary(), Namespace :: binary()}.
+parse_push_destination(Dest) ->
+    case binary:split(Dest, ~"/") of
+        [Registry] ->
+            %% No slash - just a registry host
+            {Registry, <<>>};
+        [FirstPart | Rest] ->
+            %% Check if first part looks like a registry (contains "." or ":")
+            case binary:match(FirstPart, [~".", ~":"]) of
+                nomatch ->
+                    %% No dot or colon - treat entire thing as namespace on docker.io
+                    {~"docker.io", Dest};
+                _ ->
+                    %% First part is the registry, rest is namespace
+                    Namespace = iolist_to_binary(lists:join(~"/", Rest)),
+                    {FirstPart, Namespace}
+            end
+    end.
+
+-doc """
 Add an OCI description annotation to an image.
 
 If description is undefined or empty, returns the image unchanged.
@@ -1017,9 +1066,138 @@ clear_progress_line() ->
     end.
 
 -doc """
+Start the progress coordinator for multi-line parallel progress display.
+
+Call this before starting parallel downloads/uploads. The coordinator
+manages separate terminal lines for each concurrent operation.
+""".
+-spec start_progress_coordinator() -> pid() | undefined.
+start_progress_coordinator() ->
+    case is_tty() of
+        true ->
+            case whereis(ocibuild_progress_coord) of
+                undefined ->
+                    Pid = spawn_link(fun() ->
+                        progress_coord_loop(#{slots => #{}, next_slot => 1})
+                    end),
+                    register(ocibuild_progress_coord, Pid),
+                    Pid;
+                Pid ->
+                    Pid
+            end;
+        false ->
+            undefined
+    end.
+
+-doc """
+Stop the progress coordinator and clean up terminal state.
+""".
+-spec stop_progress_coordinator() -> ok.
+stop_progress_coordinator() ->
+    case whereis(ocibuild_progress_coord) of
+        undefined ->
+            ok;
+        Pid ->
+            Pid ! {stop, self()},
+            receive
+                {stopped, Pid} -> ok
+            after 1000 ->
+                ok
+            end
+    end.
+
+%% Progress coordinator loop - manages multi-line display
+progress_coord_loop(State) ->
+    receive
+        {update, SlotKey, Info} ->
+            Slots = maps:get(slots, State),
+            NextSlot = maps:get(next_slot, State),
+            {Slot, NewSlots} =
+                case maps:find(SlotKey, Slots) of
+                    {ok, ExistingSlot} ->
+                        {ExistingSlot, Slots};
+                    error ->
+                        %% New slot - print newline to reserve space
+                        io:format("~n"),
+                        {NextSlot, maps:put(SlotKey, NextSlot, Slots)}
+                end,
+            NewNextSlot =
+                case maps:is_key(SlotKey, Slots) of
+                    true -> NextSlot;
+                    false -> NextSlot + 1
+                end,
+            render_progress_line(Slot, NewNextSlot - 1, Info),
+            progress_coord_loop(State#{slots => NewSlots, next_slot => NewNextSlot});
+        {stop, From} ->
+            %% Move cursor to bottom and clean up
+            Slots = maps:get(slots, State),
+            TotalSlots = maps:size(Slots),
+            case TotalSlots > 0 of
+                true ->
+                    %% Move to bottom of progress area
+                    io:format("~n");
+                false ->
+                    ok
+            end,
+            From ! {stopped, self()},
+            ok
+    end.
+
+%% Render a progress line at the given slot position
+render_progress_line(Slot, TotalSlots, Info) ->
+    #{phase := Phase, total_bytes := Total} = Info,
+    Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
+    LayerIndex = maps:get(layer_index, Info, 0),
+    TotalLayers = maps:get(total_layers, Info, 1),
+    Platform = maps:get(platform, Info, undefined),
+
+    PhaseStr =
+        case Phase of
+            manifest ->
+                "Fetching manifest";
+            config ->
+                "Fetching config  ";
+            layer when TotalLayers > 1 ->
+                io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+            layer ->
+                "Downloading layer";
+            uploading when TotalLayers > 1 ->
+                io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+            uploading ->
+                "Uploading layer  "
+        end,
+
+    PlatformStr =
+        case Platform of
+            undefined -> "";
+            #{architecture := Arch} -> io_lib:format(" (~s)", [Arch])
+        end,
+
+    ProgressStr = format_progress(Bytes, Total),
+
+    %% Calculate how many lines to move up from current position
+    %% After printing \n for a slot, cursor is on that slot's line
+    %% So we only need to move up by (TotalSlots - Slot), not +1
+    LinesToMove = TotalSlots - Slot,
+
+    %% Move up (if needed), clear line, print, move back down
+    case LinesToMove of
+        0 ->
+            %% Already on the right line, just print
+            io:format("\r\e[K  ~s~s: ~s", [PhaseStr, PlatformStr, ProgressStr]);
+        N when N > 0 ->
+            %% Move up N lines, print, move back down
+            io:format(
+                "\e[~BA\r\e[K  ~s~s: ~s\e[~BB",
+                [N, PhaseStr, PlatformStr, ProgressStr, N]
+            )
+    end.
+
+-doc """
 Create a progress callback for terminal display.
 
-Handles both TTY (animated progress) and CI (final state only) modes.
+Handles both TTY (animated multi-line progress via coordinator) and
+CI (final state only) modes.
 """.
 -spec make_progress_callback() -> ocibuild_registry:progress_callback().
 make_progress_callback() ->
@@ -1031,49 +1209,51 @@ make_progress_callback() ->
         TotalLayers = maps:get(total_layers, Info, 1),
         HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
         IsComplete = Bytes =:= Total,
-        %% Use Total (layer size) in key to distinguish between different layers
-        %% across platforms that might have the same index
-        AlreadyPrinted =
-            case IsTTY of
-                true ->
-                    false;
-                false when IsComplete ->
-                    Key = {ocibuild_progress_done, Phase, LayerIndex, Total},
-                    case get(Key) of
-                        true ->
-                            true;
-                        _ ->
-                            put(Key, true),
-                            false
-                    end;
-                false ->
-                    false
-            end,
-        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete) andalso not AlreadyPrinted,
-        case ShouldPrint of
-            true ->
-                PhaseStr =
-                    case Phase of
-                        manifest -> "Fetching manifest";
-                        config -> "Fetching config  ";
-                        layer when TotalLayers > 1 ->
-                            io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
-                        layer ->
-                            "Downloading layer";
-                        uploading when TotalLayers > 1 ->
-                            io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
-                        uploading ->
-                            "Uploading layer  "
-                    end,
-                ProgressStr = format_progress(Bytes, Total),
-                case IsTTY of
-                    true -> io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
-                    false -> io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
+
+        case IsTTY of
+            true when HasProgress ->
+                %% TTY mode: use coordinator for multi-line display
+                %% Create unique slot key from layer size (distinguishes layers)
+                SlotKey = {Phase, Total},
+                case whereis(ocibuild_progress_coord) of
+                    undefined ->
+                        %% No coordinator, fall back to single-line
+                        PhaseStr = format_phase(Phase, LayerIndex, TotalLayers),
+                        ProgressStr = format_progress(Bytes, Total),
+                        io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
+                    Pid ->
+                        Pid ! {update, SlotKey, Info}
                 end;
-            false ->
+            false when HasProgress andalso IsComplete ->
+                %% CI mode: only print completion, deduplicate
+                Key = {ocibuild_progress_done, Phase, LayerIndex, Total},
+                case get(Key) of
+                    true ->
+                        ok;
+                    _ ->
+                        put(Key, true),
+                        PhaseStr = format_phase(Phase, LayerIndex, TotalLayers),
+                        ProgressStr = format_progress(Bytes, Total),
+                        io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
+                end;
+            _ ->
                 ok
         end
     end.
+
+%% Format phase string for progress display
+format_phase(manifest, _, _) ->
+    "Fetching manifest";
+format_phase(config, _, _) ->
+    "Fetching config  ";
+format_phase(layer, LayerIndex, TotalLayers) when TotalLayers > 1 ->
+    io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+format_phase(layer, _, _) ->
+    "Downloading layer";
+format_phase(uploading, LayerIndex, TotalLayers) when TotalLayers > 1 ->
+    io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+format_phase(uploading, _, _) ->
+    "Uploading layer  ".
 
 -doc "Format progress as a string with progress bar.".
 -spec format_progress(non_neg_integer(), non_neg_integer() | unknown) -> iolist().
