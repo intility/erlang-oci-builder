@@ -230,33 +230,10 @@ validate_platform_requirements(_AdapterModule, _ReleasePath, []) ->
 validate_platform_requirements(_AdapterModule, _ReleasePath, [_SinglePlatform]) ->
     %% Single platform, no multi-platform validation needed
     ok;
-validate_platform_requirements(AdapterModule, ReleasePath, Platforms) when length(Platforms) > 1 ->
+validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when length(Platforms) > 1 ->
     %% Multi-platform: validate ERTS and warn about NIFs
-    case validate_multiplatform(ReleasePath, Platforms) of
-        ok ->
-            %% Check for native code and warn
-            case check_for_native_code(ReleasePath) of
-                {ok, []} ->
-                    ok;
-                {warning, NifFiles} ->
-                    NifDescriptions = [
-                        io_lib:format("~s: ~s", [maps:get(app, N), maps:get(file, N)])
-                        || N <- NifFiles
-                    ],
-                    AdapterModule:info(
-                        "Warning: Native code detected that may not be portable across platforms:~n  - ~s",
-                        [string:join(NifDescriptions, "\n  - ")]
-                    ),
-                    AdapterModule:info(
-                        "NIFs compiled for one architecture won't work on others.~n"
-                        "Consider using cross-compilation or Rust-based NIFs with multi-target support.",
-                        []
-                    ),
-                    ok
-            end;
-        {error, _} = Error ->
-            Error
-    end.
+    %% Note: validate_multiplatform handles NIF warnings internally
+    validate_multiplatform(ReleasePath, Platforms).
 
 %% @private Build image(s) for specified platforms
 -spec build_platform_images(
@@ -293,8 +270,7 @@ build_platform_images(
     PullAuth = maps:get(auth, BuildOpts, #{}),
     ProgressFn = maps:get(progress, BuildOpts, fun(_, _) -> ok end),
 
-    %% Pass platform maps directly to ocibuild:from/3
-    %% from/3 signature is (Ref, Auth, Opts) - Opts contains platforms
+    %% Pass platform maps via the platforms option in ocibuild:from/3
     case ocibuild:from(BaseImage, PullAuth, #{progress => ProgressFn, platforms => Platforms}) of
         {ok, BaseImages} when is_list(BaseImages) ->
             %% Apply release files and configuration to each platform image
@@ -1227,7 +1203,7 @@ This function is universal for all BEAM languages.
 
 ```
 ok = ocibuild_release:validate_multiplatform(ReleasePath, [Platform]).
-{error, bundled_erts} = ocibuild_release:validate_multiplatform(ReleasePath, [P1, P2]).
+{error, {bundled_erts, _Reason}} = ocibuild_release:validate_multiplatform(ReleasePath, [P1, P2]).
 ```
 """.
 -spec validate_multiplatform(file:filename(), [ocibuild:platform()]) ->
