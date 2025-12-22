@@ -11,8 +11,10 @@ See: https://github.com/opencontainers/distribution-spec
 
 -export([
     pull_manifest/3, pull_manifest/4, pull_manifest/5,
+    pull_manifests_for_platforms/5,
     pull_blob/3, pull_blob/4, pull_blob/5,
     push/5, push/6,
+    push_multi/6,
     check_blob_exists/4,
     stop_httpc/0
 ]).
@@ -126,7 +128,14 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
                     case is_manifest_list(Manifest) of
                         true ->
                             %% Select platform-specific manifest and fetch it
-                            case select_platform_manifest(Manifest) of
+                            %% If platform option is provided, use it; otherwise auto-detect
+                            SelectedResult = case maps:find(platform, Opts) of
+                                {ok, Platform} ->
+                                    select_platform_manifest(Manifest, Platform);
+                                error ->
+                                    select_platform_manifest(Manifest)
+                            end,
+                            case SelectedResult of
                                 {ok, PlatformDigest} ->
                                     pull_manifest(Registry, Repo, PlatformDigest, Auth, Opts);
                                 {error, _} = Err ->
@@ -168,6 +177,37 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
             end;
         {error, _} = Err ->
             Err
+    end.
+
+-doc """
+Pull manifests and configs for multiple platforms.
+
+Given a list of platforms, this function pulls the manifest and config
+for each platform from the base image. Used for multi-platform builds.
+
+Returns a list of `{Platform, Manifest, Config}` tuples, one for each requested platform.
+""".
+-spec pull_manifests_for_platforms(binary(), binary(), binary(), map(), [ocibuild:platform()]) ->
+    {ok, [{ocibuild:platform(), map(), map()}]} | {error, term()}.
+pull_manifests_for_platforms(Registry, Repo, Ref, Auth, Platforms) ->
+    Results = lists:map(
+        fun(Platform) ->
+            Opts = #{platform => Platform},
+            case pull_manifest(Registry, Repo, Ref, Auth, Opts) of
+                {ok, Manifest, Config} ->
+                    {ok, {Platform, Manifest, Config}};
+                {error, _} = Err ->
+                    Err
+            end
+        end,
+        Platforms
+    ),
+    %% Check if any failed
+    case lists:partition(fun({ok, _}) -> true; ({error, _}) -> false end, Results) of
+        {Successes, []} ->
+            {ok, [R || {ok, R} <- Successes]};
+        {_, [FirstError | _]} ->
+            FirstError
     end.
 
 -doc "Pull a blob from a registry.".
@@ -297,6 +337,153 @@ push(Image, Registry, Repo, Tag, Auth, Opts) ->
             Err
     end.
 
+-doc """
+Push multiple platform-specific images as a single multi-platform image.
+
+This function:
+1. Pushes all layers, configs, and manifests for each platform
+2. Creates an OCI image index referencing all platform manifests
+3. Tags the index so the registry serves the correct platform to clients
+
+Each image in the list must have a `platform` field set.
+""".
+-spec push_multi([ocibuild:image()], binary(), binary(), binary(), map(), push_opts()) ->
+    ok | {error, term()}.
+push_multi([], _Registry, _Repo, _Tag, _Auth, _Opts) ->
+    {error, no_images_to_push};
+push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
+        {ok, Token} ->
+            %% Push each platform image and collect manifest info
+            case push_platform_images(Images, BaseUrl, NormalizedRepo, Token, Opts, []) of
+                {ok, ManifestDescriptors} ->
+                    %% Create and push the image index
+                    push_image_index(BaseUrl, NormalizedRepo, Tag, Token, ManifestDescriptors);
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push all platform images and collect their manifest descriptors
+-spec push_platform_images([ocibuild:image()], string(), binary(), term(), push_opts(), list()) ->
+    {ok, [{ocibuild:platform(), binary(), non_neg_integer()}]} | {error, term()}.
+push_platform_images([], _BaseUrl, _Repo, _Token, _Opts, Acc) ->
+    {ok, lists:reverse(Acc)};
+push_platform_images([Image | Rest], BaseUrl, Repo, Token, Opts, Acc) ->
+    Platform = maps:get(platform, Image, #{os => ~"linux", architecture => ~"amd64"}),
+    %% Push layers
+    case push_layers(Image, BaseUrl, Repo, Token, Opts) of
+        ok ->
+            %% Push config
+            case push_config(Image, BaseUrl, Repo, Token) of
+                {ok, ConfigDigest, ConfigSize} ->
+                    %% Push manifest (without tagging)
+                    case push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) of
+                        {ok, ManifestDigest, ManifestSize} ->
+                            Descriptor = {Platform, ManifestDigest, ManifestSize},
+                            push_platform_images(Rest, BaseUrl, Repo, Token, Opts, [Descriptor | Acc]);
+                        {error, _} = Err ->
+                            Err
+                    end;
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push a manifest without tagging (returns digest and size)
+-spec push_manifest_untagged(ocibuild:image(), string(), binary(), term(), binary(), non_neg_integer()) ->
+    {ok, binary(), non_neg_integer()} | {error, term()}.
+push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
+    %% Get base image layers if present (these already exist in registry)
+    BaseLayerDescriptors =
+        case maps:get(base_manifest, Image, undefined) of
+            undefined ->
+                [];
+            BaseManifest ->
+                maps:get(~"layers", BaseManifest, [])
+        end,
+
+    %% Our layers are stored in reverse order, reverse for correct manifest order
+    NewLayerDescriptors =
+        [
+            #{
+                ~"mediaType" => MediaType,
+                ~"digest" => Digest,
+                ~"size" => Size
+            }
+         || #{
+                media_type := MediaType,
+                digest := Digest,
+                size := Size
+            } <-
+                lists:reverse(maps:get(layers, Image, []))
+        ],
+
+    %% Combine: base layers first, then our new layers
+    LayerDescriptors = BaseLayerDescriptors ++ NewLayerDescriptors,
+
+    %% Get annotations from image
+    Annotations = maps:get(annotations, Image, #{}),
+
+    {ManifestJson, _} =
+        ocibuild_manifest:build(
+            #{
+                ~"mediaType" =>
+                    ~"application/vnd.oci.image.config.v1+json",
+                ~"digest" => ConfigDigest,
+                ~"size" => ConfigSize
+            },
+            LayerDescriptors,
+            Annotations
+        ),
+
+    ManifestDigest = ocibuild_digest:from_binary(ManifestJson),
+    ManifestSize = byte_size(ManifestJson),
+
+    %% Push manifest by digest (not by tag)
+    Url = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(ManifestDigest)]
+    ),
+    Headers = auth_headers(Token) ++
+        [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+
+    case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
+        {ok, _} ->
+            {ok, ManifestDigest, ManifestSize};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push the image index and tag it
+-spec push_image_index(string(), binary(), binary(), term(),
+    [{ocibuild:platform(), binary(), non_neg_integer()}]) -> ok | {error, term()}.
+push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
+    Index = ocibuild_index:create(ManifestDescriptors),
+    IndexJson = ocibuild_index:to_json(Index),
+
+    %% Push index with tag
+    Url = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
+    ),
+    Headers = auth_headers(Token) ++
+        [{"Content-Type", "application/vnd.oci.image.index.v1+json"}],
+
+    case ?MODULE:http_put(lists:flatten(Url), Headers, IndexJson) of
+        {ok, _} ->
+            ok;
+        {error, _} = Err ->
+            Err
+    end.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -360,6 +547,54 @@ select_platform_manifest(#{~"manifests" := Manifests}) ->
     end;
 select_platform_manifest(_) ->
     {error, not_a_manifest_list}.
+
+%% Select a manifest for a specific platform
+-spec select_platform_manifest(map(), ocibuild:platform()) -> {ok, binary()} | {error, term()}.
+select_platform_manifest(#{~"manifests" := Manifests}, Platform) ->
+    TargetOs = maps:get(os, Platform),
+    TargetArch = maps:get(architecture, Platform),
+    TargetVariant = maps:get(variant, Platform, undefined),
+
+    %% Filter out attestation manifests
+    CandidateManifests = [
+        M
+     || M <- Manifests,
+        not is_attestation_manifest(M)
+    ],
+
+    find_platform_manifest_with_variant(CandidateManifests, TargetOs, TargetArch, TargetVariant);
+select_platform_manifest(_, _) ->
+    {error, not_a_manifest_list}.
+
+%% Find a manifest matching the target platform with optional variant
+-spec find_platform_manifest_with_variant([map()], binary(), binary(), binary() | undefined) ->
+    {ok, binary()} | {error, no_matching_platform}.
+find_platform_manifest_with_variant([], _TargetOs, _TargetArch, _TargetVariant) ->
+    {error, no_matching_platform};
+find_platform_manifest_with_variant(
+    [#{~"platform" := Platform, ~"digest" := Digest} | Rest],
+    TargetOs,
+    TargetArch,
+    TargetVariant
+) ->
+    Os = maps:get(~"os", Platform, <<>>),
+    Arch = maps:get(~"architecture", Platform, <<>>),
+    Variant = maps:get(~"variant", Platform, undefined),
+    case matches_platform(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) of
+        true ->
+            {ok, Digest};
+        false ->
+            find_platform_manifest_with_variant(Rest, TargetOs, TargetArch, TargetVariant)
+    end;
+find_platform_manifest_with_variant([_ | Rest], TargetOs, TargetArch, TargetVariant) ->
+    find_platform_manifest_with_variant(Rest, TargetOs, TargetArch, TargetVariant).
+
+%% Check if platform matches target
+-spec matches_platform(binary(), binary(), binary() | undefined, binary(), binary(), binary() | undefined) -> boolean().
+matches_platform(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) ->
+    Os =:= TargetOs andalso
+    Arch =:= TargetArch andalso
+    (TargetVariant =:= undefined orelse Variant =:= TargetVariant).
 
 %% Check if a manifest entry is an attestation (not a real image)
 -spec is_attestation_manifest(map()) -> boolean().

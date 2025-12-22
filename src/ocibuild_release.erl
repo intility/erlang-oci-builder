@@ -58,6 +58,13 @@ Security features:
     stop_httpc/0
 ]).
 
+%% Public API - Multi-platform Validation
+-export([
+    has_bundled_erts/1,
+    check_for_native_code/1,
+    validate_multiplatform/2
+]).
+
 %% Utility exports (used by build tools)
 -export([
     to_binary/1,
@@ -118,6 +125,9 @@ run(AdapterModule, AdapterState, Opts) ->
             chunk_size := ChunkSize
         } = Config,
 
+        %% Get optional platform configuration
+        PlatformOpt = maps:get(platform, Config, undefined),
+
         %% Get tag (required)
         Tag =
             case TagOpt of
@@ -132,52 +142,62 @@ run(AdapterModule, AdapterState, Opts) ->
             {ok, ReleaseName, ReleasePath} ->
                 AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
 
-                %% Collect files from release
-                case collect_release_files(ReleasePath) of
-                    {ok, Files} ->
-                        AdapterModule:info("Collected ~p files from release", [length(Files)]),
+                %% Parse platforms if specified
+                Platforms = parse_platform_option(PlatformOpt),
 
-                        %% Build the image
-                        AdapterModule:info("Base image: ~s", [BaseImage]),
-                        Cmd = maps:get(cmd, Opts, DefaultCmd),
+                %% Validate multi-platform requirements
+                case validate_platform_requirements(AdapterModule, ReleasePath, Platforms) of
+                    ok ->
+                        %% Collect files from release
+                        case collect_release_files(ReleasePath) of
+                            {ok, Files} ->
+                                AdapterModule:info("Collected ~p files from release", [length(Files)]),
 
-                        ProgressFn = make_progress_callback(),
-                        PullAuth = get_pull_auth(),
-                        BuildOpts = #{auth => PullAuth, progress => ProgressFn},
+                                %% Build the image(s)
+                                AdapterModule:info("Base image: ~s", [BaseImage]),
+                                Cmd = maps:get(cmd, Opts, DefaultCmd),
 
-                        Result = build_image(
-                            BaseImage,
-                            Files,
-                            ReleaseName,
-                            Workdir,
-                            EnvMap,
-                            ExposePorts,
-                            Labels,
-                            Cmd,
-                            BuildOpts
-                        ),
-                        clear_progress_line(),
+                                ProgressFn = make_progress_callback(),
+                                PullAuth = get_pull_auth(),
+                                BuildOpts = #{auth => PullAuth, progress => ProgressFn},
 
-                        case Result of
-                            {ok, Image0} ->
-                                %% Add description annotation
-                                Image = add_description(Image0, Description),
+                                %% Build single or multi-platform image
+                                Result = build_platform_images(
+                                    BaseImage,
+                                    Files,
+                                    ReleaseName,
+                                    Workdir,
+                                    EnvMap,
+                                    ExposePorts,
+                                    Labels,
+                                    Cmd,
+                                    Description,
+                                    Platforms,
+                                    BuildOpts
+                                ),
+                                clear_progress_line(),
 
-                                %% Output the image (save and optionally push)
-                                do_output(
-                                    AdapterModule,
-                                    AdapterState,
-                                    Image,
-                                    Tag,
-                                    OutputOpt,
-                                    PushRegistry,
-                                    ChunkSize
-                                );
-                            {error, BuildError} ->
-                                {error, {build_failed, BuildError}}
+                                case Result of
+                                    {ok, Images} ->
+                                        %% Output the image(s) (save and optionally push)
+                                        do_output(
+                                            AdapterModule,
+                                            AdapterState,
+                                            Images,
+                                            Tag,
+                                            OutputOpt,
+                                            PushRegistry,
+                                            ChunkSize,
+                                            Platforms
+                                        );
+                                    {error, BuildError} ->
+                                        {error, {build_failed, BuildError}}
+                                end;
+                            {error, CollectError} ->
+                                {error, {collect_failed, CollectError}}
                         end;
-                    {error, CollectError} ->
-                        {error, {collect_failed, CollectError}}
+                    {error, ValidationError} ->
+                        {error, ValidationError}
                 end;
             {error, FindError} ->
                 {error, {release_not_found, FindError}}
@@ -189,17 +209,195 @@ run(AdapterModule, AdapterState, Opts) ->
             {error, Reason}
     end.
 
+%% @private Parse platform option string into list of platforms
+-spec parse_platform_option(binary() | undefined | nil) -> [ocibuild:platform()].
+parse_platform_option(undefined) -> [];
+parse_platform_option(nil) -> [];
+parse_platform_option(<<>>) -> [];
+parse_platform_option(PlatformStr) when is_binary(PlatformStr) ->
+    case ocibuild:parse_platforms(PlatformStr) of
+        {ok, Platforms} -> Platforms;
+        {error, _} -> []
+    end;
+parse_platform_option(_) -> [].
+
+%% @private Validate platform requirements (ERTS check, NIF warning)
+-spec validate_platform_requirements(module(), file:filename(), [ocibuild:platform()]) ->
+    ok | {error, term()}.
+validate_platform_requirements(_AdapterModule, _ReleasePath, []) ->
+    %% No platforms specified, skip validation
+    ok;
+validate_platform_requirements(_AdapterModule, _ReleasePath, [_SinglePlatform]) ->
+    %% Single platform, no multi-platform validation needed
+    ok;
+validate_platform_requirements(AdapterModule, ReleasePath, Platforms) when length(Platforms) > 1 ->
+    %% Multi-platform: validate ERTS and warn about NIFs
+    case validate_multiplatform(ReleasePath, Platforms) of
+        ok ->
+            %% Check for native code and warn
+            case check_for_native_code(ReleasePath) of
+                {ok, []} ->
+                    ok;
+                {warning, NifFiles} ->
+                    NifDescriptions = [
+                        io_lib:format("~s: ~s", [maps:get(app, N), maps:get(file, N)])
+                        || N <- NifFiles
+                    ],
+                    AdapterModule:info(
+                        "Warning: Native code detected that may not be portable across platforms:~n  - ~s",
+                        [string:join(NifDescriptions, "\n  - ")]
+                    ),
+                    AdapterModule:info(
+                        "NIFs compiled for one architecture won't work on others.~n"
+                        "Consider using cross-compilation or Rust-based NIFs with multi-target support.",
+                        []
+                    ),
+                    ok
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @private Build image(s) for specified platforms
+-spec build_platform_images(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    atom() | string(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary(),
+    binary() | undefined,
+    [ocibuild:platform()],
+    map()
+) -> {ok, ocibuild:image() | [ocibuild:image()]} | {error, term()}.
+build_platform_images(
+    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, [], BuildOpts
+) ->
+    %% No platforms specified - single platform build
+    build_single_platform_image(
+        BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, BuildOpts
+    );
+build_platform_images(
+    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, [_SinglePlatform], BuildOpts
+) ->
+    %% Single platform specified - use single platform build path
+    build_single_platform_image(
+        BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, BuildOpts
+    );
+build_platform_images(
+    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, Platforms, BuildOpts
+) when length(Platforms) > 1 ->
+    %% Multi-platform build - use ocibuild:from/3 with platforms option
+    PullAuth = maps:get(auth, BuildOpts, #{}),
+    ProgressFn = maps:get(progress, BuildOpts, fun(_, _) -> ok end),
+
+    %% Pass platform maps directly to ocibuild:from/3
+    %% from/3 signature is (Ref, Auth, Opts) - Opts contains platforms
+    case ocibuild:from(BaseImage, PullAuth, #{progress => ProgressFn, platforms => Platforms}) of
+        {ok, BaseImages} when is_list(BaseImages) ->
+            %% Apply release files and configuration to each platform image
+            ConfiguredImages = lists:map(
+                fun(BaseImg) ->
+                    configure_release_image(
+                        BaseImg, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description
+                    )
+                end,
+                BaseImages
+            ),
+            {ok, ConfiguredImages};
+        {ok, SingleImage} ->
+            %% Fallback: got single image, configure it
+            Image = configure_release_image(
+                SingleImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description
+            ),
+            {ok, [Image]};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @private Build a single platform image using build_image/9
+-spec build_single_platform_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    atom() | string(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary(),
+    binary() | undefined,
+    map()
+) -> {ok, ocibuild:image()} | {error, term()}.
+build_single_platform_image(
+    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, BuildOpts
+) ->
+    case build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, BuildOpts) of
+        {ok, Image0} ->
+            Image = add_description(Image0, Description),
+            {ok, Image};
+        Error ->
+            Error
+    end.
+
+%% @private Format platform map as string
+-spec format_platform(ocibuild:platform()) -> binary().
+format_platform(#{os := OS, architecture := Arch} = Platform) ->
+    case maps:get(variant, Platform, undefined) of
+        undefined -> <<OS/binary, "/", Arch/binary>>;
+        Variant -> <<OS/binary, "/", Arch/binary, "/", Variant/binary>>
+    end.
+
+%% @private Configure a release image with files and settings
+-spec configure_release_image(
+    ocibuild:image(),
+    [{binary(), binary(), non_neg_integer()}],
+    atom() | string(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary(),
+    binary() | undefined
+) -> ocibuild:image().
+configure_release_image(Image0, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description) ->
+    %% Add release layer
+    Image1 = ocibuild:add_layer(Image0, Files),
+
+    %% Set working directory
+    Image2 = ocibuild:workdir(Image1, Workdir),
+
+    %% Set entrypoint
+    ReleaseNameBin = to_binary(ReleaseName),
+    EntrypointPath = <<Workdir/binary, "/bin/", ReleaseNameBin/binary>>,
+    Image3 = ocibuild:entrypoint(Image2, [EntrypointPath, Cmd]),
+
+    %% Set environment variables
+    Image4 = ocibuild:env(Image3, EnvMap),
+
+    %% Expose ports
+    Image5 = lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
+
+    %% Add labels
+    Image6 = maps:fold(fun(K, V, Img) -> ocibuild:label(Img, K, V) end, Image5, Labels),
+
+    %% Add description annotation
+    add_description(Image6, Description).
+
 %% @private Output the image (save and optionally push)
+%% Handles both single image and list of images (multi-platform)
 -spec do_output(
     module(),
     term(),
-    ocibuild:image(),
+    ocibuild:image() | [ocibuild:image()],
     binary(),
     binary() | undefined,
     binary() | undefined,
-    pos_integer() | undefined
+    pos_integer() | undefined,
+    [ocibuild:platform()]
 ) -> {ok, term()} | {error, term()}.
-do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, ChunkSize) ->
+do_output(AdapterModule, AdapterState, Images, Tag, OutputOpt, PushRegistry, ChunkSize, Platforms) ->
     %% Determine output path
     %% Handle both undefined (Erlang) and nil (Elixir) for missing values
     OutputPath =
@@ -212,9 +410,30 @@ do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, Chun
                 binary_to_list(Path)
         end,
 
+    %% Determine if this is multi-platform
+    IsMultiPlatform = is_list(Images) andalso length(Images) > 1,
+
     %% Save tarball
-    AdapterModule:info("Saving image to ~s", [OutputPath]),
-    case save_image(Image, OutputPath, Tag) of
+    case IsMultiPlatform of
+        true ->
+            AdapterModule:info("Saving multi-platform image to ~s", [OutputPath]),
+            AdapterModule:info("Platforms: ~s", [format_platform_list(Platforms)]);
+        false ->
+            AdapterModule:info("Saving image to ~s", [OutputPath])
+    end,
+
+    %% For multi-platform, use ocibuild:save with list of images
+    %% For single platform, use single image
+    SaveResult = case Images of
+        [SingleImage] ->
+            save_image(SingleImage, OutputPath, Tag);
+        ImageList when is_list(ImageList) ->
+            save_multi_image(ImageList, OutputPath, Tag);
+        SingleImage ->
+            save_image(SingleImage, OutputPath, Tag)
+    end,
+
+    case SaveResult of
         ok ->
             AdapterModule:info("Image saved successfully", []),
 
@@ -231,11 +450,22 @@ do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, Chun
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
                 _ ->
-                    do_push(AdapterModule, AdapterState, Image, Tag, PushRegistry, ChunkSize)
+                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, ChunkSize)
             end;
         {error, SaveError} ->
             {error, {save_failed, SaveError}}
     end.
+
+%% @private Format platform list for display
+-spec format_platform_list([ocibuild:platform()]) -> string().
+format_platform_list(Platforms) ->
+    PlatformStrs = [binary_to_list(format_platform(P)) || P <- Platforms],
+    string:join(PlatformStrs, ", ").
+
+%% @private Save multi-platform image
+-spec save_multi_image([ocibuild:image()], string(), binary()) -> ok | {error, term()}.
+save_multi_image(Images, OutputPath, Tag) ->
+    ocibuild:save(Images, list_to_binary(OutputPath), #{tag => Tag}).
 
 %% @private Generate default output path from tag
 default_output_path(Tag) ->
@@ -250,16 +480,17 @@ default_output_path(Tag) ->
     ),
     SafeName ++ ".tar.gz".
 
-%% @private Push image to registry
+%% @private Push image(s) to registry
+%% Handles both single image and list of images (multi-platform)
 -spec do_push(
     module(),
     term(),
-    ocibuild:image(),
+    ocibuild:image() | [ocibuild:image()],
     binary(),
     binary(),
     pos_integer() | undefined
 ) -> {ok, term()} | {error, term()}.
-do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
+do_push(AdapterModule, AdapterState, Images, Tag, Registry, ChunkSize) ->
     {Repo, ImageTag} = parse_tag(Tag),
     Auth = get_push_auth(),
 
@@ -273,10 +504,22 @@ do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
             _ -> #{}
         end,
 
-    AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
-
     RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
-    case push_image(Image, Registry, RepoTag, Auth, PushOpts) of
+
+    %% Push single image or multi-platform index
+    PushResult = case Images of
+        ImageList when is_list(ImageList), length(ImageList) > 1 ->
+            AdapterModule:info("Pushing multi-platform image to ~s/~s:~s", [Registry, Repo, ImageTag]),
+            ocibuild:push_multi(ImageList, Registry, RepoTag, Auth, PushOpts);
+        [SingleImage] ->
+            AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+            push_image(SingleImage, Registry, RepoTag, Auth, PushOpts);
+        SingleImage ->
+            AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+            push_image(SingleImage, Registry, RepoTag, Auth, PushOpts)
+    end,
+
+    case PushResult of
         ok ->
             AdapterModule:info("Push successful!", []),
             {ok, AdapterState};
@@ -897,3 +1140,235 @@ and allow the VM to exit cleanly.
 -spec stop_httpc() -> ok.
 stop_httpc() ->
     ocibuild_registry:stop_httpc().
+
+%%%===================================================================
+%%% Multi-platform Validation
+%%%===================================================================
+
+-doc """
+Check if a release has bundled ERTS.
+
+Multi-platform builds require the ERTS to come from the base image,
+not bundled in the release. This function checks for an `erts-*` directory
+at the release root.
+
+This function works for all BEAM languages (Erlang, Elixir, Gleam, LFE)
+since they all produce standard OTP releases.
+
+```
+true = ocibuild_release:has_bundled_erts("/path/to/rel/myapp").
+```
+""".
+-spec has_bundled_erts(file:filename()) -> boolean().
+has_bundled_erts(ReleasePath) ->
+    case file:list_dir(ReleasePath) of
+        {ok, Entries} ->
+            lists:any(
+                fun(Entry) ->
+                    case Entry of
+                        "erts-" ++ _ -> true;
+                        _ -> false
+                    end
+                end,
+                Entries
+            );
+        {error, _} ->
+            false
+    end.
+
+-doc """
+Check for native code (NIFs) in a release.
+
+Scans `lib/*/priv/` directories for native shared libraries:
+- `.so` files (Linux/Unix/BSD)
+- `.dll` files (Windows)
+- `.dylib` files (macOS)
+
+This function works for all BEAM languages since they all produce
+standard OTP releases with the same directory structure.
+
+Returns `{ok, []}` if no native code found, or
+`{warning, [NifInfo]}` with details about each native file found.
+
+```
+{ok, []} = ocibuild_release:check_for_native_code("/path/to/release").
+{warning, [#{app := <<"crypto">>, file := <<"crypto_nif.so">>}]} =
+    ocibuild_release:check_for_native_code("/path/to/release_with_nifs").
+```
+""".
+-spec check_for_native_code(file:filename()) ->
+    {ok, []} | {warning, [#{app := binary(), file := binary(), extension := binary()}]}.
+check_for_native_code(ReleasePath) ->
+    LibPath = filename:join(ReleasePath, "lib"),
+    case file:list_dir(LibPath) of
+        {ok, AppDirs} ->
+            NativeFiles = lists:flatmap(
+                fun(AppDir) ->
+                    find_native_files_in_app(LibPath, AppDir)
+                end,
+                AppDirs
+            ),
+            case NativeFiles of
+                [] -> {ok, []};
+                Files -> {warning, Files}
+            end;
+        {error, _} ->
+            {ok, []}
+    end.
+
+-doc """
+Validate that a release is suitable for multi-platform builds.
+
+For multi-platform builds (more than one platform specified):
+1. **Error** if bundled ERTS is detected - multi-platform requires ERTS from base image
+2. **Warning** if native code (NIFs) detected - may not be portable
+
+This function is universal for all BEAM languages.
+
+```
+ok = ocibuild_release:validate_multiplatform(ReleasePath, [Platform]).
+{error, bundled_erts} = ocibuild_release:validate_multiplatform(ReleasePath, [P1, P2]).
+```
+""".
+-spec validate_multiplatform(file:filename(), [ocibuild:platform()]) ->
+    ok | {error, {bundled_erts, binary()}}.
+validate_multiplatform(_ReleasePath, Platforms) when length(Platforms) =< 1 ->
+    %% Single platform builds don't need validation
+    ok;
+validate_multiplatform(ReleasePath, _Platforms) ->
+    case has_bundled_erts(ReleasePath) of
+        true ->
+            {error, {bundled_erts, erts_error_message()}};
+        false ->
+            %% Check for NIFs (warning only, don't block)
+            case check_for_native_code(ReleasePath) of
+                {warning, NifFiles} ->
+                    warn_about_nifs(NifFiles),
+                    ok;
+                {ok, []} ->
+                    ok
+            end
+    end.
+
+%% @private Find native files in an app's priv directory
+-spec find_native_files_in_app(file:filename(), string()) ->
+    [#{app := binary(), file := binary(), extension := binary()}].
+find_native_files_in_app(LibPath, AppDir) ->
+    PrivPath = filename:join([LibPath, AppDir, "priv"]),
+    case file:list_dir(PrivPath) of
+        {ok, Files} ->
+            NativeFiles = lists:filtermap(
+                fun(File) ->
+                    case is_native_file(File) of
+                        {true, Ext} ->
+                            AppName = extract_app_name(AppDir),
+                            {true, #{
+                                app => list_to_binary(AppName),
+                                file => list_to_binary(File),
+                                extension => Ext
+                            }};
+                        false ->
+                            false
+                    end
+                end,
+                Files
+            ),
+            %% Also check subdirectories of priv
+            SubDirs = [F || F <- Files, filelib:is_dir(filename:join(PrivPath, F))],
+            NestedFiles = lists:flatmap(
+                fun(SubDir) ->
+                    find_native_files_in_subdir(LibPath, AppDir, ["priv", SubDir])
+                end,
+                SubDirs
+            ),
+            NativeFiles ++ NestedFiles;
+        {error, _} ->
+            []
+    end.
+
+%% @private Find native files in subdirectories of priv
+-spec find_native_files_in_subdir(file:filename(), string(), [string()]) ->
+    [#{app := binary(), file := binary(), extension := binary()}].
+find_native_files_in_subdir(LibPath, AppDir, PathParts) ->
+    FullPath = filename:join([LibPath, AppDir | PathParts]),
+    case file:list_dir(FullPath) of
+        {ok, Files} ->
+            lists:filtermap(
+                fun(File) ->
+                    case is_native_file(File) of
+                        {true, Ext} ->
+                            AppName = extract_app_name(AppDir),
+                            RelFile = filename:join(PathParts ++ [File]),
+                            {true, #{
+                                app => list_to_binary(AppName),
+                                file => list_to_binary(RelFile),
+                                extension => Ext
+                            }};
+                        false ->
+                            false
+                    end
+                end,
+                Files
+            );
+        {error, _} ->
+            []
+    end.
+
+%% @private Check if a filename is a native shared library
+-spec is_native_file(string()) -> {true, binary()} | false.
+is_native_file(Filename) ->
+    case filename:extension(Filename) of
+        ".so" -> {true, ~".so"};
+        ".dll" -> {true, ~".dll"};
+        ".dylib" -> {true, ~".dylib"};
+        _ -> false
+    end.
+
+%% @private Extract app name from versioned directory (e.g., "crypto-1.0.0" -> "crypto")
+-spec extract_app_name(string()) -> string().
+extract_app_name(AppDir) ->
+    case string:split(AppDir, "-", trailing) of
+        [Name, _Version] ->
+            %% Check if it looks like a version (starts with digit)
+            case _Version of
+                [C | _] when C >= $0, C =< $9 -> Name;
+                _ -> AppDir
+            end;
+        _ ->
+            AppDir
+    end.
+
+%% @private Generate error message for bundled ERTS
+-spec erts_error_message() -> binary().
+erts_error_message() ->
+    <<
+        "Multi-platform builds require 'include_erts' set to false.\n"
+        "Found bundled ERTS in release directory.\n\n"
+        "For Elixir, update mix.exs:\n"
+        "  releases: [\n"
+        "    myapp: [\n"
+        "      include_erts: false,\n"
+        "      include_src: false\n"
+        "    ]\n"
+        "  ]\n\n"
+        "For Erlang, update rebar.config:\n"
+        "  {relx, [\n"
+        "    {include_erts, false}\n"
+        "  ]}.\n\n"
+        "Then use a base image with ERTS, e.g.:\n"
+        "  base_image: \"elixir:1.17-alpine\" or \"erlang:27-alpine\""
+    >>.
+
+%% @private Warn about native code that may not be portable
+-spec warn_about_nifs([#{app := binary(), file := binary(), extension := binary()}]) -> ok.
+warn_about_nifs(NifFiles) ->
+    io:format(standard_error, "~nWarning: Native code detected that may not be portable across platforms:~n", []),
+    lists:foreach(
+        fun(#{app := App, file := File}) ->
+            io:format(standard_error, "  - ~s: ~s~n", [App, File])
+        end,
+        NifFiles
+    ),
+    io:format(standard_error, "~nNIFs compiled for one architecture won't work on others.~n", []),
+    io:format(standard_error, "Consider using cross-compilation or Rust-based NIFs with multi-target support.~n~n", []),
+    ok.

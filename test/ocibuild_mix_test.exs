@@ -205,6 +205,119 @@ defmodule OcibuildMixTest do
     end
   end
 
+  describe "multi-platform support" do
+    test "detects bundled ERTS in release" do
+      tmp_dir = create_mock_release_with_erts()
+
+      try do
+        assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == true
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects no ERTS when not bundled" do
+      tmp_dir = create_mock_release()
+
+      try do
+        assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == false
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects native code .so files in priv directory" do
+      tmp_dir = create_mock_release_with_nif(".so")
+
+      try do
+        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+        assert length(nif_files) > 0
+        [nif_info | _] = nif_files
+        assert :maps.get(:extension, nif_info) == ".so"
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects native code .dll files in priv directory" do
+      tmp_dir = create_mock_release_with_nif(".dll")
+
+      try do
+        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+        assert length(nif_files) > 0
+        [nif_info | _] = nif_files
+        assert :maps.get(:extension, nif_info) == ".dll"
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects native code .dylib files in priv directory" do
+      tmp_dir = create_mock_release_with_nif(".dylib")
+
+      try do
+        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+        assert length(nif_files) > 0
+        [nif_info | _] = nif_files
+        assert :maps.get(:extension, nif_info) == ".dylib"
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "returns ok when no native code present" do
+      tmp_dir = create_mock_release()
+
+      try do
+        assert :ocibuild_release.check_for_native_code(to_charlist(tmp_dir)) == {:ok, []}
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "validate_multiplatform errors with bundled ERTS" do
+      tmp_dir = create_mock_release_with_erts()
+
+      try do
+        platforms = [
+          %{os: "linux", architecture: "amd64"},
+          %{os: "linux", architecture: "arm64"}
+        ]
+
+        result = :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms)
+        assert {:error, {:bundled_erts, _msg}} = result
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "validate_multiplatform succeeds without ERTS for multiple platforms" do
+      tmp_dir = create_mock_release()
+
+      try do
+        platforms = [
+          %{os: "linux", architecture: "amd64"},
+          %{os: "linux", architecture: "arm64"}
+        ]
+
+        assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "validate_multiplatform succeeds with ERTS for single platform" do
+      tmp_dir = create_mock_release_with_erts()
+
+      try do
+        platforms = [%{os: "linux", architecture: "amd64"}]
+        assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+  end
+
   # Cross-platform helpers
 
   defp temp_dir do
@@ -255,6 +368,22 @@ defmodule OcibuildMixTest do
     rel_path = Path.join(rel_dir, "myapp.rel")
     File.write!(rel_path, "{release, {\"myapp\", \"1.0.0\"}, ...}.")
 
+    tmp_dir
+  end
+
+  defp create_mock_release_with_erts do
+    tmp_dir = create_mock_release()
+    erts_dir = Path.join(tmp_dir, "erts-15.0")
+    File.mkdir_p!(Path.join(erts_dir, "bin"))
+    File.write!(Path.join([erts_dir, "bin", "beam.smp"]), "beam binary")
+    tmp_dir
+  end
+
+  defp create_mock_release_with_nif(extension) do
+    tmp_dir = create_mock_release()
+    priv_dir = Path.join([tmp_dir, "lib", "crypto-1.0.0", "priv"])
+    File.mkdir_p!(priv_dir)
+    File.write!(Path.join(priv_dir, "crypto_nif#{extension}"), "fake nif binary")
     tmp_dir
   end
 end

@@ -128,8 +128,14 @@ Note: OCI layout works with podman, skopeo, crane, buildah, and other OCI tools.
 save_tarball(Image, Path) ->
     save_tarball(Image, Path, #{}).
 
--spec save_tarball(ocibuild:image(), file:filename(), map()) -> ok | {error, term()}.
-save_tarball(Image, Path, Opts) ->
+-spec save_tarball(ocibuild:image() | [ocibuild:image()], file:filename(), map()) -> ok | {error, term()}.
+save_tarball(Images, Path, Opts) when is_list(Images), length(Images) > 1 ->
+    %% Multi-platform: save all images with an image index
+    save_tarball_multi(Images, Path, Opts);
+save_tarball([Image], Path, Opts) ->
+    %% Single image in list - treat as regular save
+    save_tarball(Image, Path, Opts);
+save_tarball(Image, Path, Opts) when is_map(Image) ->
     try
         Tag = maps:get(tag, Opts, ~"latest"),
 
@@ -182,6 +188,134 @@ save_tarball(Image, Path, Opts) ->
     catch
         error:Reason ->
             {error, Reason}
+    end.
+
+%% Save multiple platform images as a multi-platform tarball
+-spec save_tarball_multi([ocibuild:image()], file:filename(), map()) -> ok | {error, term()}.
+save_tarball_multi(Images, Path, Opts) ->
+    try
+        Tag = maps:get(tag, Opts, ~"latest"),
+
+        %% Build oci-layout
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+
+        %% Build each platform's manifest and collect blobs
+        {ManifestDescriptors, AllFiles} = build_platform_manifests(Images, []),
+
+        %% Build the image index
+        Index = build_multi_platform_index(ManifestDescriptors, Tag),
+        IndexJson = ocibuild_json:encode(Index),
+
+        %% Combine all files
+        Files = [
+            {~"oci-layout", OciLayout, ?MODE_FILE},
+            {~"index.json", IndexJson, ?MODE_FILE}
+        ] ++ AllFiles,
+
+        %% Create the tarball
+        TarData = ocibuild_tar:create(Files),
+        Compressed = zlib:gzip(TarData),
+
+        ok = file:write_file(Path, Compressed)
+    catch
+        error:Reason ->
+            {error, Reason}
+    end.
+
+%% Build manifests for each platform and collect all blob files
+-spec build_platform_manifests([ocibuild:image()], list()) ->
+    {[{ocibuild:platform(), binary(), non_neg_integer()}], [{binary(), binary(), integer()}]}.
+build_platform_manifests([], Acc) ->
+    %% Reverse to maintain platform order, deduplicate blob files
+    {ManifestDescs, FilesList} = lists:unzip(lists:reverse(Acc)),
+    AllFiles = lists:flatten(FilesList),
+    %% Deduplicate files by path (layers may be shared between platforms)
+    UniqueFiles = deduplicate_files(AllFiles),
+    {ManifestDescs, UniqueFiles};
+build_platform_manifests([Image | Rest], Acc) ->
+    Platform = maps:get(platform, Image, #{os => ~"linux", architecture => ~"amd64"}),
+
+    %% Build config blob
+    {ConfigJson, ConfigDigest} = build_config_blob(Image),
+
+    %% Build layer descriptors
+    LayerDescriptors = build_layer_descriptors(Image),
+    Annotations = maps:get(annotations, Image, #{}),
+
+    %% Build manifest
+    {ManifestJson, ManifestDigest} =
+        ocibuild_manifest:build(
+            #{
+                ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+                ~"digest" => ConfigDigest,
+                ~"size" => byte_size(ConfigJson)
+            },
+            LayerDescriptors,
+            Annotations
+        ),
+
+    ManifestDesc = {Platform, ManifestDigest, byte_size(ManifestJson)},
+
+    %% Collect files for this platform
+    BaseLayerFiles = build_base_layers(Image),
+    PlatformFiles = [
+        {blob_path(ConfigDigest), ConfigJson, ?MODE_FILE},
+        {blob_path(ManifestDigest), ManifestJson, ?MODE_FILE}
+    ] ++
+        [
+            {blob_path(Digest), Data, ?MODE_FILE}
+         || #{digest := Digest, data := Data} <- lists:reverse(maps:get(layers, Image, []))
+        ] ++
+        BaseLayerFiles,
+
+    build_platform_manifests(Rest, [{ManifestDesc, PlatformFiles} | Acc]).
+
+%% Deduplicate files by path (first occurrence wins)
+-spec deduplicate_files([{binary(), binary(), integer()}]) -> [{binary(), binary(), integer()}].
+deduplicate_files(Files) ->
+    {_, Unique} = lists:foldl(
+        fun({Path, _, _} = File, {Seen, Acc}) ->
+            case sets:is_element(Path, Seen) of
+                true -> {Seen, Acc};
+                false -> {sets:add_element(Path, Seen), [File | Acc]}
+            end
+        end,
+        {sets:new(), []},
+        Files
+    ),
+    lists:reverse(Unique).
+
+%% Build a multi-platform image index
+-spec build_multi_platform_index([{ocibuild:platform(), binary(), non_neg_integer()}], binary()) -> map().
+build_multi_platform_index(ManifestDescriptors, Tag) ->
+    Manifests = [
+        #{
+            ~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
+            ~"digest" => Digest,
+            ~"size" => Size,
+            ~"platform" => build_platform_json(Platform)
+        }
+     || {Platform, Digest, Size} <- ManifestDescriptors
+    ],
+    #{
+        ~"schemaVersion" => 2,
+        ~"mediaType" => ~"application/vnd.oci.image.index.v1+json",
+        ~"manifests" => Manifests,
+        ~"annotations" => #{
+            ~"org.opencontainers.image.ref.name" => Tag
+        }
+    }.
+
+%% Build platform JSON for image index
+-spec build_platform_json(ocibuild:platform()) -> map().
+build_platform_json(Platform) ->
+    Base = #{
+        ~"os" => maps:get(os, Platform),
+        ~"architecture" => maps:get(architecture, Platform)
+    },
+    case maps:find(variant, Platform) of
+        {ok, Variant} -> Base#{~"variant" => Variant};
+        error -> Base
     end.
 
 %%%===================================================================

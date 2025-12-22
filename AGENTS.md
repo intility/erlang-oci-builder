@@ -12,22 +12,22 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 
 ### Feature Comparison with Similar Tools
 
-| Feature                       | ocibuild          | ko (Go)     | jib (Java)        | .NET Containers |
-|-------------------------------|-------------------|-------------|-------------------|-----------------|
-| No Docker required            | ✅                | ✅          | ✅                | ✅              |
-| Push to registries            | ✅                | ✅          | ✅                | ✅              |
-| Layer caching                 | ✅                | ✅          | ✅                | ✅              |
-| Tarball export                | ✅                | ✅          | ✅                | ✅              |
-| OCI annotations               | ✅                | ✅          | ✅                | ✅              |
-| Build system integration      | ✅ (rebar3/Mix)   | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
-| **Multi-platform images**     | 🔜 Planned (P1)   | ✅          | ✅                | ✅              |
-| **Reproducible builds**       | 🔜 Planned (P2)   | ✅          | ✅                | ✅              |
-| **Smart dependency layering** | 🔜 Planned (P3)   | N/A         | ✅                | ✅              |
-| **Non-root by default**       | 🔜 Planned (P4)   | ✅          | ❌                | ✅              |
-| **Auto OCI annotations**      | 🔜 Planned (P5)   | ✅          | ✅                | ✅              |
-| **SBOM generation**           | 🔜 Planned (P6)   | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
-| **Image signing**             | 🔜 Planned (P7)   | ✅ (cosign) | ❌                | ❌              |
-| Zstd compression              | ❌ Future         | ✅          | ❌                | ❌              |
+| Feature                       | ocibuild           | ko (Go)     | jib (Java)        | .NET Containers |
+|-------------------------------|--------------------|-------------|-------------------|-----------------|
+| No Docker required            | ✅                 | ✅          | ✅                | ✅              |
+| Push to registries            | ✅                 | ✅          | ✅                | ✅              |
+| Layer caching                 | ✅                 | ✅          | ✅                | ✅              |
+| Tarball export                | ✅                 | ✅          | ✅                | ✅              |
+| OCI annotations               | ✅                 | ✅          | ✅                | ✅              |
+| Build system integration      | ✅ (rebar3/Mix)    | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
+| **Multi-platform images**     | ✅                 | ✅          | ✅                | ✅              |
+| **Reproducible builds**       | 🔜 Planned (P2)    | ✅          | ✅                | ✅              |
+| **Smart dependency layering** | 🔜 Planned (P3)    | N/A         | ✅                | ✅              |
+| **Non-root by default**       | 🔜 Planned (P4)    | ✅          | ❌                | ✅              |
+| **Auto OCI annotations**      | 🔜 Planned (P5)    | ✅          | ✅                | ✅              |
+| **SBOM generation**           | 🔜 Planned (P6)    | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
+| **Image signing**             | 🔜 Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
+| Zstd compression              | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
 
 Legend: ✅ Implemented | 🔜 Planned (P# = Priority) | ❌ Not implemented
 
@@ -449,9 +449,10 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 | ocibuild_registry | ✅ Tested (unit + integration) |
 | ocibuild_cache    | ✅ Tested                      |
 | ocibuild_release  | ✅ Tested                      |
+| ocibuild_index    | ✅ Tested                      |
 | ocibuild (API)    | ✅ Tested                      |
 
-**Total: 182 Erlang tests + 11 Elixir tests**
+**Total: 232 Erlang tests + 20 Elixir tests**
 
 ---
 
@@ -459,11 +460,11 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 
 Always update this file with new status when we have completed a roadmap task.
 
-### Priority 1: Multi-Platform Images
+### Priority 1: Multi-Platform Images ✅ IMPLEMENTED
 
-**Impact:** Critical for production deployments
+**Status:** Fully implemented and tested
 
-All competing tools support building `linux/amd64` + `linux/arm64` images. This is essential for:
+Supports building `linux/amd64` + `linux/arm64` images. Essential for:
 - Kubernetes clusters with mixed node architectures
 - Apple Silicon development → Linux deployment
 - AWS Graviton / Azure ARM instances
@@ -585,7 +586,22 @@ ok = ocibuild:push_multi(Images2, Registry, Repo, Tag, Auth).
 ```bash
 rebar3 ocibuild --push ghcr.io/myorg --platform linux/amd64,linux/arm64
 mix ocibuild --push ghcr.io/myorg --platform linux/amd64,linux/arm64
+
+# Multi-platform tarball (OCI image index)
+rebar3 ocibuild -t myapp:1.0.0 --platform linux/amd64,linux/arm64
 ```
+
+**Implementation Summary:**
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Platform types | `ocibuild.erl` | `parse_platform/1`, `parse_platforms/1` |
+| OCI Image Index | `ocibuild_index.erl` | `create/1`, `to_json/1`, `select_manifest/2` |
+| Validation | `ocibuild_release.erl` | `has_bundled_erts/1`, `check_for_native_code/1`, `validate_multiplatform/2` |
+| Registry | `ocibuild_registry.erl` | `pull_manifests_for_platforms/5`, `push_multi/6` |
+| Public API | `ocibuild.erl` | Extended `from/3` with `platforms` option, `push_multi/4,5` |
+| Layout | `ocibuild_layout.erl` | Multi-platform tarball support with OCI image index |
+| CLI | `ocibuild_rebar3.erl`, `lib/mix/tasks/ocibuild.ex` | `--platform/-P` option |
 
 ### Priority 2: Reproducible Builds
 

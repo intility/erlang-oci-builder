@@ -19,6 +19,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `-c, --cmd` - Release start command (default: "start"). Use "daemon" for background
     * `-d, --desc` - Image description (OCI manifest annotation)
     * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
+    * `-P, --platform` - Target platforms (e.g., linux/amd64 or linux/amd64,linux/arm64)
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
     * `--chunk-size` - Chunk size in MB for uploads (default: 5)
@@ -63,7 +64,7 @@ defmodule Mix.Tasks.Ocibuild do
   def run(args) do
     {opts, _remaining, _invalid} =
       OptionParser.parse(args,
-        aliases: [t: :tag, p: :push, o: :output, c: :cmd, d: :desc],
+        aliases: [t: :tag, p: :push, o: :output, c: :cmd, d: :desc, P: :platform],
         switches: [
           tag: :string,
           output: :string,
@@ -72,7 +73,8 @@ defmodule Mix.Tasks.Ocibuild do
           release: :string,
           cmd: :string,
           desc: :string,
-          chunk_size: :integer
+          chunk_size: :integer,
+          platform: :string
         ]
       )
 
@@ -145,7 +147,8 @@ defmodule Mix.Tasks.Ocibuild do
       tag: get_tag(opts, ocibuild_config, release_name, config[:version]) |> to_binary(),
       output: get_opt_binary(opts, :output),
       push: get_opt_binary(opts, :push),
-      chunk_size: get_chunk_size(opts)
+      chunk_size: get_chunk_size(opts),
+      platform: get_platform(opts, ocibuild_config)
     }
   end
 
@@ -160,6 +163,14 @@ defmodule Mix.Tasks.Ocibuild do
       size ->
         IO.warn("--chunk-size #{size} MB out of range (1-100), using default")
         nil
+    end
+  end
+
+  defp get_platform(opts, ocibuild_config) do
+    case opts[:platform] || Keyword.get(ocibuild_config, :platform) do
+      nil -> nil
+      platform when is_binary(platform) -> platform
+      platform when is_list(platform) -> to_binary(platform)
     end
   end
 
@@ -208,6 +219,13 @@ defmodule Mix.Tasks.Ocibuild do
   defp format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
   defp format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
   defp format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"
+
+  defp format_error({:bundled_erts, message}),
+    do: "Multi-platform build failed: #{message}"
+
+  defp format_error({:nif_warning, files}),
+    do: "Warning: Native code detected that may not be portable: #{inspect(files)}"
+
   defp format_error(reason), do: "OCI build error: #{inspect(reason)}"
 
   # Convert Elixir map to Erlang-compatible map with binary keys
