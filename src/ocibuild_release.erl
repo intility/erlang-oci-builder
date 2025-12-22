@@ -1282,25 +1282,83 @@ is_native_file(Filename) ->
     end.
 
 %% @private Extract app name from versioned directory (e.g., "crypto-1.0.0" -> "crypto")
-%% Uses heuristic: version must start with digit AND contain a dot to avoid
-%% incorrectly stripping app names like "my-app-2"
+%%
+%% OTP release directories use the format "appname-version" where version follows
+%% semver-like patterns: "1.0.0", "2.10.0", "1.0.0-rc1", "5.2", etc.
+%%
+%% Examples:
+%%   "cowboy-2.10.0" -> "cowboy"
+%%   "my_app-1.0.0"  -> "my_app"
+%%   "my-app-2"      -> "my-app-2" (not a valid version, no dot)
+%%   "jsx-3.1.0"     -> "jsx"
 -spec extract_app_name(string()) -> string().
 extract_app_name(AppDir) ->
     case string:split(AppDir, "-", trailing) of
         [Name, Version] ->
-            %% Check if it looks like a version (starts with digit AND contains a dot)
-            case Version of
-                [C | _] when C >= $0, C =< $9 ->
-                    case lists:member($., Version) of
-                        true -> Name;
-                        false -> AppDir
-                    end;
-                _ ->
-                    AppDir
+            case is_version_string(Version) of
+                true -> Name;
+                false -> AppDir
             end;
         _ ->
             AppDir
     end.
+
+%% @private Check if a string looks like a version number
+%%
+%% Valid versions must:
+%% 1. Start with a digit
+%% 2. Have format like "X.Y" or "X.Y.Z" (major.minor or major.minor.patch)
+%% 3. May have pre-release suffix like "-rc1", "-beta", "-alpha.1"
+%% 4. May have build metadata like "+build.123"
+-spec is_version_string(string()) -> boolean().
+is_version_string([]) ->
+    false;
+is_version_string([C | _] = Version) when C >= $0, C =< $9 ->
+    %% Starts with digit, now check for valid version pattern
+    %% Strip any pre-release (-rc1) or build metadata (+build) suffix first
+    BaseVersion = strip_version_suffix(Version),
+    %% Must contain at least one dot and have numeric segments
+    case string:split(BaseVersion, ".", all) of
+        [_Single] ->
+            %% No dot found - not a valid version (e.g., "2" alone)
+            false;
+        Segments when length(Segments) >= 2 ->
+            %% Check that at least the first two segments are numeric
+            lists:all(fun is_numeric_segment/1, lists:sublist(Segments, 2));
+        _ ->
+            false
+    end;
+is_version_string(_) ->
+    false.
+
+%% @private Strip pre-release and build metadata suffixes from version
+%% "1.0.0-rc1" -> "1.0.0", "1.0.0+build" -> "1.0.0"
+-spec strip_version_suffix(string()) -> string().
+strip_version_suffix(Version) ->
+    %% Find first occurrence of - or + that's not at the start
+    case find_suffix_start(Version, 1) of
+        0 -> Version;
+        Pos -> lists:sublist(Version, Pos - 1)
+    end.
+
+%% @private Find position of first - or + after initial version digits
+-spec find_suffix_start(string(), pos_integer()) -> non_neg_integer().
+find_suffix_start([], _Pos) ->
+    0;
+find_suffix_start([$- | _], Pos) ->
+    %% Only treat as suffix if we've seen at least one dot
+    Pos;
+find_suffix_start([$+ | _], Pos) ->
+    Pos;
+find_suffix_start([_ | Rest], Pos) ->
+    find_suffix_start(Rest, Pos + 1).
+
+%% @private Check if a string segment is numeric (all digits)
+-spec is_numeric_segment(string()) -> boolean().
+is_numeric_segment([]) ->
+    false;
+is_numeric_segment(Segment) ->
+    lists:all(fun(C) -> C >= $0 andalso C =< $9 end, Segment).
 
 %% @private Generate error message for bundled ERTS
 -spec erts_error_message() -> binary().

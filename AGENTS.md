@@ -50,6 +50,7 @@ Legend: ✅ Implemented | 🔜 Planned (P# = Priority) | ❌ Not implemented
 ### Code style
 
 - Always prefer using `maybe` instead of deeply nested `case...of`
+- Prefer Markdown style comments instead of EDoc (deprecated).
 
 ---
 
