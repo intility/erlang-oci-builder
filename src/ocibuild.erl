@@ -182,15 +182,17 @@ from({_Registry, _Repo, _Tag} = Ref, Auth, Opts) ->
 from_single_platform({Registry, Repo, Tag} = Ref, Auth, Opts) ->
     case ocibuild_registry:pull_manifest(Registry, Repo, Tag, Auth, Opts) of
         {ok, Manifest, Config} ->
-            Platform = case maps:find(platform, Opts) of
-                {ok, P} -> P;
-                error ->
-                    %% Extract from config if available
-                    #{
-                        os => maps:get(~"os", Config, ~"linux"),
-                        architecture => maps:get(~"architecture", Config, ~"amd64")
-                    }
-            end,
+            Platform =
+                case maps:find(platform, Opts) of
+                    {ok, P} ->
+                        P;
+                    error ->
+                        %% Extract from config if available
+                        #{
+                            os => maps:get(~"os", Config, ~"linux"),
+                            architecture => maps:get(~"architecture", Config, ~"amd64")
+                        }
+                end,
             {ok, #{
                 base => Ref,
                 base_manifest => Manifest,

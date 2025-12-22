@@ -25,7 +25,7 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
 %% Exports for testing
 -ifdef(TEST).
--export([format_size/1, blob_path/1, build_index/3]).
+-export([blob_path/1, build_index/3]).
 -endif.
 
 %% Common file permission modes
@@ -128,7 +128,8 @@ Note: OCI layout works with podman, skopeo, crane, buildah, and other OCI tools.
 save_tarball(Image, Path) ->
     save_tarball(Image, Path, #{}).
 
--spec save_tarball(ocibuild:image() | [ocibuild:image()], file:filename(), map()) -> ok | {error, term()}.
+-spec save_tarball(ocibuild:image() | [ocibuild:image()], file:filename(), map()) ->
+    ok | {error, term()}.
 save_tarball(Images, Path, Opts) when is_list(Images), length(Images) > 1 ->
     %% Multi-platform: save all images with an image index
     save_tarball_multi(Images, Path, Opts);
@@ -207,10 +208,11 @@ save_tarball_multi(Images, Path, Opts) ->
         IndexJson = ocibuild_json:encode(Index),
 
         %% Combine all files
-        Files = [
-            {~"oci-layout", OciLayout, ?MODE_FILE},
-            {~"index.json", IndexJson, ?MODE_FILE}
-        ] ++ AllFiles,
+        Files =
+            [
+                {~"oci-layout", OciLayout, ?MODE_FILE},
+                {~"index.json", IndexJson, ?MODE_FILE}
+            ] ++ AllFiles,
 
         %% Create the tarball
         TarData = ocibuild_tar:create(Files),
@@ -258,15 +260,16 @@ build_platform_manifests([Image | Rest], Acc) ->
 
     %% Collect files for this platform
     BaseLayerFiles = build_base_layers(Image),
-    PlatformFiles = [
-        {blob_path(ConfigDigest), ConfigJson, ?MODE_FILE},
-        {blob_path(ManifestDigest), ManifestJson, ?MODE_FILE}
-    ] ++
+    PlatformFiles =
         [
-            {blob_path(Digest), Data, ?MODE_FILE}
-         || #{digest := Digest, data := Data} <- lists:reverse(maps:get(layers, Image, []))
+            {blob_path(ConfigDigest), ConfigJson, ?MODE_FILE},
+            {blob_path(ManifestDigest), ManifestJson, ?MODE_FILE}
         ] ++
-        BaseLayerFiles,
+            [
+                {blob_path(Digest), Data, ?MODE_FILE}
+             || #{digest := Digest, data := Data} <- lists:reverse(maps:get(layers, Image, []))
+            ] ++
+            BaseLayerFiles,
 
     build_platform_manifests(Rest, [{ManifestDesc, PlatformFiles} | Acc]).
 
@@ -286,7 +289,8 @@ deduplicate_files(Files) ->
     lists:reverse(Unique).
 
 %% Build a multi-platform image index
--spec build_multi_platform_index([{ocibuild:platform(), binary(), non_neg_integer()}], binary()) -> map().
+-spec build_multi_platform_index([{ocibuild:platform(), binary(), non_neg_integer()}], binary()) ->
+    map().
 build_multi_platform_index(ManifestDescriptors, Tag) ->
     Manifests = [
         #{
@@ -354,11 +358,15 @@ build_base_layers(_Image) ->
 get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
     case ocibuild_cache:get(Digest) of
         {ok, CachedData} ->
-            io:format("  Layer ~B/~B cached (~s)~n", [Index, TotalLayers, format_size(Size)]),
+            io:format("  Layer ~B/~B cached (~s)~n", [
+                Index, TotalLayers, ocibuild_release:format_bytes(Size)
+            ]),
             CachedData;
         {error, _} ->
             %% Not in cache or corrupted, download from registry
-            io:format("  Downloading layer ~B/~B (~s)...~n", [Index, TotalLayers, format_size(Size)]),
+            io:format("  Downloading layer ~B/~B (~s)...~n", [
+                Index, TotalLayers, ocibuild_release:format_bytes(Size)
+            ]),
             case pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, 3) of
                 {ok, CompressedData} ->
                     io:format("  Layer ~B/~B complete~n", [Index, TotalLayers]),
@@ -388,17 +396,6 @@ pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, MaxRetries) ->
         fun() -> ocibuild_registry:pull_blob(Registry, Repo, Digest, Auth, Opts) end,
         MaxRetries
     ).
-
-%% Format byte size for display
--spec format_size(non_neg_integer()) -> string().
-format_size(Bytes) when Bytes < 1024 ->
-    io_lib:format("~B B", [Bytes]);
-format_size(Bytes) when Bytes < 1024 * 1024 ->
-    io_lib:format("~.1f KB", [Bytes / 1024]);
-format_size(Bytes) when Bytes < 1024 * 1024 * 1024 ->
-    io_lib:format("~.1f MB", [Bytes / (1024 * 1024)]);
-format_size(Bytes) ->
-    io_lib:format("~.2f GB", [Bytes / (1024 * 1024 * 1024)]).
 
 %% Build the config JSON blob
 -spec build_config_blob(ocibuild:image()) -> {binary(), binary()}.

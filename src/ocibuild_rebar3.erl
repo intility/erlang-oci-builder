@@ -241,16 +241,19 @@ get_push_registry(Args) ->
         Registry -> list_to_binary(Registry)
     end.
 
-%% @private Get chunk size from args (validated to 1-100 MB)
+%% @private Get chunk size from args (validated to MIN-MAX MB)
 get_chunk_size(Args) ->
+    MinMB = ocibuild_adapter:min_chunk_size_mb(),
+    MaxMB = ocibuild_adapter:max_chunk_size_mb(),
     case proplists:get_value(chunk_size, Args) of
         undefined ->
             undefined;
-        Size when is_integer(Size), Size >= 1, Size =< 100 ->
+        Size when is_integer(Size), Size >= MinMB, Size =< MaxMB ->
             Size * 1024 * 1024;
         Size ->
             io:format(
-                "Warning: chunk_size ~p MB out of range (1-100), using default~n", [Size]
+                "Warning: chunk_size ~p MB out of range (~B-~B), using default~n",
+                [Size, MinMB, MaxMB]
             ),
             undefined
     end.

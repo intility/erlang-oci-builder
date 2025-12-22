@@ -25,9 +25,8 @@ Security features:
 
 %% Public API - Image Building
 -export([
-    build_image/7,
-    build_image/8,
-    build_image/9
+    build_image/2,
+    build_image/3
 ]).
 
 %% Public API - Output Operations (save/push)
@@ -70,7 +69,8 @@ Security features:
     to_binary/1,
     to_container_path/1,
     get_file_mode/1,
-    make_relative_path/2
+    make_relative_path/2,
+    is_nil_or_undefined/1
 ]).
 
 %% Exports for testing
@@ -151,7 +151,9 @@ run(AdapterModule, AdapterState, Opts) ->
                         %% Collect files from release
                         case collect_release_files(ReleasePath) of
                             {ok, Files} ->
-                                AdapterModule:info("Collected ~p files from release", [length(Files)]),
+                                AdapterModule:info("Collected ~p files from release", [
+                                    length(Files)
+                                ]),
 
                                 %% Build the image(s)
                                 AdapterModule:info("Base image: ~s", [BaseImage]),
@@ -159,37 +161,37 @@ run(AdapterModule, AdapterState, Opts) ->
 
                                 ProgressFn = make_progress_callback(),
                                 PullAuth = get_pull_auth(),
-                                BuildOpts = #{auth => PullAuth, progress => ProgressFn},
+
+                                %% Consolidate all build options
+                                BuildOpts = #{
+                                    release_name => ReleaseName,
+                                    workdir => Workdir,
+                                    env => EnvMap,
+                                    expose => ExposePorts,
+                                    labels => Labels,
+                                    cmd => Cmd,
+                                    description => Description,
+                                    auth => PullAuth,
+                                    progress => ProgressFn
+                                },
 
                                 %% Build single or multi-platform image
                                 Result = build_platform_images(
-                                    BaseImage,
-                                    Files,
-                                    ReleaseName,
-                                    Workdir,
-                                    EnvMap,
-                                    ExposePorts,
-                                    Labels,
-                                    Cmd,
-                                    Description,
-                                    Platforms,
-                                    BuildOpts
+                                    BaseImage, Files, Platforms, BuildOpts
                                 ),
                                 clear_progress_line(),
 
                                 case Result of
                                     {ok, Images} ->
                                         %% Output the image(s) (save and optionally push)
-                                        do_output(
-                                            AdapterModule,
-                                            AdapterState,
-                                            Images,
-                                            Tag,
-                                            OutputOpt,
-                                            PushRegistry,
-                                            ChunkSize,
-                                            Platforms
-                                        );
+                                        OutputOpts = #{
+                                            tag => Tag,
+                                            output => OutputOpt,
+                                            push => PushRegistry,
+                                            chunk_size => ChunkSize,
+                                            platforms => Platforms
+                                        },
+                                        do_output(AdapterModule, AdapterState, Images, OutputOpts);
                                     {error, BuildError} ->
                                         {error, {build_failed, BuildError}}
                                 end;
@@ -211,15 +213,19 @@ run(AdapterModule, AdapterState, Opts) ->
 
 %% @private Parse platform option string into list of platforms
 -spec parse_platform_option(binary() | undefined | nil) -> [ocibuild:platform()].
-parse_platform_option(undefined) -> [];
-parse_platform_option(nil) -> [];
-parse_platform_option(<<>>) -> [];
+parse_platform_option(undefined) ->
+    [];
+parse_platform_option(nil) ->
+    [];
+parse_platform_option(<<>>) ->
+    [];
 parse_platform_option(PlatformStr) when is_binary(PlatformStr) ->
     case ocibuild:parse_platforms(PlatformStr) of
         {ok, Platforms} -> Platforms;
         {error, _} -> []
     end;
-parse_platform_option(_) -> [].
+parse_platform_option(_) ->
+    [].
 
 %% @private Validate platform requirements (ERTS check, NIF warning)
 -spec validate_platform_requirements(module(), file:filename(), [ocibuild:platform()]) ->
@@ -236,80 +242,52 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
     validate_multiplatform(ReleasePath, Platforms).
 
 %% @private Build image(s) for specified platforms
+%%
+%% Opts must contain: release_name, workdir, env, expose, labels, cmd
+%% Optional: description, auth, progress
 -spec build_platform_images(
-    binary(),
-    [{binary(), binary(), non_neg_integer()}],
-    atom() | string(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map(),
-    binary(),
-    binary() | undefined,
-    [ocibuild:platform()],
-    map()
+    BaseImage :: binary(),
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    Platforms :: [ocibuild:platform()],
+    Opts :: map()
 ) -> {ok, ocibuild:image() | [ocibuild:image()]} | {error, term()}.
-build_platform_images(
-    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, [], BuildOpts
-) ->
+build_platform_images(BaseImage, Files, [], Opts) ->
     %% No platforms specified - single platform build
-    build_single_platform_image(
-        BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, BuildOpts
-    );
-build_platform_images(
-    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, [_SinglePlatform], BuildOpts
-) ->
+    build_single_platform_image(BaseImage, Files, Opts);
+build_platform_images(BaseImage, Files, [_SinglePlatform], Opts) ->
     %% Single platform specified - use single platform build path
-    build_single_platform_image(
-        BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, BuildOpts
-    );
-build_platform_images(
-    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, Platforms, BuildOpts
-) when length(Platforms) > 1 ->
+    build_single_platform_image(BaseImage, Files, Opts);
+build_platform_images(BaseImage, Files, Platforms, Opts) when length(Platforms) > 1 ->
     %% Multi-platform build - use ocibuild:from/3 with platforms option
-    PullAuth = maps:get(auth, BuildOpts, #{}),
-    ProgressFn = maps:get(progress, BuildOpts, fun(_, _) -> ok end),
+    PullAuth = maps:get(auth, Opts, #{}),
+    ProgressFn = maps:get(progress, Opts, fun(_) -> ok end),
 
     %% Pass platform maps via the platforms option in ocibuild:from/3
     case ocibuild:from(BaseImage, PullAuth, #{progress => ProgressFn, platforms => Platforms}) of
         {ok, BaseImages} when is_list(BaseImages) ->
             %% Apply release files and configuration to each platform image
-            ConfiguredImages = lists:map(
-                fun(BaseImg) ->
-                    configure_release_image(
-                        BaseImg, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description
-                    )
-                end,
-                BaseImages
-            ),
+            ConfiguredImages = [
+                configure_release_image(BaseImg, Files, Opts)
+             || BaseImg <- BaseImages
+            ],
             {ok, ConfiguredImages};
         {ok, SingleImage} ->
             %% Fallback: got single image, configure it
-            Image = configure_release_image(
-                SingleImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description
-            ),
+            Image = configure_release_image(SingleImage, Files, Opts),
             {ok, [Image]};
         {error, _} = Error ->
             Error
     end.
 
-%% @private Build a single platform image using build_image/9
+%% @private Build a single platform image using build_image/3
 -spec build_single_platform_image(
-    binary(),
-    [{binary(), binary(), non_neg_integer()}],
-    atom() | string(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map(),
-    binary(),
-    binary() | undefined,
-    map()
+    BaseImage :: binary(),
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    Opts :: map()
 ) -> {ok, ocibuild:image()} | {error, term()}.
-build_single_platform_image(
-    BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description, BuildOpts
-) ->
-    case build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, BuildOpts) of
+build_single_platform_image(BaseImage, Files, Opts) ->
+    Description = maps:get(description, Opts, undefined),
+    case build_image(BaseImage, Files, Opts) of
         {ok, Image0} ->
             Image = add_description(Image0, Description),
             {ok, Image};
@@ -326,18 +304,22 @@ format_platform(#{os := OS, architecture := Arch} = Platform) ->
     end.
 
 %% @private Configure a release image with files and settings
+%%
+%% Opts: release_name, workdir, env, expose, labels, cmd, description
 -spec configure_release_image(
-    ocibuild:image(),
-    [{binary(), binary(), non_neg_integer()}],
-    atom() | string(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map(),
-    binary(),
-    binary() | undefined
+    Image :: ocibuild:image(),
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    Opts :: map()
 ) -> ocibuild:image().
-configure_release_image(Image0, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Description) ->
+configure_release_image(Image0, Files, Opts) ->
+    ReleaseName = maps:get(release_name, Opts, <<"app">>),
+    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    EnvMap = maps:get(env, Opts, #{}),
+    ExposePorts = maps:get(expose, Opts, []),
+    Labels = maps:get(labels, Opts, #{}),
+    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    Description = maps:get(description, Opts, undefined),
+
     %% Add release layer
     Image1 = ocibuild:add_layer(Image0, Files),
 
@@ -363,27 +345,26 @@ configure_release_image(Image0, Files, ReleaseName, Workdir, EnvMap, ExposePorts
 
 %% @private Output the image (save and optionally push)
 %% Handles both single image and list of images (multi-platform)
+%%
+%% Opts: tag, output, push, chunk_size, platforms
 -spec do_output(
-    module(),
-    term(),
-    ocibuild:image() | [ocibuild:image()],
-    binary(),
-    binary() | undefined,
-    binary() | undefined,
-    pos_integer() | undefined,
-    [ocibuild:platform()]
+    AdapterModule :: module(),
+    AdapterState :: term(),
+    Images :: ocibuild:image() | [ocibuild:image()],
+    Opts :: map()
 ) -> {ok, term()} | {error, term()}.
-do_output(AdapterModule, AdapterState, Images, Tag, OutputOpt, PushRegistry, ChunkSize, Platforms) ->
-    %% Determine output path
-    %% Handle both undefined (Erlang) and nil (Elixir) for missing values
+do_output(AdapterModule, AdapterState, Images, Opts) ->
+    Tag = maps:get(tag, Opts),
+    OutputOpt = maps:get(output, Opts, undefined),
+    PushRegistry = maps:get(push, Opts, undefined),
+    ChunkSize = maps:get(chunk_size, Opts, undefined),
+    Platforms = maps:get(platforms, Opts, []),
+
+    %% Determine output path (handle both Erlang undefined and Elixir nil)
     OutputPath =
-        case OutputOpt of
-            undefined ->
-                default_output_path(Tag);
-            nil ->
-                default_output_path(Tag);
-            Path ->
-                binary_to_list(Path)
+        case is_nil_or_undefined(OutputOpt) of
+            true -> default_output_path(Tag);
+            false -> binary_to_list(OutputOpt)
         end,
 
     %% Determine if this is multi-platform
@@ -400,33 +381,28 @@ do_output(AdapterModule, AdapterState, Images, Tag, OutputOpt, PushRegistry, Chu
 
     %% For multi-platform, use ocibuild:save with list of images
     %% For single platform, use single image
-    SaveResult = case Images of
-        [SingleImage] ->
-            save_image(SingleImage, OutputPath, Tag);
-        ImageList when is_list(ImageList) ->
-            save_multi_image(ImageList, OutputPath, Tag);
-        SingleImage ->
-            save_image(SingleImage, OutputPath, Tag)
-    end,
+    SaveResult =
+        case Images of
+            [SingleImage] ->
+                save_image(SingleImage, OutputPath, Tag);
+            ImageList when is_list(ImageList) ->
+                save_multi_image(ImageList, OutputPath, Tag);
+            SingleImage ->
+                save_image(SingleImage, OutputPath, Tag)
+        end,
 
     case SaveResult of
         ok ->
             AdapterModule:info("Image saved successfully", []),
 
-            %% Push if requested
-            %% Handle both undefined (Erlang) and nil (Elixir), and empty binary
-            case PushRegistry of
-                undefined ->
+            %% Push if requested (handle both Erlang undefined and Elixir nil)
+            case is_nil_or_undefined(PushRegistry) orelse PushRegistry =:= <<>> of
+                true ->
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
-                nil ->
-                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
-                    {ok, AdapterState};
-                <<>> ->
-                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
-                    {ok, AdapterState};
-                _ ->
-                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, ChunkSize)
+                false ->
+                    PushOpts = #{chunk_size => ChunkSize},
+                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
             {error, {save_failed, SaveError}}
@@ -458,42 +434,46 @@ default_output_path(Tag) ->
 
 %% @private Push image(s) to registry
 %% Handles both single image and list of images (multi-platform)
+%%
+%% Opts: chunk_size
 -spec do_push(
-    module(),
-    term(),
-    ocibuild:image() | [ocibuild:image()],
-    binary(),
-    binary(),
-    pos_integer() | undefined
+    AdapterModule :: module(),
+    AdapterState :: term(),
+    Images :: ocibuild:image() | [ocibuild:image()],
+    Tag :: binary(),
+    Registry :: binary(),
+    Opts :: map()
 ) -> {ok, term()} | {error, term()}.
-do_push(AdapterModule, AdapterState, Images, Tag, Registry, ChunkSize) ->
+do_push(AdapterModule, AdapterState, Images, Tag, Registry, Opts) ->
     {Repo, ImageTag} = parse_tag(Tag),
     Auth = get_push_auth(),
+    ChunkSize = maps:get(chunk_size, Opts, undefined),
 
-    %% Build push options
-    %% ChunkSize is expected to be in bytes already (or undefined/nil)
+    %% Build push options (ChunkSize is expected to be in bytes already or undefined/nil)
     PushOpts =
-        case ChunkSize of
-            undefined -> #{};
-            nil -> #{};
-            Size when is_integer(Size), Size > 0 -> #{chunk_size => Size};
-            _ -> #{}
+        case is_nil_or_undefined(ChunkSize) of
+            true -> #{};
+            false when is_integer(ChunkSize), ChunkSize > 0 -> #{chunk_size => ChunkSize};
+            false -> #{}
         end,
 
     RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
 
     %% Push single image or multi-platform index
-    PushResult = case Images of
-        ImageList when is_list(ImageList), length(ImageList) > 1 ->
-            AdapterModule:info("Pushing multi-platform image to ~s/~s:~s", [Registry, Repo, ImageTag]),
-            ocibuild:push_multi(ImageList, Registry, RepoTag, Auth, PushOpts);
-        [SingleImage] ->
-            AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
-            push_image(SingleImage, Registry, RepoTag, Auth, PushOpts);
-        SingleImage ->
-            AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
-            push_image(SingleImage, Registry, RepoTag, Auth, PushOpts)
-    end,
+    PushResult =
+        case Images of
+            ImageList when is_list(ImageList), length(ImageList) > 1 ->
+                AdapterModule:info("Pushing multi-platform image to ~s/~s:~s", [
+                    Registry, Repo, ImageTag
+                ]),
+                ocibuild:push_multi(ImageList, Registry, RepoTag, Auth, PushOpts);
+            [SingleImage] ->
+                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+                push_image(SingleImage, Registry, RepoTag, Auth, PushOpts);
+            SingleImage ->
+                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+                push_image(SingleImage, Registry, RepoTag, Auth, PushOpts)
+        end,
 
     case PushResult of
         ok ->
@@ -539,64 +519,84 @@ collect_release_files(ReleasePath, Opts) ->
             {error, {file_read_error, Path, Reason}}
     end.
 
--doc """
-Build an OCI image from release files.
+%%%===================================================================
+%%% Image Building - Clean API
+%%%===================================================================
 
-Uses "foreground" as the default start command (appropriate for Erlang releases).
+-doc """
+Build an OCI image from release files with default options.
+
+Shorthand for `build_image(BaseImage, Files, #{})`.
+
+Example:
+```
+Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
+{ok, Image} = build_image(<<"scratch">>, Files).
+```
 """.
--spec build_image(
-    BaseImage :: binary(),
-    Files :: [{binary(), binary(), non_neg_integer()}],
-    ReleaseName :: string() | binary(),
-    Workdir :: binary(),
-    EnvMap :: map(),
-    ExposePorts :: [non_neg_integer()],
-    Labels :: map()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
-    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
+-spec build_image(BaseImage :: binary(), Files :: [{binary(), binary(), non_neg_integer()}]) ->
+    {ok, ocibuild:image()} | {error, term()}.
+build_image(BaseImage, Files) ->
+    build_image(BaseImage, Files, #{}).
 
 -doc """
-Build an OCI image from release files with custom start command.
-
-The Cmd parameter specifies the release start command:
-- `"foreground"` - for Erlang releases (default)
-- `"start"` - for Elixir releases
-- `"daemon"` - for background mode
-""".
--spec build_image(
-    BaseImage :: binary(),
-    Files :: [{binary(), binary(), non_neg_integer()}],
-    ReleaseName :: string() | binary(),
-    Workdir :: binary(),
-    EnvMap :: map(),
-    ExposePorts :: [non_neg_integer()],
-    Labels :: map(),
-    Cmd :: binary()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
-    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, #{}).
-
--doc """
-Build an OCI image from release files with custom start command and options.
+Build an OCI image from release files with options.
 
 Options:
+- `release_name` - Release name (atom, string, or binary) - required for setting entrypoint
+- `workdir` - Working directory in container (default: `<<"/app">>`)
+- `env` - Environment variables map (default: `#{}`)
+- `expose` - Ports to expose (default: `[]`)
+- `labels` - Image labels map (default: `#{}`)
+- `cmd` - Release start command (default: `<<"foreground">>`)
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
-- `annotations` - Map of manifest annotations (e.g., `#{<<"org.opencontainers.image.description">> => <<"...">>}`)
+- `annotations` - Map of manifest annotations
+
+Example:
+```
+Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
+{ok, Image} = build_image(<<"debian:stable-slim">>, Files, #{
+    release_name => <<"myapp">>,
+    workdir => <<"/app">>,
+    env => #{<<"LANG">> => <<"C.UTF-8">>},
+    expose => [8080],
+    cmd => <<"foreground">>
+}).
+```
 """.
 -spec build_image(
     BaseImage :: binary(),
     Files :: [{binary(), binary(), non_neg_integer()}],
-    ReleaseName :: string() | binary(),
-    Workdir :: binary(),
-    EnvMap :: map(),
-    ExposePorts :: [non_neg_integer()],
-    Labels :: map(),
-    Cmd :: binary(),
     Opts :: map()
 ) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts) ->
+build_image(BaseImage, Files, Opts) when is_map(Opts) ->
+    %% Extract options with defaults
+    ReleaseName = maps:get(release_name, Opts, <<"app">>),
+    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    EnvMap = maps:get(env, Opts, #{}),
+    ExposePorts = maps:get(expose, Opts, []),
+    Labels = maps:get(labels, Opts, #{}),
+    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts).
+
+%%%===================================================================
+%%% Image Building - Internal Implementation
+%%%===================================================================
+
+%% @private Internal implementation of image building
+-spec do_build_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    string() | binary(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary(),
+    map()
+) -> {ok, ocibuild:image()} | {error, term()}.
+do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts) ->
     try
         %% Start from base image or scratch
         Image0 =
@@ -822,6 +822,17 @@ collect_single_file(BasePath, FilePath, Workdir) ->
 %%%===================================================================
 %%% Utility Functions
 %%%===================================================================
+
+-doc """
+Check if a value is nil (Elixir) or undefined (Erlang).
+
+This helper provides cross-language compatibility when handling
+optional values from Elixir code.
+""".
+-spec is_nil_or_undefined(term()) -> boolean().
+is_nil_or_undefined(undefined) -> true;
+is_nil_or_undefined(nil) -> true;
+is_nil_or_undefined(_) -> false.
 
 -doc "Make a path relative to a base path (cross-platform).".
 -spec make_relative_path(file:filename(), file:filename()) -> file:filename().
@@ -1338,7 +1349,11 @@ erts_error_message() ->
 %% @private Warn about native code that may not be portable
 -spec warn_about_nifs([#{app := binary(), file := binary(), extension := binary()}]) -> ok.
 warn_about_nifs(NifFiles) ->
-    io:format(standard_error, "~nWarning: Native code detected that may not be portable across platforms:~n", []),
+    io:format(
+        standard_error,
+        "~nWarning: Native code detected that may not be portable across platforms:~n",
+        []
+    ),
     lists:foreach(
         fun(#{app := App, file := File}) ->
             io:format(standard_error, "  - ~s: ~s~n", [App, File])
@@ -1346,5 +1361,9 @@ warn_about_nifs(NifFiles) ->
         NifFiles
     ),
     io:format(standard_error, "~nNIFs compiled for one architecture won't work on others.~n", []),
-    io:format(standard_error, "Consider using cross-compilation or Rust-based NIFs with multi-target support.~n~n", []),
+    io:format(
+        standard_error,
+        "Consider using cross-compilation or Rust-based NIFs with multi-target support.~n~n",
+        []
+    ),
     ok.

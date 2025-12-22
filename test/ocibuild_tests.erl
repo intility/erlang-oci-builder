@@ -828,28 +828,8 @@ export_with_config_test() ->
     end.
 
 %%%===================================================================
-%%% Layout internal function tests
+%%% Registry retry tests
 %%%===================================================================
-
-layout_format_size_bytes_test() ->
-    ?assertEqual("100 B", lists:flatten(ocibuild_layout:format_size(100))),
-    ?assertEqual("0 B", lists:flatten(ocibuild_layout:format_size(0))),
-    ?assertEqual("1023 B", lists:flatten(ocibuild_layout:format_size(1023))).
-
-layout_format_size_kilobytes_test() ->
-    ?assertEqual("1.0 KB", lists:flatten(ocibuild_layout:format_size(1024))),
-    ?assertEqual("1.5 KB", lists:flatten(ocibuild_layout:format_size(1536))),
-    ?assertEqual("100.0 KB", lists:flatten(ocibuild_layout:format_size(102400))).
-
-layout_format_size_megabytes_test() ->
-    ?assertEqual("1.0 MB", lists:flatten(ocibuild_layout:format_size(1024 * 1024))),
-    ?assertEqual("10.5 MB", lists:flatten(ocibuild_layout:format_size(11010048))).
-
-layout_format_size_gigabytes_test() ->
-    ?assertEqual("1.00 GB", lists:flatten(ocibuild_layout:format_size(1024 * 1024 * 1024))),
-    ?assertEqual(
-        "2.50 GB", lists:flatten(ocibuild_layout:format_size(round(2.5 * 1024 * 1024 * 1024)))
-    ).
 
 registry_is_retriable_error_test() ->
     %% Retriable errors - connection/timeout

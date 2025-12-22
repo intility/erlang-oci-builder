@@ -10,6 +10,7 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-index.md
 
 -export([create/1, to_json/1, parse/1, select_manifest/2]).
 -export([media_type/0]).
+-export([matches_platform/2]).
 
 -export_type([index/0, manifest_descriptor/0]).
 
@@ -79,19 +80,22 @@ Serialize an image index to JSON binary.
 The output conforms to the OCI Image Index specification.
 """.
 -spec to_json(index()) -> binary().
-to_json(#{schema_version := SchemaVersion, media_type := MediaType, manifests := Manifests} = Index) ->
+to_json(
+    #{schema_version := SchemaVersion, media_type := MediaType, manifests := Manifests} = Index
+) ->
     JsonManifests = [manifest_descriptor_to_json(M) || M <- Manifests],
     JsonIndex0 = #{
         ~"schemaVersion" => SchemaVersion,
         ~"mediaType" => MediaType,
         ~"manifests" => JsonManifests
     },
-    JsonIndex = case maps:find(annotations, Index) of
-        {ok, Annotations} when map_size(Annotations) > 0 ->
-            JsonIndex0#{~"annotations" => Annotations};
-        _ ->
-            JsonIndex0
-    end,
+    JsonIndex =
+        case maps:find(annotations, Index) of
+            {ok, Annotations} when map_size(Annotations) > 0 ->
+                JsonIndex0#{~"annotations" => Annotations};
+            _ ->
+                JsonIndex0
+        end,
     ocibuild_json:encode(JsonIndex).
 
 -doc """
@@ -113,12 +117,13 @@ parse(JsonBinary) ->
             media_type => MediaType,
             manifests => Manifests
         },
-        Index = case maps:find(~"annotations", Json) of
-            {ok, Annotations} ->
-                Index0#{annotations => Annotations};
-            error ->
-                Index0
-        end,
+        Index =
+            case maps:find(~"annotations", Json) of
+                {ok, Annotations} ->
+                    Index0#{annotations => Annotations};
+                error ->
+                    Index0
+            end,
         {ok, Index}
     catch
         _:Reason ->
@@ -148,7 +153,9 @@ select_manifest(#{manifests := Manifests}, TargetPlatform) ->
 %%%===================================================================
 
 -spec manifest_descriptor_to_json(manifest_descriptor()) -> map().
-manifest_descriptor_to_json(#{media_type := MediaType, digest := Digest, size := Size, platform := Platform} = Desc) ->
+manifest_descriptor_to_json(
+    #{media_type := MediaType, digest := Digest, size := Size, platform := Platform} = Desc
+) ->
     JsonPlatform = platform_to_json(Platform),
     Json0 = #{
         ~"mediaType" => MediaType,
@@ -169,10 +176,11 @@ platform_to_json(Platform) ->
         ~"os" => maps:get(os, Platform),
         ~"architecture" => maps:get(architecture, Platform)
     },
-    WithVariant = case maps:find(variant, Platform) of
-        {ok, Variant} -> Base#{~"variant" => Variant};
-        error -> Base
-    end,
+    WithVariant =
+        case maps:find(variant, Platform) of
+            {ok, Variant} -> Base#{~"variant" => Variant};
+            error -> Base
+        end,
     case maps:find(os_version, Platform) of
         {ok, OsVersion} -> WithVariant#{~"os.version" => OsVersion};
         error -> WithVariant
@@ -200,10 +208,11 @@ parse_platform(Json) ->
         os => maps:get(~"os", Json, ~"linux"),
         architecture => maps:get(~"architecture", Json, ~"amd64")
     },
-    WithVariant = case maps:find(~"variant", Json) of
-        {ok, Variant} -> Base#{variant => Variant};
-        error -> Base
-    end,
+    WithVariant =
+        case maps:find(~"variant", Json) of
+            {ok, Variant} -> Base#{variant => Variant};
+            error -> Base
+        end,
     case maps:find(~"os.version", Json) of
         {ok, OsVersion} -> WithVariant#{os_version => OsVersion};
         error -> WithVariant
@@ -213,19 +222,48 @@ parse_platform(Json) ->
     {ok, manifest_descriptor()} | {error, not_found}.
 find_matching_manifest([], _Os, _Arch, _Variant) ->
     {error, not_found};
-find_matching_manifest([#{platform := Platform} = Desc | Rest], TargetOs, TargetArch, TargetVariant) ->
+find_matching_manifest(
+    [#{platform := Platform} = Desc | Rest], TargetOs, TargetArch, TargetVariant
+) ->
     Os = maps:get(os, Platform),
     Arch = maps:get(architecture, Platform),
     Variant = maps:get(variant, Platform, undefined),
-    case matches_platform(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) of
+    case matches_platform_internal(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) of
         true ->
             {ok, Desc};
         false ->
             find_matching_manifest(Rest, TargetOs, TargetArch, TargetVariant)
     end.
 
--spec matches_platform(binary(), binary(), binary() | undefined, binary(), binary(), binary() | undefined) -> boolean().
-matches_platform(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) ->
+-doc """
+Check if a platform matches a target platform.
+
+Matches are based on OS and architecture. If the target specifies a variant,
+that must also match.
+
+Example:
+```
+true = ocibuild_index:matches_platform(
+    #{os => <<"linux">>, architecture => <<"amd64">>},
+    #{os => <<"linux">>, architecture => <<"amd64">>}
+).
+```
+""".
+-spec matches_platform(platform(), platform()) -> boolean().
+matches_platform(Platform, Target) ->
+    Os = maps:get(os, Platform),
+    Arch = maps:get(architecture, Platform),
+    Variant = maps:get(variant, Platform, undefined),
+    TargetOs = maps:get(os, Target),
+    TargetArch = maps:get(architecture, Target),
+    TargetVariant = maps:get(variant, Target, undefined),
+    matches_platform_internal(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant).
+
+%% @private Internal platform matching
+-spec matches_platform_internal(
+    binary(), binary(), binary() | undefined, binary(), binary(), binary() | undefined
+) -> boolean().
+matches_platform_internal(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) ->
     Os =:= TargetOs andalso
-    Arch =:= TargetArch andalso
-    (TargetVariant =:= undefined orelse Variant =:= TargetVariant).
+        Arch =:= TargetArch andalso
+        (TargetVariant =:= undefined orelse Variant =:= TargetVariant).

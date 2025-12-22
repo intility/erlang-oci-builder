@@ -8,5 +8,15 @@
     {licenses, ["MIT"]},
     {links, [{"GitHub", "https://github.com/intility/erlang-oci-builder"}]},
     {build_tools, ["rebar3", "mix"]},
-    {files, ["src", "include", "lib", "priv", "mix.exs", "rebar.config", "README.md", "LICENSE", "CHANGELOG.md"]}
+    {files, [
+        "src",
+        "include",
+        "lib",
+        "priv",
+        "mix.exs",
+        "rebar.config",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md"
+    ]}
 ]}.

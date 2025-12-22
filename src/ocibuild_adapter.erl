@@ -45,6 +45,17 @@ error(Format, Args) ->
 """.
 
 %%%===================================================================
+%%% Constants (shared by all adapters)
+%%%===================================================================
+
+%% Chunk size limits for uploads (in MB)
+-define(MIN_CHUNK_SIZE_MB, 1).
+-define(MAX_CHUNK_SIZE_MB, 100).
+
+%% Export macros as functions for use by adapters
+-export([min_chunk_size_mb/0, max_chunk_size_mb/0]).
+
+%%%===================================================================
 %%% Type Definitions
 %%%===================================================================
 
@@ -119,3 +130,15 @@ Log an error message.
 Used for error conditions that should be displayed to the user.
 """.
 -callback error(Format :: io:format(), Args :: [term()]) -> ok.
+
+%%%===================================================================
+%%% Constant accessors
+%%%===================================================================
+
+-doc "Minimum chunk size for uploads in MB.".
+-spec min_chunk_size_mb() -> pos_integer().
+min_chunk_size_mb() -> ?MIN_CHUNK_SIZE_MB.
+
+-doc "Maximum chunk size for uploads in MB.".
+-spec max_chunk_size_mb() -> pos_integer().
+max_chunk_size_mb() -> ?MAX_CHUNK_SIZE_MB.

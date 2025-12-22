@@ -51,17 +51,10 @@ defmodule OcibuildMixTest do
       ]
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          %{},
-          [],
-          %{},
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app"
+        })
 
       assert is_map(image)
       assert length(:maps.get(:layers, image)) == 1
@@ -77,17 +70,11 @@ defmodule OcibuildMixTest do
       env_map = %{"LANG" => "C.UTF-8", "PORT" => "8080"}
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          env_map,
-          [],
-          %{},
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          env: env_map
+        })
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
@@ -101,17 +88,11 @@ defmodule OcibuildMixTest do
       files = [{"/app/test", "data", 0o644}]
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          %{},
-          [8080, 443],
-          %{},
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          expose: [8080, 443]
+        })
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
@@ -126,17 +107,11 @@ defmodule OcibuildMixTest do
       labels = %{"org.opencontainers.image.version" => "1.0.0"}
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          %{},
-          [],
-          labels,
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          labels: labels
+        })
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)

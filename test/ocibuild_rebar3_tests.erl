@@ -56,9 +56,10 @@ build_scratch_image_test() ->
             {~"/app/lib/myapp.beam", ~"beam_data", 8#644}
         ],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app"
+    }),
 
     %% Verify image structure
     ?assert(is_map(Image)),
@@ -77,9 +78,11 @@ build_with_env_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     EnvMap = #{~"LANG" => ~"C.UTF-8", ~"PORT" => ~"8080"},
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", EnvMap, [], #{}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        env => EnvMap
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -92,9 +95,11 @@ build_with_env_test() ->
 build_with_exposed_ports_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [8080, 443], #{}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        expose => [8080, 443]
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -107,9 +112,11 @@ build_with_labels_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     Labels = #{~"org.opencontainers.image.version" => ~"1.0.0"},
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [], Labels
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        labels => Labels
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -298,9 +305,11 @@ build_image_with_custom_cmd_test() ->
             {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
         ],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}, ~"start"
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        cmd => ~"start"
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -475,15 +484,13 @@ build_image_all_options_test() ->
             {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
         ],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch",
-        Files,
-        "myapp",
-        ~"/app",
-        #{~"LANG" => ~"C.UTF-8", ~"DEBUG" => ~"1"},
-        [8080, 443],
-        #{~"version" => ~"1.0.0", ~"author" => ~"test"}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        env => #{~"LANG" => ~"C.UTF-8", ~"DEBUG" => ~"1"},
+        expose => [8080, 443],
+        labels => #{~"version" => ~"1.0.0", ~"author" => ~"test"}
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),

@@ -100,31 +100,34 @@ parse_invalid_json_test() ->
 
 parse_real_world_index_test() ->
     %% A realistic index JSON from a registry
-    Json = <<"{
-        \"schemaVersion\": 2,
-        \"mediaType\": \"application/vnd.oci.image.index.v1+json\",
-        \"manifests\": [
-            {
-                \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",
-                \"digest\": \"sha256:1234567890abcdef\",
-                \"size\": 1234,
-                \"platform\": {
-                    \"os\": \"linux\",
-                    \"architecture\": \"amd64\"
-                }
-            },
-            {
-                \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",
-                \"digest\": \"sha256:abcdef1234567890\",
-                \"size\": 1235,
-                \"platform\": {
-                    \"os\": \"linux\",
-                    \"architecture\": \"arm64\",
-                    \"variant\": \"v8\"
-                }
-            }
-        ]
-    }">>,
+    Json =
+        <<
+            "{\n"
+            "        \"schemaVersion\": 2,\n"
+            "        \"mediaType\": \"application/vnd.oci.image.index.v1+json\",\n"
+            "        \"manifests\": [\n"
+            "            {\n"
+            "                \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",\n"
+            "                \"digest\": \"sha256:1234567890abcdef\",\n"
+            "                \"size\": 1234,\n"
+            "                \"platform\": {\n"
+            "                    \"os\": \"linux\",\n"
+            "                    \"architecture\": \"amd64\"\n"
+            "                }\n"
+            "            },\n"
+            "            {\n"
+            "                \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",\n"
+            "                \"digest\": \"sha256:abcdef1234567890\",\n"
+            "                \"size\": 1235,\n"
+            "                \"platform\": {\n"
+            "                    \"os\": \"linux\",\n"
+            "                    \"architecture\": \"arm64\",\n"
+            "                    \"variant\": \"v8\"\n"
+            "                }\n"
+            "            }\n"
+            "        ]\n"
+            "    }"
+        >>,
 
     {ok, Index} = ocibuild_index:parse(Json),
     ?assertEqual(2, maps:get(schema_version, Index)),
@@ -163,12 +166,16 @@ select_manifest_not_found_test() ->
     Index = ocibuild_index:create([{Platform, ~"sha256:amd64", 1000}]),
 
     %% Try to find arm64 - should not be found
-    ?assertEqual({error, not_found},
-        ocibuild_index:select_manifest(Index, #{os => ~"linux", architecture => ~"arm64"})),
+    ?assertEqual(
+        {error, not_found},
+        ocibuild_index:select_manifest(Index, #{os => ~"linux", architecture => ~"arm64"})
+    ),
 
     %% Try to find different OS
-    ?assertEqual({error, not_found},
-        ocibuild_index:select_manifest(Index, #{os => ~"windows", architecture => ~"amd64"})).
+    ?assertEqual(
+        {error, not_found},
+        ocibuild_index:select_manifest(Index, #{os => ~"windows", architecture => ~"amd64"})
+    ).
 
 select_manifest_with_variant_test() ->
     Platform1 = #{os => ~"linux", architecture => ~"arm64"},
@@ -180,23 +187,33 @@ select_manifest_with_variant_test() ->
     ]),
 
     %% Without variant - should match first arm64
-    {ok, NoVariant} = ocibuild_index:select_manifest(Index, #{os => ~"linux", architecture => ~"arm64"}),
+    {ok, NoVariant} = ocibuild_index:select_manifest(Index, #{
+        os => ~"linux", architecture => ~"arm64"
+    }),
     ?assertEqual(~"sha256:arm64novariant", maps:get(digest, NoVariant)),
 
     %% With variant - should match specific v8
-    {ok, WithVariant} = ocibuild_index:select_manifest(Index,
-        #{os => ~"linux", architecture => ~"arm64", variant => ~"v8"}),
+    {ok, WithVariant} = ocibuild_index:select_manifest(
+        Index,
+        #{os => ~"linux", architecture => ~"arm64", variant => ~"v8"}
+    ),
     ?assertEqual(~"sha256:arm64v8", maps:get(digest, WithVariant)),
 
     %% Wrong variant - should not find
-    ?assertEqual({error, not_found},
-        ocibuild_index:select_manifest(Index,
-            #{os => ~"linux", architecture => ~"arm64", variant => ~"v7"})).
+    ?assertEqual(
+        {error, not_found},
+        ocibuild_index:select_manifest(
+            Index,
+            #{os => ~"linux", architecture => ~"arm64", variant => ~"v7"}
+        )
+    ).
 
 select_manifest_empty_index_test() ->
     Index = ocibuild_index:create([]),
-    ?assertEqual({error, not_found},
-        ocibuild_index:select_manifest(Index, #{os => ~"linux", architecture => ~"amd64"})).
+    ?assertEqual(
+        {error, not_found},
+        ocibuild_index:select_manifest(Index, #{os => ~"linux", architecture => ~"amd64"})
+    ).
 
 %%%===================================================================
 %%% Media type test

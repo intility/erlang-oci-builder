@@ -64,6 +64,33 @@ See: https://github.com/opencontainers/distribution-spec
 %% Stand-alone httpc profile for ocibuild (not supervised by inets)
 -define(HTTPC_PROFILE, ocibuild).
 -define(HTTPC_KEY, {?MODULE, httpc_pid}).
+
+%% State record for chunked upload loop
+-record(upload_state, {
+    session :: upload_session(),
+    data :: binary(),
+    digest :: binary(),
+    offset :: non_neg_integer(),
+    chunk_size :: pos_integer(),
+    total_size :: non_neg_integer(),
+    token :: binary(),
+    progress_fn :: progress_callback() | undefined,
+    layer_index :: non_neg_integer(),
+    total_layers :: non_neg_integer()
+}).
+
+%% State record for streaming download
+-record(stream_state, {
+    request_id :: reference(),
+    progress_fn :: progress_callback() | undefined,
+    phase :: progress_phase(),
+    total_bytes :: non_neg_integer() | unknown,
+    acc :: binary(),
+    url :: string(),
+    headers :: [{string(), string()}],
+    redirects_left :: non_neg_integer()
+}).
+
 %% Registry URL mappings
 -define(REGISTRY_URLS, #{
     ~"docker.io" => "https://registry-1.docker.io",
@@ -129,12 +156,13 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
                         true ->
                             %% Select platform-specific manifest and fetch it
                             %% If platform option is provided, use it; otherwise auto-detect
-                            SelectedResult = case maps:find(platform, Opts) of
-                                {ok, Platform} ->
-                                    select_platform_manifest(Manifest, Platform);
-                                error ->
-                                    select_platform_manifest(Manifest)
-                            end,
+                            SelectedResult =
+                                case maps:find(platform, Opts) of
+                                    {ok, Platform} ->
+                                        select_platform_manifest(Manifest, Platform);
+                                    error ->
+                                        select_platform_manifest(Manifest)
+                                end,
                             case SelectedResult of
                                 {ok, PlatformDigest} ->
                                     pull_manifest(Registry, Repo, PlatformDigest, Auth, Opts);
@@ -203,7 +231,15 @@ pull_manifests_for_platforms(Registry, Repo, Ref, Auth, Platforms) ->
         Platforms
     ),
     %% Check if any failed
-    case lists:partition(fun({ok, _}) -> true; ({error, _}) -> false end, Results) of
+    case
+        lists:partition(
+            fun
+                ({ok, _}) -> true;
+                ({error, _}) -> false
+            end,
+            Results
+        )
+    of
         {Successes, []} ->
             {ok, [R || {ok, R} <- Successes]};
         {_, [FirstError | _]} ->
@@ -318,15 +354,10 @@ push(Image, Registry, Repo, Tag, Auth, Opts) ->
                     case push_config(Image, BaseUrl, NormalizedRepo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
                             %% Push manifest
-                            push_manifest(
-                                Image,
-                                BaseUrl,
-                                NormalizedRepo,
-                                Tag,
-                                Token,
-                                ConfigDigest,
-                                ConfigSize
-                            );
+                            push_manifest(Image, BaseUrl, NormalizedRepo, Tag, Token, #{
+                                config_digest => ConfigDigest,
+                                config_size => ConfigSize
+                            });
                         {error, _} = Err ->
                             Err
                     end;
@@ -383,10 +414,16 @@ push_platform_images([Image | Rest], BaseUrl, Repo, Token, Opts, Acc) ->
             case push_config(Image, BaseUrl, Repo, Token) of
                 {ok, ConfigDigest, ConfigSize} ->
                     %% Push manifest (without tagging)
-                    case push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) of
+                    case
+                        push_manifest_untagged(
+                            Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize
+                        )
+                    of
                         {ok, ManifestDigest, ManifestSize} ->
                             Descriptor = {Platform, ManifestDigest, ManifestSize},
-                            push_platform_images(Rest, BaseUrl, Repo, Token, Opts, [Descriptor | Acc]);
+                            push_platform_images(Rest, BaseUrl, Repo, Token, Opts, [
+                                Descriptor | Acc
+                            ]);
                         {error, _} = Err ->
                             Err
                     end;
@@ -398,7 +435,9 @@ push_platform_images([Image | Rest], BaseUrl, Repo, Token, Opts, Acc) ->
     end.
 
 %% Push a manifest without tagging (returns digest and size)
--spec push_manifest_untagged(ocibuild:image(), string(), binary(), term(), binary(), non_neg_integer()) ->
+-spec push_manifest_untagged(
+    ocibuild:image(), string(), binary(), term(), binary(), non_neg_integer()
+) ->
     {ok, binary(), non_neg_integer()} | {error, term()}.
 push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
     %% Get base image layers if present (these already exist in registry)
@@ -452,8 +491,9 @@ push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
         "~s/v2/~s/manifests/~s",
         [BaseUrl, binary_to_list(Repo), binary_to_list(ManifestDigest)]
     ),
-    Headers = auth_headers(Token) ++
-        [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+    Headers =
+        auth_headers(Token) ++
+            [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
 
     case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
         {ok, _} ->
@@ -463,8 +503,13 @@ push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
     end.
 
 %% Push the image index and tag it
--spec push_image_index(string(), binary(), binary(), term(),
-    [{ocibuild:platform(), binary(), non_neg_integer()}]) -> ok | {error, term()}.
+-spec push_image_index(
+    string(),
+    binary(),
+    binary(),
+    term(),
+    [{ocibuild:platform(), binary(), non_neg_integer()}]
+) -> ok | {error, term()}.
 push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
     Index = ocibuild_index:create(ManifestDescriptors),
     IndexJson = ocibuild_index:to_json(Index),
@@ -474,8 +519,9 @@ push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
         "~s/v2/~s/manifests/~s",
         [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
     ),
-    Headers = auth_headers(Token) ++
-        [{"Content-Type", "application/vnd.oci.image.index.v1+json"}],
+    Headers =
+        auth_headers(Token) ++
+            [{"Content-Type", "application/vnd.oci.image.index.v1+json"}],
 
     case ?MODULE:http_put(lists:flatten(Url), Headers, IndexJson) of
         {ok, _} ->
@@ -577,10 +623,10 @@ find_platform_manifest_with_variant(
     TargetArch,
     TargetVariant
 ) ->
-    Os = maps:get(~"os", Platform, <<>>),
-    Arch = maps:get(~"architecture", Platform, <<>>),
-    Variant = maps:get(~"variant", Platform, undefined),
-    case matches_platform(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) of
+    %% Convert JSON platform to atom-keyed map for ocibuild_index
+    PlatformMap = json_platform_to_map(Platform),
+    TargetMap = make_target_platform(TargetOs, TargetArch, TargetVariant),
+    case ocibuild_index:matches_platform(PlatformMap, TargetMap) of
         true ->
             {ok, Digest};
         false ->
@@ -589,12 +635,24 @@ find_platform_manifest_with_variant(
 find_platform_manifest_with_variant([_ | Rest], TargetOs, TargetArch, TargetVariant) ->
     find_platform_manifest_with_variant(Rest, TargetOs, TargetArch, TargetVariant).
 
-%% Check if platform matches target
--spec matches_platform(binary(), binary(), binary() | undefined, binary(), binary(), binary() | undefined) -> boolean().
-matches_platform(Os, Arch, Variant, TargetOs, TargetArch, TargetVariant) ->
-    Os =:= TargetOs andalso
-    Arch =:= TargetArch andalso
-    (TargetVariant =:= undefined orelse Variant =:= TargetVariant).
+%% Convert JSON platform object to atom-keyed platform map
+-spec json_platform_to_map(map()) -> ocibuild:platform().
+json_platform_to_map(Platform) ->
+    Base = #{
+        os => maps:get(~"os", Platform, <<>>),
+        architecture => maps:get(~"architecture", Platform, <<>>)
+    },
+    case maps:get(~"variant", Platform, undefined) of
+        undefined -> Base;
+        Variant -> Base#{variant => Variant}
+    end.
+
+%% Build a target platform map
+-spec make_target_platform(binary(), binary(), binary() | undefined) -> ocibuild:platform().
+make_target_platform(Os, Arch, undefined) ->
+    #{os => Os, architecture => Arch};
+make_target_platform(Os, Arch, Variant) ->
+    #{os => Os, architecture => Arch, variant => Variant}.
 
 %% Check if a manifest entry is an attestation (not a real image)
 -spec is_attestation_manifest(map()) -> boolean().
@@ -1277,47 +1335,39 @@ upload_blob_chunked(BaseUrl, Repo, Digest, Data, Token, Opts) ->
     %% Start upload session
     case start_upload_session(BaseUrl, Repo, Token) of
         {ok, Session} ->
-            %% Upload chunks
-            upload_chunks_loop(
-                Session,
-                Data,
-                Digest,
-                0,
-                ChunkSize,
-                TotalSize,
-                Token,
-                ProgressFn,
-                LayerIndex,
-                TotalLayers
-            );
+            %% Upload chunks using state record
+            State = #upload_state{
+                session = Session,
+                data = Data,
+                digest = Digest,
+                offset = 0,
+                chunk_size = ChunkSize,
+                total_size = TotalSize,
+                token = Token,
+                progress_fn = ProgressFn,
+                layer_index = LayerIndex,
+                total_layers = TotalLayers
+            },
+            upload_chunks_loop(State);
         {error, _} = Err ->
             Err
     end.
 
 %% Internal: loop through chunks and upload each one
--spec upload_chunks_loop(
-    upload_session(),
-    binary(),
-    binary(),
-    non_neg_integer(),
-    pos_integer(),
-    non_neg_integer(),
-    binary(),
-    progress_callback() | undefined,
-    non_neg_integer(),
-    non_neg_integer()
-) -> ok | {error, term()}.
+-spec upload_chunks_loop(#upload_state{}) -> ok | {error, term()}.
 upload_chunks_loop(
-    Session,
-    Data,
-    Digest,
-    Offset,
-    ChunkSize,
-    TotalSize,
-    Token,
-    ProgressFn,
-    LayerIndex,
-    TotalLayers
+    #upload_state{
+        session = Session,
+        data = Data,
+        digest = Digest,
+        offset = Offset,
+        chunk_size = ChunkSize,
+        total_size = TotalSize,
+        token = Token,
+        progress_fn = ProgressFn,
+        layer_index = LayerIndex,
+        total_layers = TotalLayers
+    } = State
 ) ->
     Remaining = TotalSize - Offset,
     case Remaining =< ChunkSize of
@@ -1355,35 +1405,30 @@ upload_chunks_loop(
             of
                 {ok, NewSession} ->
                     %% Continue with next chunk
-                    upload_chunks_loop(
-                        NewSession,
-                        Data,
-                        Digest,
-                        Offset + ChunkSize,
-                        ChunkSize,
-                        TotalSize,
-                        Token,
-                        ProgressFn,
-                        LayerIndex,
-                        TotalLayers
-                    );
+                    upload_chunks_loop(State#upload_state{
+                        session = NewSession,
+                        offset = Offset + ChunkSize
+                    });
                 {error, _} = Err ->
                     Err
             end
     end.
 
 %% Push manifest
+%%
+%% Opts: config_digest, config_size
 -spec push_manifest(
-    ocibuild:image(),
-    string(),
-    binary(),
-    binary(),
-    binary(),
-    binary(),
-    non_neg_integer()
+    Image :: ocibuild:image(),
+    BaseUrl :: string(),
+    Repo :: binary(),
+    Tag :: binary(),
+    Token :: binary(),
+    Opts :: map()
 ) ->
     ok | {error, term()}.
-push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
+push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
+    ConfigDigest = maps:get(config_digest, Opts),
+    ConfigSize = maps:get(config_size, Opts),
     %% Get base image layers if present (these already exist in registry)
     BaseLayerDescriptors =
         case maps:get(base_manifest, Image, undefined) of
@@ -1843,26 +1888,34 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
 
     case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, RequestId} ->
-            receive_stream(
-                RequestId, ProgressFn, Phase, TotalBytes, <<>>, Url, Headers, RedirectsLeft
-            );
+            State = #stream_state{
+                request_id = RequestId,
+                progress_fn = ProgressFn,
+                phase = Phase,
+                total_bytes = TotalBytes,
+                acc = <<>>,
+                url = Url,
+                headers = Headers,
+                redirects_left = RedirectsLeft
+            },
+            receive_stream(State);
         {error, Reason} ->
             {error, Reason}
     end.
 
 %% Receive streaming response chunks
--spec receive_stream(
-    reference(),
-    progress_callback(),
-    progress_phase(),
-    non_neg_integer() | unknown,
-    binary(),
-    string(),
-    [{string(), string()}],
-    non_neg_integer()
+-spec receive_stream(#stream_state{}) -> {ok, binary()} | {error, term()}.
+receive_stream(
+    #stream_state{
+        request_id = RequestId,
+        progress_fn = ProgressFn,
+        phase = Phase,
+        total_bytes = TotalBytes,
+        acc = Acc,
+        headers = Headers,
+        redirects_left = RedirectsLeft
+    } = State
 ) ->
-    {ok, binary()} | {error, term()}.
-receive_stream(RequestId, ProgressFn, Phase, TotalBytes, Acc, Url, Headers, RedirectsLeft) ->
     receive
         {http, {RequestId, stream_start, RespHeaders}} ->
             %% Got headers, try to get content length if not already known
@@ -1876,9 +1929,7 @@ receive_stream(RequestId, ProgressFn, Phase, TotalBytes, Acc, Url, Headers, Redi
                     _ ->
                         TotalBytes
                 end,
-            receive_stream(
-                RequestId, ProgressFn, Phase, ActualTotal, Acc, Url, Headers, RedirectsLeft
-            );
+            receive_stream(State#stream_state{total_bytes = ActualTotal});
         {http, {RequestId, stream, BinBodyPart}} ->
             NewAcc = <<Acc/binary, BinBodyPart/binary>>,
             BytesReceived = byte_size(NewAcc),
@@ -1887,9 +1938,7 @@ receive_stream(RequestId, ProgressFn, Phase, TotalBytes, Acc, Url, Headers, Redi
                 bytes_received => BytesReceived,
                 total_bytes => TotalBytes
             }),
-            receive_stream(
-                RequestId, ProgressFn, Phase, TotalBytes, NewAcc, Url, Headers, RedirectsLeft
-            );
+            receive_stream(State#stream_state{acc = NewAcc});
         {http, {RequestId, stream_end, _FinalHeaders}} ->
             %% Final progress report
             maybe_report_progress(ProgressFn, #{
