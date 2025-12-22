@@ -406,6 +406,81 @@ parse_image_ref_test() ->
     ?assertEqual(~"tag", T4).
 
 %%%===================================================================
+%%% Platform parsing tests
+%%%===================================================================
+
+parse_platform_simple_test() ->
+    %% Basic linux/amd64
+    {ok, P1} = ocibuild:parse_platform(~"linux/amd64"),
+    ?assertEqual(~"linux", maps:get(os, P1)),
+    ?assertEqual(~"amd64", maps:get(architecture, P1)),
+    ?assertEqual(error, maps:find(variant, P1)),
+
+    %% linux/arm64
+    {ok, P2} = ocibuild:parse_platform(~"linux/arm64"),
+    ?assertEqual(~"linux", maps:get(os, P2)),
+    ?assertEqual(~"arm64", maps:get(architecture, P2)).
+
+parse_platform_with_variant_test() ->
+    %% linux/arm64/v8
+    {ok, P1} = ocibuild:parse_platform(~"linux/arm64/v8"),
+    ?assertEqual(~"linux", maps:get(os, P1)),
+    ?assertEqual(~"arm64", maps:get(architecture, P1)),
+    ?assertEqual(~"v8", maps:get(variant, P1)),
+
+    %% linux/arm/v7
+    {ok, P2} = ocibuild:parse_platform(~"linux/arm/v7"),
+    ?assertEqual(~"linux", maps:get(os, P2)),
+    ?assertEqual(~"arm", maps:get(architecture, P2)),
+    ?assertEqual(~"v7", maps:get(variant, P2)).
+
+parse_platform_invalid_test() ->
+    %% Missing architecture
+    ?assertMatch({error, {invalid_platform, _}}, ocibuild:parse_platform(~"linux")),
+
+    %% Empty OS
+    ?assertMatch({error, {invalid_platform, _}}, ocibuild:parse_platform(~"/amd64")),
+
+    %% Empty architecture
+    ?assertMatch({error, {invalid_platform, _}}, ocibuild:parse_platform(~"linux/")),
+
+    %% Completely empty
+    ?assertMatch({error, {invalid_platform, _}}, ocibuild:parse_platform(~"")).
+
+parse_platforms_multiple_test() ->
+    %% Two platforms
+    {ok, Platforms1} = ocibuild:parse_platforms(~"linux/amd64,linux/arm64"),
+    ?assertEqual(2, length(Platforms1)),
+    [P1, P2] = Platforms1,
+    ?assertEqual(~"amd64", maps:get(architecture, P1)),
+    ?assertEqual(~"arm64", maps:get(architecture, P2)),
+
+    %% Three platforms with variant
+    {ok, Platforms2} = ocibuild:parse_platforms(~"linux/amd64,linux/arm64,linux/arm/v7"),
+    ?assertEqual(3, length(Platforms2)),
+
+    %% Single platform
+    {ok, Platforms3} = ocibuild:parse_platforms(~"linux/amd64"),
+    ?assertEqual(1, length(Platforms3)).
+
+parse_platforms_invalid_test() ->
+    %% One invalid in list
+    ?assertMatch({error, {invalid_platform, _}}, ocibuild:parse_platforms(~"linux/amd64,invalid")),
+
+    %% Empty string returns empty list
+    {ok, Empty} = ocibuild:parse_platforms(~""),
+    ?assertEqual([], Empty).
+
+parse_platform_charlist_test() ->
+    %% Accept charlists as well as binaries
+    {ok, P1} = ocibuild:parse_platform("linux/amd64"),
+    ?assertEqual(~"linux", maps:get(os, P1)),
+    ?assertEqual(~"amd64", maps:get(architecture, P1)),
+
+    {ok, Platforms} = ocibuild:parse_platforms("linux/amd64,linux/arm64"),
+    ?assertEqual(2, length(Platforms)).
+
+%%%===================================================================
 %%% Additional TAR tests - long paths and edge cases
 %%%===================================================================
 
@@ -753,28 +828,8 @@ export_with_config_test() ->
     end.
 
 %%%===================================================================
-%%% Layout internal function tests
+%%% Registry retry tests
 %%%===================================================================
-
-layout_format_size_bytes_test() ->
-    ?assertEqual("100 B", lists:flatten(ocibuild_layout:format_size(100))),
-    ?assertEqual("0 B", lists:flatten(ocibuild_layout:format_size(0))),
-    ?assertEqual("1023 B", lists:flatten(ocibuild_layout:format_size(1023))).
-
-layout_format_size_kilobytes_test() ->
-    ?assertEqual("1.0 KB", lists:flatten(ocibuild_layout:format_size(1024))),
-    ?assertEqual("1.5 KB", lists:flatten(ocibuild_layout:format_size(1536))),
-    ?assertEqual("100.0 KB", lists:flatten(ocibuild_layout:format_size(102400))).
-
-layout_format_size_megabytes_test() ->
-    ?assertEqual("1.0 MB", lists:flatten(ocibuild_layout:format_size(1024 * 1024))),
-    ?assertEqual("10.5 MB", lists:flatten(ocibuild_layout:format_size(11010048))).
-
-layout_format_size_gigabytes_test() ->
-    ?assertEqual("1.00 GB", lists:flatten(ocibuild_layout:format_size(1024 * 1024 * 1024))),
-    ?assertEqual(
-        "2.50 GB", lists:flatten(ocibuild_layout:format_size(round(2.5 * 1024 * 1024 * 1024)))
-    ).
 
 registry_is_retriable_error_test() ->
     %% Retriable errors - connection/timeout

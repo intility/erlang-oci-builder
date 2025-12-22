@@ -31,7 +31,7 @@ Add to your `rebar.config`:
 
 ```
 {ocibuild, [
-    {base_image, "debian:slim"},
+    {base_image, "debian:stable-slim"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
@@ -105,7 +105,9 @@ init(State) ->
                 {release, undefined, "release", string, "Release name (if multiple)"},
                 {desc, $d, "desc", string, "Image description (manifest annotation)"},
                 {chunk_size, undefined, "chunk-size", integer,
-                    "Chunk size in MB for uploads (default: 5)"}
+                    "Chunk size in MB for uploads (default: 5)"},
+                {platform, $P, "platform", string,
+                    "Target platforms (e.g., linux/amd64,linux/arm64)"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -202,7 +204,8 @@ get_config(State) ->
         tag => get_tag(Args),
         output => get_output(Args),
         push => get_push_registry(Args),
-        chunk_size => get_chunk_size(Args)
+        chunk_size => get_chunk_size(Args),
+        platform => get_platform(Args, Config)
     }.
 
 %% @private Get description from args or config
@@ -238,18 +241,35 @@ get_push_registry(Args) ->
         Registry -> list_to_binary(Registry)
     end.
 
-%% @private Get chunk size from args (validated to 1-100 MB)
+%% @private Get chunk size from args (validated to MIN-MAX MB, falls back to default)
 get_chunk_size(Args) ->
+    MinMB = ocibuild_adapter:min_chunk_size_mb(),
+    MaxMB = ocibuild_adapter:max_chunk_size_mb(),
     case proplists:get_value(chunk_size, Args) of
         undefined ->
             undefined;
-        Size when is_integer(Size), Size >= 1, Size =< 100 ->
+        Size when is_integer(Size), Size >= MinMB, Size =< MaxMB ->
             Size * 1024 * 1024;
         Size ->
             io:format(
-                "Warning: chunk_size ~p MB out of range (1-100), using default~n", [Size]
+                "Warning: chunk_size ~p MB out of range (~B-~B), using default (~B MB)~n",
+                [Size, MinMB, MaxMB, ocibuild_adapter:default_chunk_size_mb()]
             ),
-            undefined
+            ocibuild_adapter:default_chunk_size()
+    end.
+
+%% @private Get platform(s) from args or config
+get_platform(Args, Config) ->
+    case proplists:get_value(platform, Args) of
+        undefined ->
+            %% Check config for platform setting
+            case proplists:get_value(platform, Config) of
+                undefined -> undefined;
+                Platform when is_list(Platform) -> list_to_binary(Platform);
+                Platform when is_binary(Platform) -> Platform
+            end;
+        Platform ->
+            list_to_binary(Platform)
     end.
 
 -doc "Find release directory from rebar state.".

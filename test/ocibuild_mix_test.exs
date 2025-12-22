@@ -51,17 +51,10 @@ defmodule OcibuildMixTest do
       ]
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          %{},
-          [],
-          %{},
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app"
+        })
 
       assert is_map(image)
       assert length(:maps.get(:layers, image)) == 1
@@ -77,17 +70,11 @@ defmodule OcibuildMixTest do
       env_map = %{"LANG" => "C.UTF-8", "PORT" => "8080"}
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          env_map,
-          [],
-          %{},
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          env: env_map
+        })
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
@@ -101,17 +88,11 @@ defmodule OcibuildMixTest do
       files = [{"/app/test", "data", 0o644}]
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          %{},
-          [8080, 443],
-          %{},
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          expose: [8080, 443]
+        })
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
@@ -126,17 +107,11 @@ defmodule OcibuildMixTest do
       labels = %{"org.opencontainers.image.version" => "1.0.0"}
 
       {:ok, image} =
-        :ocibuild_release.build_image(
-          "scratch",
-          files,
-          ~c"myapp",
-          "/app",
-          %{},
-          [],
-          labels,
-          "foreground",
-          %{}
-        )
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          labels: labels
+        })
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
@@ -205,6 +180,119 @@ defmodule OcibuildMixTest do
     end
   end
 
+  describe "multi-platform support" do
+    test "detects bundled ERTS in release" do
+      tmp_dir = create_mock_release_with_erts()
+
+      try do
+        assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == true
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects no ERTS when not bundled" do
+      tmp_dir = create_mock_release()
+
+      try do
+        assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == false
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects native code .so files in priv directory" do
+      tmp_dir = create_mock_release_with_nif(".so")
+
+      try do
+        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+        assert length(nif_files) > 0
+        [nif_info | _] = nif_files
+        assert :maps.get(:extension, nif_info) == ".so"
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects native code .dll files in priv directory" do
+      tmp_dir = create_mock_release_with_nif(".dll")
+
+      try do
+        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+        assert length(nif_files) > 0
+        [nif_info | _] = nif_files
+        assert :maps.get(:extension, nif_info) == ".dll"
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "detects native code .dylib files in priv directory" do
+      tmp_dir = create_mock_release_with_nif(".dylib")
+
+      try do
+        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+        assert length(nif_files) > 0
+        [nif_info | _] = nif_files
+        assert :maps.get(:extension, nif_info) == ".dylib"
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "returns ok when no native code present" do
+      tmp_dir = create_mock_release()
+
+      try do
+        assert :ocibuild_release.check_for_native_code(to_charlist(tmp_dir)) == {:ok, []}
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "validate_multiplatform errors with bundled ERTS" do
+      tmp_dir = create_mock_release_with_erts()
+
+      try do
+        platforms = [
+          %{os: "linux", architecture: "amd64"},
+          %{os: "linux", architecture: "arm64"}
+        ]
+
+        result = :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms)
+        assert {:error, {:bundled_erts, _msg}} = result
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "validate_multiplatform succeeds without ERTS for multiple platforms" do
+      tmp_dir = create_mock_release()
+
+      try do
+        platforms = [
+          %{os: "linux", architecture: "amd64"},
+          %{os: "linux", architecture: "arm64"}
+        ]
+
+        assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+
+    test "validate_multiplatform succeeds with ERTS for single platform" do
+      tmp_dir = create_mock_release_with_erts()
+
+      try do
+        platforms = [%{os: "linux", architecture: "amd64"}]
+        assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
+      after
+        cleanup_temp_dir(tmp_dir)
+      end
+    end
+  end
+
   # Cross-platform helpers
 
   defp temp_dir do
@@ -255,6 +343,22 @@ defmodule OcibuildMixTest do
     rel_path = Path.join(rel_dir, "myapp.rel")
     File.write!(rel_path, "{release, {\"myapp\", \"1.0.0\"}, ...}.")
 
+    tmp_dir
+  end
+
+  defp create_mock_release_with_erts do
+    tmp_dir = create_mock_release()
+    erts_dir = Path.join(tmp_dir, "erts-15.0")
+    File.mkdir_p!(Path.join(erts_dir, "bin"))
+    File.write!(Path.join([erts_dir, "bin", "beam.smp"]), "beam binary")
+    tmp_dir
+  end
+
+  defp create_mock_release_with_nif(extension) do
+    tmp_dir = create_mock_release()
+    priv_dir = Path.join([tmp_dir, "lib", "crypto-1.0.0", "priv"])
+    File.mkdir_p!(priv_dir)
+    File.write!(Path.join(priv_dir, "crypto_nif#{extension}"), "fake nif binary")
     tmp_dir
   end
 end

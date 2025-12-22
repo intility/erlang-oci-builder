@@ -16,7 +16,7 @@ defmodule Ocibuild.MixRelease do
             ]
           ],
           ocibuild: [
-            base_image: "debian:slim",
+            base_image: "debian:stable-slim",
             push: "ghcr.io/myorg",  # Registry to push to (omit to skip push)
             tag: "myapp:1.0.0",     # Optional, defaults to release_name:version
             workdir: "/app",
@@ -35,7 +35,7 @@ defmodule Ocibuild.MixRelease do
 
   ## Configuration Options
 
-    * `:base_image` - Base image (default: "debian:slim")
+    * `:base_image` - Base image (default: "debian:stable-slim")
     * `:tag` - Image tag (default: release_name:release_version)
     * `:push` - Registry to push to (e.g., "ghcr.io/myorg"). Omit to skip push.
     * `:workdir` - Working directory in container (default: "/app")
@@ -43,6 +43,8 @@ defmodule Ocibuild.MixRelease do
     * `:expose` - Ports to expose
     * `:labels` - Image labels map
     * `:description` - Image description (OCI manifest annotation)
+    * `:platform` - Target platforms. Single string like "linux/amd64" or
+      comma-separated string like "linux/amd64,linux/arm64" for multi-platform builds.
   """
 
   @doc """
@@ -78,7 +80,7 @@ defmodule Ocibuild.MixRelease do
       release_name: release.name,
       release_path: to_charlist(release.path),
       # Configuration
-      base_image: Keyword.get(ocibuild_config, :base_image, "debian:slim") |> to_binary(),
+      base_image: Keyword.get(ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),
@@ -88,7 +90,8 @@ defmodule Ocibuild.MixRelease do
       tag: get_tag(ocibuild_config, release.name, release.version) |> to_binary(),
       output: nil,
       push: get_push(ocibuild_config),
-      chunk_size: get_chunk_size(ocibuild_config)
+      chunk_size: get_chunk_size(ocibuild_config),
+      platform: get_platform(ocibuild_config)
     }
   end
 
@@ -128,6 +131,14 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
+  defp get_platform(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :platform) do
+      nil -> nil
+      platform when is_binary(platform) -> platform
+      platform when is_list(platform) -> to_binary(platform)
+    end
+  end
+
   defp format_error({:release_not_found, reason}),
     do: "Failed to find release: #{inspect(reason)}"
 
@@ -137,6 +148,13 @@ defmodule Ocibuild.MixRelease do
   defp format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
   defp format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
   defp format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"
+
+  defp format_error({:bundled_erts, message}),
+    do: "Multi-platform build failed: #{message}"
+
+  defp format_error({:nif_warning, files}),
+    do: "Warning: Native code detected that may not be portable: #{inspect(files)}"
+
   defp format_error(reason), do: "OCI build error: #{inspect(reason)}"
 
   # Convert Elixir map to Erlang-compatible map with binary keys

@@ -1,5 +1,6 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_release).
+-feature(maybe_expr, enable).
 -moduledoc """
 Shared release handling for OCI image building.
 
@@ -25,9 +26,8 @@ Security features:
 
 %% Public API - Image Building
 -export([
-    build_image/7,
-    build_image/8,
-    build_image/9
+    build_image/2,
+    build_image/3
 ]).
 
 %% Public API - Output Operations (save/push)
@@ -47,6 +47,8 @@ Security features:
 %% Public API - Progress Display
 -export([
     make_progress_callback/0,
+    start_progress_coordinator/0,
+    stop_progress_coordinator/0,
     format_progress/2,
     format_bytes/1,
     is_tty/0,
@@ -58,12 +60,20 @@ Security features:
     stop_httpc/0
 ]).
 
+%% Public API - Multi-platform Validation
+-export([
+    has_bundled_erts/1,
+    check_for_native_code/1,
+    validate_multiplatform/2
+]).
+
 %% Utility exports (used by build tools)
 -export([
     to_binary/1,
     to_container_path/1,
     get_file_mode/1,
-    make_relative_path/2
+    make_relative_path/2,
+    is_nil_or_undefined/1
 ]).
 
 %% Exports for testing
@@ -101,141 +111,292 @@ or `{error, Reason}` on failure.
 """.
 -spec run(module(), term(), map()) -> {ok, term()} | {error, term()}.
 run(AdapterModule, AdapterState, Opts) ->
-    try
-        %% Get configuration from adapter
-        Config = AdapterModule:get_config(AdapterState),
-        #{
-            base_image := BaseImage,
-            workdir := Workdir,
-            env := EnvMap,
-            expose := ExposePorts,
-            labels := Labels,
-            cmd := DefaultCmd,
-            description := Description,
-            tag := TagOpt,
-            output := OutputOpt,
-            push := PushRegistry,
-            chunk_size := ChunkSize
-        } = Config,
+    %% Get configuration from adapter
+    Config = AdapterModule:get_config(AdapterState),
+    #{
+        base_image := BaseImage,
+        workdir := Workdir,
+        env := EnvMap,
+        expose := ExposePorts,
+        labels := Labels,
+        cmd := DefaultCmd,
+        description := Description,
+        tag := Tag,
+        output := OutputOpt,
+        push := PushRegistry,
+        chunk_size := ChunkSize
+    } = Config,
 
-        %% Get tag (required)
-        Tag =
-            case TagOpt of
-                undefined -> throw({error, missing_tag});
-                T -> T
-            end,
+    %% Get optional platform configuration
+    PlatformOpt = maps:get(platform, Config, undefined),
 
+    maybe
+        %% Validate tag exists
+        true ?= Tag =/= undefined,
         AdapterModule:info("Building OCI image: ~s", [Tag]),
-
-        %% Find release using adapter
-        case AdapterModule:find_release(AdapterState, Opts) of
-            {ok, ReleaseName, ReleasePath} ->
-                AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
-
-                %% Collect files from release
-                case collect_release_files(ReleasePath) of
-                    {ok, Files} ->
-                        AdapterModule:info("Collected ~p files from release", [length(Files)]),
-
-                        %% Build the image
-                        AdapterModule:info("Base image: ~s", [BaseImage]),
-                        Cmd = maps:get(cmd, Opts, DefaultCmd),
-
-                        ProgressFn = make_progress_callback(),
-                        PullAuth = get_pull_auth(),
-                        BuildOpts = #{auth => PullAuth, progress => ProgressFn},
-
-                        Result = build_image(
-                            BaseImage,
-                            Files,
-                            ReleaseName,
-                            Workdir,
-                            EnvMap,
-                            ExposePorts,
-                            Labels,
-                            Cmd,
-                            BuildOpts
-                        ),
-                        clear_progress_line(),
-
-                        case Result of
-                            {ok, Image0} ->
-                                %% Add description annotation
-                                Image = add_description(Image0, Description),
-
-                                %% Output the image (save and optionally push)
-                                do_output(
-                                    AdapterModule,
-                                    AdapterState,
-                                    Image,
-                                    Tag,
-                                    OutputOpt,
-                                    PushRegistry,
-                                    ChunkSize
-                                );
-                            {error, BuildError} ->
-                                {error, {build_failed, BuildError}}
-                        end;
-                    {error, CollectError} ->
-                        {error, {collect_failed, CollectError}}
-                end;
-            {error, FindError} ->
-                {error, {release_not_found, FindError}}
-        end
-    catch
-        throw:{error, Reason} ->
+        %% Find release
+        {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
+        AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
+        %% Parse and validate platforms
+        {ok, Platforms} ?= parse_platform_option(PlatformOpt),
+        ok ?= validate_platform_requirements(AdapterModule, ReleasePath, Platforms),
+        %% Collect release files
+        {ok, Files} ?= collect_release_files(ReleasePath),
+        AdapterModule:info("Collected ~p files from release", [length(Files)]),
+        %% Build image(s)
+        AdapterModule:info("Base image: ~s", [BaseImage]),
+        Cmd = maps:get(cmd, Opts, DefaultCmd),
+        %% Start progress manager for parallel multi-line display
+        _ = ocibuild_progress:start_manager(),
+        PullAuth = get_pull_auth(),
+        BuildOpts = #{
+            release_name => ReleaseName,
+            workdir => Workdir,
+            env => EnvMap,
+            expose => ExposePorts,
+            labels => Labels,
+            cmd => Cmd,
+            description => Description,
+            auth => PullAuth
+        },
+        {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
+        %% Output the image(s) - this is where layer downloads happen for save
+        OutputOpts = #{
+            tag => Tag,
+            output => OutputOpt,
+            push => PushRegistry,
+            chunk_size => ChunkSize,
+            platforms => Platforms
+        },
+        Result = do_output(AdapterModule, AdapterState, Images, OutputOpts),
+        ocibuild_progress:stop_manager(),
+        Result
+    else
+        false ->
+            {error, missing_tag};
+        {error, {invalid_platform_value, _} = Reason} ->
+            {error, {invalid_platform, Reason}};
+        {error, {invalid_platform, _} = Reason} ->
             {error, Reason};
-        throw:Reason ->
+        {error, {bundled_erts, _} = Reason} ->
+            {error, Reason};
+        {error, Reason} when is_atom(Reason) ->
+            {error, {release_not_found, Reason}};
+        {error, Reason} ->
             {error, Reason}
     end.
 
+%% @private Parse platform option string into list of platforms
+%% If no platform specified, auto-detects the current system platform
+-spec parse_platform_option(binary() | undefined | nil) ->
+    {ok, [ocibuild:platform()]} | {error, term()}.
+parse_platform_option(undefined) ->
+    {ok, [detect_current_platform()]};
+parse_platform_option(nil) ->
+    {ok, [detect_current_platform()]};
+parse_platform_option(<<>>) ->
+    {ok, [detect_current_platform()]};
+parse_platform_option(PlatformStr) when is_binary(PlatformStr) ->
+    ocibuild:parse_platforms(PlatformStr);
+parse_platform_option(Value) ->
+    {error, {invalid_platform_value, Value}}.
+
+%% @private Detect current system platform
+-spec detect_current_platform() -> ocibuild:platform().
+detect_current_platform() ->
+    {Os, Arch} = ocibuild_registry:get_target_platform(),
+    #{os => Os, architecture => Arch}.
+
+%% @private Validate platform requirements (ERTS check, NIF warning)
+-spec validate_platform_requirements(module(), file:filename(), [ocibuild:platform()]) ->
+    ok | {error, term()}.
+validate_platform_requirements(_AdapterModule, _ReleasePath, []) ->
+    %% No platforms specified, skip validation
+    ok;
+validate_platform_requirements(_AdapterModule, _ReleasePath, [_SinglePlatform]) ->
+    %% Single platform, no multi-platform validation needed
+    ok;
+validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when length(Platforms) > 1 ->
+    %% Multi-platform: validate ERTS and warn about NIFs
+    %% Note: validate_multiplatform handles NIF warnings internally
+    validate_multiplatform(ReleasePath, Platforms).
+
+%% @private Build image(s) for specified platforms
+%%
+%% Always treats platforms as a list. Returns a list of images.
+%% The output format (single vs multi-platform index) is determined later
+%% based on whether the original request was for multiple platforms.
+%%
+%% Opts must contain: release_name, workdir, env, expose, labels, cmd
+%% Optional: description, auth, progress
+-spec build_platform_images(
+    BaseImage :: binary(),
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    Platforms :: [ocibuild:platform()],
+    Opts :: map()
+) -> {ok, [ocibuild:image()]} | {error, term()}.
+build_platform_images(~"scratch", Files, Platforms, Opts) ->
+    %% Scratch base image - create empty images for each platform
+    Description = maps:get(description, Opts, undefined),
+    Images = [
+        begin
+            {ok, BaseImg} = ocibuild:scratch(),
+            ImgWithPlatform = BaseImg#{platform => Platform},
+            add_description(configure_release_image(ImgWithPlatform, Files, Opts), Description)
+        end
+     || Platform <- Platforms
+    ],
+    {ok, Images};
+build_platform_images(BaseImage, Files, Platforms, Opts) ->
+    PullAuth = maps:get(auth, Opts, #{}),
+    Description = maps:get(description, Opts, undefined),
+
+    %% Always use the platforms list - ocibuild:from/3 handles both single and multi
+    case ocibuild:from(BaseImage, PullAuth, #{platforms => Platforms}) of
+        {ok, BaseImages} when is_list(BaseImages) ->
+            %% Apply release files and configuration to each platform image
+            ConfiguredImages = [
+                add_description(configure_release_image(BaseImg, Files, Opts), Description)
+             || BaseImg <- BaseImages
+            ],
+            {ok, ConfiguredImages};
+        {ok, SingleImage} ->
+            %% Fallback: got single image, configure it
+            Image = add_description(configure_release_image(SingleImage, Files, Opts), Description),
+            {ok, [Image]};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @private Format platform map as string
+-spec format_platform(ocibuild:platform()) -> binary().
+format_platform(#{os := OS, architecture := Arch} = Platform) ->
+    case maps:get(variant, Platform, undefined) of
+        undefined -> <<OS/binary, "/", Arch/binary>>;
+        Variant -> <<OS/binary, "/", Arch/binary, "/", Variant/binary>>
+    end.
+
+%% @private Configure a release image with files and settings
+%%
+%% Opts: release_name, workdir, env, expose, labels, cmd, description
+-spec configure_release_image(
+    Image :: ocibuild:image(),
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    Opts :: map()
+) -> ocibuild:image().
+configure_release_image(Image0, Files, Opts) ->
+    ReleaseName = maps:get(release_name, Opts, <<"app">>),
+    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    EnvMap = maps:get(env, Opts, #{}),
+    ExposePorts = maps:get(expose, Opts, []),
+    Labels = maps:get(labels, Opts, #{}),
+    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    Description = maps:get(description, Opts, undefined),
+
+    %% Add release layer
+    Image1 = ocibuild:add_layer(Image0, Files),
+
+    %% Set working directory
+    Image2 = ocibuild:workdir(Image1, Workdir),
+
+    %% Set entrypoint
+    ReleaseNameBin = to_binary(ReleaseName),
+    EntrypointPath = <<Workdir/binary, "/bin/", ReleaseNameBin/binary>>,
+    Image3 = ocibuild:entrypoint(Image2, [EntrypointPath, Cmd]),
+
+    %% Set environment variables
+    Image4 = ocibuild:env(Image3, EnvMap),
+
+    %% Expose ports
+    Image5 = lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
+
+    %% Add labels
+    Image6 = maps:fold(fun(K, V, Img) -> ocibuild:label(Img, K, V) end, Image5, Labels),
+
+    %% Add description annotation
+    add_description(Image6, Description).
+
 %% @private Output the image (save and optionally push)
+%% Handles both single image and list of images (multi-platform)
+%%
+%% Opts: tag, output, push, chunk_size, platforms
 -spec do_output(
-    module(),
-    term(),
-    ocibuild:image(),
-    binary(),
-    binary() | undefined,
-    binary() | undefined,
-    pos_integer() | undefined
+    AdapterModule :: module(),
+    AdapterState :: term(),
+    Images :: ocibuild:image() | [ocibuild:image()],
+    Opts :: map()
 ) -> {ok, term()} | {error, term()}.
-do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, ChunkSize) ->
-    %% Determine output path
-    %% Handle both undefined (Erlang) and nil (Elixir) for missing values
+do_output(AdapterModule, AdapterState, Images, Opts) ->
+    Tag = maps:get(tag, Opts),
+    OutputOpt = maps:get(output, Opts, undefined),
+    PushRegistry = maps:get(push, Opts, undefined),
+    ChunkSize = maps:get(chunk_size, Opts, undefined),
+    Platforms = maps:get(platforms, Opts, []),
+
+    %% Determine output path (handle both Erlang undefined and Elixir nil)
     OutputPath =
-        case OutputOpt of
-            undefined ->
-                default_output_path(Tag);
-            nil ->
-                default_output_path(Tag);
-            Path ->
-                binary_to_list(Path)
+        case is_nil_or_undefined(OutputOpt) of
+            true -> default_output_path(Tag);
+            false -> binary_to_list(OutputOpt)
         end,
 
+    %% Determine if this is multi-platform
+    IsMultiPlatform = is_list(Images) andalso length(Images) > 1,
+
     %% Save tarball
-    AdapterModule:info("Saving image to ~s", [OutputPath]),
-    case save_image(Image, OutputPath, Tag) of
+    case IsMultiPlatform of
+        true ->
+            AdapterModule:info("Saving multi-platform image to ~s", [OutputPath]),
+            AdapterModule:info("Platforms: ~s", [format_platform_list(Platforms)]);
+        false ->
+            AdapterModule:info("Saving image to ~s", [OutputPath])
+    end,
+
+    %% For multi-platform, use ocibuild:save with list of images
+    %% For single platform, use single image
+    SaveOpts = #{tag => Tag, progress => maps:get(progress, Opts, undefined)},
+    SaveResult =
+        case Images of
+            [SingleImage] ->
+                save_image(SingleImage, OutputPath, SaveOpts);
+            ImageList when is_list(ImageList) ->
+                save_multi_image(ImageList, OutputPath, SaveOpts);
+            SingleImage ->
+                save_image(SingleImage, OutputPath, SaveOpts)
+        end,
+
+    case SaveResult of
         ok ->
             AdapterModule:info("Image saved successfully", []),
 
-            %% Push if requested
-            %% Handle both undefined (Erlang) and nil (Elixir), and empty binary
-            case PushRegistry of
-                undefined ->
+            %% Push if requested (handle both Erlang undefined and Elixir nil)
+            case is_nil_or_undefined(PushRegistry) orelse PushRegistry =:= <<>> of
+                true ->
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
-                nil ->
-                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
-                    {ok, AdapterState};
-                <<>> ->
-                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
-                    {ok, AdapterState};
-                _ ->
-                    do_push(AdapterModule, AdapterState, Image, Tag, PushRegistry, ChunkSize)
+                false ->
+                    %% Clear progress bars before push to start fresh
+                    ocibuild_progress:clear(),
+                    PushOpts = #{chunk_size => ChunkSize},
+                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
             {error, {save_failed, SaveError}}
     end.
+
+%% @private Format platform list for display
+-spec format_platform_list([ocibuild:platform()]) -> string().
+format_platform_list(Platforms) ->
+    PlatformStrs = [binary_to_list(format_platform(P)) || P <- Platforms],
+    string:join(PlatformStrs, ", ").
+
+%% @private Save multi-platform image
+-spec save_multi_image([ocibuild:image()], string(), map()) -> ok | {error, term()}.
+save_multi_image(Images, OutputPath, Opts) ->
+    Tag = maps:get(tag, Opts, <<"latest">>),
+    ProgressFn = maps:get(progress, Opts, undefined),
+    SaveOpts = #{tag => Tag, progress => ProgressFn},
+    ocibuild:save(Images, list_to_binary(OutputPath), SaveOpts).
 
 %% @private Generate default output path from tag
 default_output_path(Tag) ->
@@ -250,33 +411,61 @@ default_output_path(Tag) ->
     ),
     SafeName ++ ".tar.gz".
 
-%% @private Push image to registry
+%% @private Push image(s) to registry
+%% Handles both single image and list of images (multi-platform)
+%%
+%% Opts: chunk_size
 -spec do_push(
-    module(),
-    term(),
-    ocibuild:image(),
-    binary(),
-    binary(),
-    pos_integer() | undefined
+    AdapterModule :: module(),
+    AdapterState :: term(),
+    Images :: ocibuild:image() | [ocibuild:image()],
+    Tag :: binary(),
+    Registry :: binary(),
+    Opts :: map()
 ) -> {ok, term()} | {error, term()}.
-do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
-    {Repo, ImageTag} = parse_tag(Tag),
+do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
+    {ImageName, ImageTag} = parse_tag(Tag),
     Auth = get_push_auth(),
+    ChunkSize = maps:get(chunk_size, Opts, undefined),
 
-    %% Build push options
-    %% ChunkSize is expected to be in bytes already (or undefined/nil)
-    PushOpts =
-        case ChunkSize of
-            undefined -> #{};
-            nil -> #{};
-            Size when is_integer(Size), Size > 0 -> #{chunk_size => Size};
-            _ -> #{}
+    %% Parse push destination: "ghcr.io/org" -> {Registry, Namespace}
+    %% The registry is the first component, namespace is the rest
+    {Registry, Namespace} = parse_push_destination(PushDest),
+
+    %% Combine namespace with image name to form full repo path
+    Repo =
+        case Namespace of
+            <<>> -> ImageName;
+            _ -> <<Namespace/binary, "/", ImageName/binary>>
         end,
 
-    AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+    %% Build push options (ChunkSize is expected to be in bytes already or undefined/nil)
+    PushOpts =
+        case is_nil_or_undefined(ChunkSize) of
+            true -> #{};
+            false when is_integer(ChunkSize), ChunkSize > 0 -> #{chunk_size => ChunkSize};
+            false -> #{}
+        end,
 
     RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
-    case push_image(Image, Registry, RepoTag, Auth, PushOpts) of
+
+    %% Push single image or multi-platform index
+    PushResult =
+        case Images of
+            ImageList when is_list(ImageList), length(ImageList) > 1 ->
+                AdapterModule:info("Pushing multi-platform image to ~s/~s:~s", [
+                    Registry, Repo, ImageTag
+                ]),
+                ocibuild:push_multi(ImageList, Registry, RepoTag, Auth, PushOpts);
+            [SingleImage] ->
+                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+                push_image(SingleImage, Registry, RepoTag, Auth, PushOpts);
+            SingleImage ->
+                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+                push_image(SingleImage, Registry, RepoTag, Auth, PushOpts)
+        end,
+
+    case PushResult of
         ok ->
             AdapterModule:info("Push successful!", []),
             {ok, AdapterState};
@@ -320,64 +509,84 @@ collect_release_files(ReleasePath, Opts) ->
             {error, {file_read_error, Path, Reason}}
     end.
 
--doc """
-Build an OCI image from release files.
+%%%===================================================================
+%%% Image Building - Clean API
+%%%===================================================================
 
-Uses "foreground" as the default start command (appropriate for Erlang releases).
+-doc """
+Build an OCI image from release files with default options.
+
+Shorthand for `build_image(BaseImage, Files, #{})`.
+
+Example:
+```
+Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
+{ok, Image} = build_image(<<"scratch">>, Files).
+```
 """.
--spec build_image(
-    BaseImage :: binary(),
-    Files :: [{binary(), binary(), non_neg_integer()}],
-    ReleaseName :: string() | binary(),
-    Workdir :: binary(),
-    EnvMap :: map(),
-    ExposePorts :: [non_neg_integer()],
-    Labels :: map()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
-    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
+-spec build_image(BaseImage :: binary(), Files :: [{binary(), binary(), non_neg_integer()}]) ->
+    {ok, ocibuild:image()} | {error, term()}.
+build_image(BaseImage, Files) ->
+    build_image(BaseImage, Files, #{}).
 
 -doc """
-Build an OCI image from release files with custom start command.
-
-The Cmd parameter specifies the release start command:
-- `"foreground"` - for Erlang releases (default)
-- `"start"` - for Elixir releases
-- `"daemon"` - for background mode
-""".
--spec build_image(
-    BaseImage :: binary(),
-    Files :: [{binary(), binary(), non_neg_integer()}],
-    ReleaseName :: string() | binary(),
-    Workdir :: binary(),
-    EnvMap :: map(),
-    ExposePorts :: [non_neg_integer()],
-    Labels :: map(),
-    Cmd :: binary()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
-    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, #{}).
-
--doc """
-Build an OCI image from release files with custom start command and options.
+Build an OCI image from release files with options.
 
 Options:
+- `release_name` - Release name (atom, string, or binary) - required for setting entrypoint
+- `workdir` - Working directory in container (default: `<<"/app">>`)
+- `env` - Environment variables map (default: `#{}`)
+- `expose` - Ports to expose (default: `[]`)
+- `labels` - Image labels map (default: `#{}`)
+- `cmd` - Release start command (default: `<<"foreground">>`)
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
-- `annotations` - Map of manifest annotations (e.g., `#{<<"org.opencontainers.image.description">> => <<"...">>}`)
+- `annotations` - Map of manifest annotations
+
+Example:
+```
+Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
+{ok, Image} = build_image(<<"debian:stable-slim">>, Files, #{
+    release_name => <<"myapp">>,
+    workdir => <<"/app">>,
+    env => #{<<"LANG">> => <<"C.UTF-8">>},
+    expose => [8080],
+    cmd => <<"foreground">>
+}).
+```
 """.
 -spec build_image(
     BaseImage :: binary(),
     Files :: [{binary(), binary(), non_neg_integer()}],
-    ReleaseName :: string() | binary(),
-    Workdir :: binary(),
-    EnvMap :: map(),
-    ExposePorts :: [non_neg_integer()],
-    Labels :: map(),
-    Cmd :: binary(),
     Opts :: map()
 ) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts) ->
+build_image(BaseImage, Files, Opts) when is_map(Opts) ->
+    %% Extract options with defaults
+    ReleaseName = maps:get(release_name, Opts, <<"app">>),
+    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    EnvMap = maps:get(env, Opts, #{}),
+    ExposePorts = maps:get(expose, Opts, []),
+    Labels = maps:get(labels, Opts, #{}),
+    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts).
+
+%%%===================================================================
+%%% Image Building - Internal Implementation
+%%%===================================================================
+
+%% @private Internal implementation of image building
+-spec do_build_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    string() | binary(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary(),
+    map()
+) -> {ok, ocibuild:image()} | {error, term()}.
+do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts) ->
     try
         %% Start from base image or scratch
         Image0 =
@@ -388,10 +597,16 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
                 _ ->
                     PullAuth = maps:get(auth, Opts, #{}),
                     ProgressFn = maps:get(progress, Opts, undefined),
-                    PullOpts =
+                    PlatformOpt = maps:get(platform, Opts, undefined),
+                    PullOpts0 =
                         case ProgressFn of
                             undefined -> #{};
                             _ -> #{progress => ProgressFn}
+                        end,
+                    PullOpts =
+                        case PlatformOpt of
+                            undefined -> PullOpts0;
+                            _ -> PullOpts0#{platform => PlatformOpt}
                         end,
                     case ocibuild:from(BaseImage, PullAuth, PullOpts) of
                         {ok, Img} ->
@@ -604,6 +819,17 @@ collect_single_file(BasePath, FilePath, Workdir) ->
 %%% Utility Functions
 %%%===================================================================
 
+-doc """
+Check if a value is nil (Elixir) or undefined (Erlang).
+
+This helper provides cross-language compatibility when handling
+optional values from Elixir code.
+""".
+-spec is_nil_or_undefined(term()) -> boolean().
+is_nil_or_undefined(undefined) -> true;
+is_nil_or_undefined(nil) -> true;
+is_nil_or_undefined(_) -> false.
+
 -doc "Make a path relative to a base path (cross-platform).".
 -spec make_relative_path(file:filename(), file:filename()) -> file:filename().
 make_relative_path(BasePath, FullPath) ->
@@ -670,9 +896,11 @@ Save an image to a tarball file.
 
 The image is saved in OCI layout format compatible with `podman load`.
 """.
--spec save_image(ocibuild:image(), file:filename(), binary()) -> ok | {error, term()}.
-save_image(Image, OutputPath, Tag) ->
-    SaveOpts = #{tag => Tag},
+-spec save_image(ocibuild:image(), file:filename(), map()) -> ok | {error, term()}.
+save_image(Image, OutputPath, Opts) ->
+    Tag = maps:get(tag, Opts, <<"latest">>),
+    ProgressFn = maps:get(progress, Opts, undefined),
+    SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Image, OutputPath, SaveOpts).
 
 -doc """
@@ -715,6 +943,34 @@ parse_tag(Tag) ->
                 _ ->
                     %% Last part contains a slash, so no tag specified
                     {Tag, ~"latest"}
+            end
+    end.
+
+-doc """
+Parse a push destination into registry host and namespace.
+
+Examples:
+- `<<"ghcr.io/intility">>` -> `{<<"ghcr.io">>, <<"intility">>}`
+- `<<"ghcr.io">>` -> `{<<"ghcr.io">>, <<>>}`
+- `<<"docker.io/myorg">>` -> `{<<"docker.io">>, <<"myorg">>}`
+- `<<"localhost:5000/myorg">>` -> `{<<"localhost:5000">>, <<"myorg">>}`
+""".
+-spec parse_push_destination(binary()) -> {Registry :: binary(), Namespace :: binary()}.
+parse_push_destination(Dest) ->
+    case binary:split(Dest, ~"/") of
+        [Registry] ->
+            %% No slash - just a registry host
+            {Registry, <<>>};
+        [FirstPart | Rest] ->
+            %% Check if first part looks like a registry (contains "." or ":")
+            case binary:match(FirstPart, [~".", ~":"]) of
+                nomatch ->
+                    %% No dot or colon - treat entire thing as namespace on docker.io
+                    {~"docker.io", Dest};
+                _ ->
+                    %% First part is the registry, rest is namespace
+                    Namespace = iolist_to_binary(lists:join(~"/", Rest)),
+                    {FirstPart, Namespace}
             end
     end.
 
@@ -810,9 +1066,138 @@ clear_progress_line() ->
     end.
 
 -doc """
+Start the progress coordinator for multi-line parallel progress display.
+
+Call this before starting parallel downloads/uploads. The coordinator
+manages separate terminal lines for each concurrent operation.
+""".
+-spec start_progress_coordinator() -> pid() | undefined.
+start_progress_coordinator() ->
+    case is_tty() of
+        true ->
+            case whereis(ocibuild_progress_coord) of
+                undefined ->
+                    Pid = spawn_link(fun() ->
+                        progress_coord_loop(#{slots => #{}, next_slot => 1})
+                    end),
+                    register(ocibuild_progress_coord, Pid),
+                    Pid;
+                Pid ->
+                    Pid
+            end;
+        false ->
+            undefined
+    end.
+
+-doc """
+Stop the progress coordinator and clean up terminal state.
+""".
+-spec stop_progress_coordinator() -> ok.
+stop_progress_coordinator() ->
+    case whereis(ocibuild_progress_coord) of
+        undefined ->
+            ok;
+        Pid ->
+            Pid ! {stop, self()},
+            receive
+                {stopped, Pid} -> ok
+            after 1000 ->
+                ok
+            end
+    end.
+
+%% Progress coordinator loop - manages multi-line display
+progress_coord_loop(State) ->
+    receive
+        {update, SlotKey, Info} ->
+            Slots = maps:get(slots, State),
+            NextSlot = maps:get(next_slot, State),
+            {Slot, NewSlots} =
+                case maps:find(SlotKey, Slots) of
+                    {ok, ExistingSlot} ->
+                        {ExistingSlot, Slots};
+                    error ->
+                        %% New slot - print newline to reserve space
+                        io:format("~n"),
+                        {NextSlot, maps:put(SlotKey, NextSlot, Slots)}
+                end,
+            NewNextSlot =
+                case maps:is_key(SlotKey, Slots) of
+                    true -> NextSlot;
+                    false -> NextSlot + 1
+                end,
+            render_progress_line(Slot, NewNextSlot - 1, Info),
+            progress_coord_loop(State#{slots => NewSlots, next_slot => NewNextSlot});
+        {stop, From} ->
+            %% Move cursor to bottom and clean up
+            Slots = maps:get(slots, State),
+            TotalSlots = maps:size(Slots),
+            case TotalSlots > 0 of
+                true ->
+                    %% Move to bottom of progress area
+                    io:format("~n");
+                false ->
+                    ok
+            end,
+            From ! {stopped, self()},
+            ok
+    end.
+
+%% Render a progress line at the given slot position
+render_progress_line(Slot, TotalSlots, Info) ->
+    #{phase := Phase, total_bytes := Total} = Info,
+    Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
+    LayerIndex = maps:get(layer_index, Info, 0),
+    TotalLayers = maps:get(total_layers, Info, 1),
+    Platform = maps:get(platform, Info, undefined),
+
+    PhaseStr =
+        case Phase of
+            manifest ->
+                "Fetching manifest";
+            config ->
+                "Fetching config  ";
+            layer when TotalLayers > 1 ->
+                io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+            layer ->
+                "Downloading layer";
+            uploading when TotalLayers > 1 ->
+                io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+            uploading ->
+                "Uploading layer  "
+        end,
+
+    PlatformStr =
+        case Platform of
+            undefined -> "";
+            #{architecture := Arch} -> io_lib:format(" (~s)", [Arch])
+        end,
+
+    ProgressStr = format_progress(Bytes, Total),
+
+    %% Calculate how many lines to move up from current position
+    %% After printing \n for a slot, cursor is on that slot's line
+    %% So we only need to move up by (TotalSlots - Slot), not +1
+    LinesToMove = TotalSlots - Slot,
+
+    %% Move up (if needed), clear line, print, move back down
+    case LinesToMove of
+        0 ->
+            %% Already on the right line, just print
+            io:format("\r\e[K  ~s~s: ~s", [PhaseStr, PlatformStr, ProgressStr]);
+        N when N > 0 ->
+            %% Move up N lines, print, move back down
+            io:format(
+                "\e[~BA\r\e[K  ~s~s: ~s\e[~BB",
+                [N, PhaseStr, PlatformStr, ProgressStr, N]
+            )
+    end.
+
+-doc """
 Create a progress callback for terminal display.
 
-Handles both TTY (animated progress) and CI (final state only) modes.
+Handles both TTY (animated multi-line progress via coordinator) and
+CI (final state only) modes.
 """.
 -spec make_progress_callback() -> ocibuild_registry:progress_callback().
 make_progress_callback() ->
@@ -821,43 +1206,54 @@ make_progress_callback() ->
         #{phase := Phase, total_bytes := Total} = Info,
         Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
         LayerIndex = maps:get(layer_index, Info, 0),
+        TotalLayers = maps:get(total_layers, Info, 1),
         HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
         IsComplete = Bytes =:= Total,
-        AlreadyPrinted =
-            case IsTTY of
-                true ->
-                    false;
-                false when IsComplete ->
-                    Key = {ocibuild_progress_done, Phase, LayerIndex},
-                    case get(Key) of
-                        true ->
-                            true;
-                        _ ->
-                            put(Key, true),
-                            false
-                    end;
-                false ->
-                    false
-            end,
-        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete) andalso not AlreadyPrinted,
-        case ShouldPrint of
-            true ->
-                PhaseStr =
-                    case Phase of
-                        manifest -> "Fetching manifest";
-                        config -> "Fetching config  ";
-                        layer -> "Downloading layer";
-                        uploading -> "Uploading layer  "
-                    end,
-                ProgressStr = format_progress(Bytes, Total),
-                case IsTTY of
-                    true -> io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
-                    false -> io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
+
+        case IsTTY of
+            true when HasProgress ->
+                %% TTY mode: use coordinator for multi-line display
+                %% Create unique slot key from layer size (distinguishes layers)
+                SlotKey = {Phase, Total},
+                case whereis(ocibuild_progress_coord) of
+                    undefined ->
+                        %% No coordinator, fall back to single-line
+                        PhaseStr = format_phase(Phase, LayerIndex, TotalLayers),
+                        ProgressStr = format_progress(Bytes, Total),
+                        io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
+                    Pid ->
+                        Pid ! {update, SlotKey, Info}
                 end;
-            false ->
+            false when HasProgress andalso IsComplete ->
+                %% CI mode: only print completion, deduplicate
+                Key = {ocibuild_progress_done, Phase, LayerIndex, Total},
+                case get(Key) of
+                    true ->
+                        ok;
+                    _ ->
+                        put(Key, true),
+                        PhaseStr = format_phase(Phase, LayerIndex, TotalLayers),
+                        ProgressStr = format_progress(Bytes, Total),
+                        io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
+                end;
+            _ ->
                 ok
         end
     end.
+
+%% Format phase string for progress display
+format_phase(manifest, _, _) ->
+    "Fetching manifest";
+format_phase(config, _, _) ->
+    "Fetching config  ";
+format_phase(layer, LayerIndex, TotalLayers) when TotalLayers > 1 ->
+    io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+format_phase(layer, _, _) ->
+    "Downloading layer";
+format_phase(uploading, LayerIndex, TotalLayers) when TotalLayers > 1 ->
+    io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+format_phase(uploading, _, _) ->
+    "Uploading layer  ".
 
 -doc "Format progress as a string with progress bar.".
 -spec format_progress(non_neg_integer(), non_neg_integer() | unknown) -> iolist().
@@ -897,3 +1293,309 @@ and allow the VM to exit cleanly.
 -spec stop_httpc() -> ok.
 stop_httpc() ->
     ocibuild_registry:stop_httpc().
+
+%%%===================================================================
+%%% Multi-platform Validation
+%%%===================================================================
+
+-doc """
+Check if a release has bundled ERTS.
+
+Multi-platform builds require the ERTS to come from the base image,
+not bundled in the release. This function checks for an `erts-*` directory
+at the release root.
+
+This function works for all BEAM languages (Erlang, Elixir, Gleam, LFE)
+since they all produce standard OTP releases.
+
+```
+true = ocibuild_release:has_bundled_erts("/path/to/rel/myapp").
+```
+""".
+-spec has_bundled_erts(file:filename()) -> boolean().
+has_bundled_erts(ReleasePath) ->
+    case file:list_dir(ReleasePath) of
+        {ok, Entries} ->
+            lists:any(
+                fun(Entry) ->
+                    case Entry of
+                        "erts-" ++ _ -> true;
+                        _ -> false
+                    end
+                end,
+                Entries
+            );
+        {error, _} ->
+            false
+    end.
+
+-doc """
+Check for native code (NIFs) in a release.
+
+Scans `lib/*/priv/` directories for native shared libraries:
+- `.so` files (Linux/Unix/BSD)
+- `.dll` files (Windows)
+- `.dylib` files (macOS)
+
+This function works for all BEAM languages since they all produce
+standard OTP releases with the same directory structure.
+
+Returns `{ok, []}` if no native code found, or
+`{warning, [NifInfo]}` with details about each native file found.
+
+```
+{ok, []} = ocibuild_release:check_for_native_code("/path/to/release").
+{warning, [#{app := <<"crypto">>, file := <<"crypto_nif.so">>}]} =
+    ocibuild_release:check_for_native_code("/path/to/release_with_nifs").
+```
+""".
+-spec check_for_native_code(file:filename()) ->
+    {ok, []} | {warning, [#{app := binary(), file := binary(), extension := binary()}]}.
+check_for_native_code(ReleasePath) ->
+    LibPath = filename:join(ReleasePath, "lib"),
+    case file:list_dir(LibPath) of
+        {ok, AppDirs} ->
+            NativeFiles = lists:flatmap(
+                fun(AppDir) ->
+                    find_native_files_in_app(LibPath, AppDir)
+                end,
+                AppDirs
+            ),
+            case NativeFiles of
+                [] -> {ok, []};
+                Files -> {warning, Files}
+            end;
+        {error, _} ->
+            {ok, []}
+    end.
+
+-doc """
+Validate that a release is suitable for multi-platform builds.
+
+For multi-platform builds (more than one platform specified):
+1. **Error** if bundled ERTS is detected - multi-platform requires ERTS from base image
+2. **Warning** if native code (NIFs) detected - may not be portable
+
+This function is universal for all BEAM languages.
+
+```
+ok = ocibuild_release:validate_multiplatform(ReleasePath, [Platform]).
+{error, {bundled_erts, _Reason}} = ocibuild_release:validate_multiplatform(ReleasePath, [P1, P2]).
+```
+""".
+-spec validate_multiplatform(file:filename(), [ocibuild:platform()]) ->
+    ok | {error, {bundled_erts, binary()}}.
+validate_multiplatform(_ReleasePath, Platforms) when length(Platforms) =< 1 ->
+    %% Single platform builds don't need validation
+    ok;
+validate_multiplatform(ReleasePath, _Platforms) ->
+    case has_bundled_erts(ReleasePath) of
+        true ->
+            {error, {bundled_erts, erts_error_message()}};
+        false ->
+            %% Check for NIFs (warning only, don't block)
+            case check_for_native_code(ReleasePath) of
+                {warning, NifFiles} ->
+                    warn_about_nifs(NifFiles),
+                    ok;
+                {ok, []} ->
+                    ok
+            end
+    end.
+
+%% @private Find native files in an app's priv directory
+-spec find_native_files_in_app(file:filename(), string()) ->
+    [#{app := binary(), file := binary(), extension := binary()}].
+find_native_files_in_app(LibPath, AppDir) ->
+    PrivPath = filename:join([LibPath, AppDir, "priv"]),
+    case file:list_dir(PrivPath) of
+        {ok, Files} ->
+            NativeFiles = lists:filtermap(
+                fun(File) ->
+                    case is_native_file(File) of
+                        {true, Ext} ->
+                            AppName = extract_app_name(AppDir),
+                            {true, #{
+                                app => list_to_binary(AppName),
+                                file => list_to_binary(File),
+                                extension => Ext
+                            }};
+                        false ->
+                            false
+                    end
+                end,
+                Files
+            ),
+            %% Also check subdirectories of priv
+            SubDirs = [F || F <- Files, filelib:is_dir(filename:join(PrivPath, F))],
+            NestedFiles = lists:flatmap(
+                fun(SubDir) ->
+                    find_native_files_in_subdir(LibPath, AppDir, ["priv", SubDir])
+                end,
+                SubDirs
+            ),
+            NativeFiles ++ NestedFiles;
+        {error, _} ->
+            []
+    end.
+
+%% @private Find native files in subdirectories of priv
+-spec find_native_files_in_subdir(file:filename(), string(), [string()]) ->
+    [#{app := binary(), file := binary(), extension := binary()}].
+find_native_files_in_subdir(LibPath, AppDir, PathParts) ->
+    FullPath = filename:join([LibPath, AppDir | PathParts]),
+    case file:list_dir(FullPath) of
+        {ok, Files} ->
+            lists:filtermap(
+                fun(File) ->
+                    case is_native_file(File) of
+                        {true, Ext} ->
+                            AppName = extract_app_name(AppDir),
+                            RelFile = filename:join(PathParts ++ [File]),
+                            {true, #{
+                                app => list_to_binary(AppName),
+                                file => list_to_binary(RelFile),
+                                extension => Ext
+                            }};
+                        false ->
+                            false
+                    end
+                end,
+                Files
+            );
+        {error, _} ->
+            []
+    end.
+
+%% @private Check if a filename is a native shared library
+-spec is_native_file(string()) -> {true, binary()} | false.
+is_native_file(Filename) ->
+    case filename:extension(Filename) of
+        ".so" -> {true, ~".so"};
+        ".dll" -> {true, ~".dll"};
+        ".dylib" -> {true, ~".dylib"};
+        _ -> false
+    end.
+
+%% @private Extract app name from versioned directory (e.g., "crypto-1.0.0" -> "crypto")
+%%
+%% OTP release directories use the format "appname-version" where version follows
+%% semver-like patterns: "1.0.0", "2.10.0", "1.0.0-rc1", "5.2", etc.
+%%
+%% Examples:
+%%   "cowboy-2.10.0" -> "cowboy"
+%%   "my_app-1.0.0"  -> "my_app"
+%%   "my-app-2"      -> "my-app-2" ("2" lacks a dot, so not a version)
+%%   "jsx-3.1.0"     -> "jsx"
+-spec extract_app_name(string()) -> string().
+extract_app_name(AppDir) ->
+    case string:split(AppDir, "-", trailing) of
+        [Name, Version] ->
+            case is_version_string(Version) of
+                true -> Name;
+                false -> AppDir
+            end;
+        _ ->
+            AppDir
+    end.
+
+%% @private Check if a string looks like a version number
+%%
+%% Valid versions must:
+%% 1. Start with a digit
+%% 2. Have format like "X.Y" or "X.Y.Z" (major.minor or major.minor.patch)
+%% 3. May have pre-release suffix like "-rc1", "-beta", "-alpha.1"
+%% 4. May have build metadata like "+build.123"
+-spec is_version_string(string()) -> boolean().
+is_version_string([]) ->
+    false;
+is_version_string([C | _] = Version) when C >= $0, C =< $9 ->
+    %% Starts with digit, now check for valid version pattern
+    %% Strip any pre-release (-rc1) or build metadata (+build) suffix first
+    BaseVersion = strip_version_suffix(Version),
+    %% Must contain at least one dot and have numeric segments
+    case string:split(BaseVersion, ".", all) of
+        [_Single] ->
+            %% No dot found - not a valid version (e.g., "2" alone)
+            false;
+        Segments when length(Segments) >= 2 ->
+            %% Check that at least the first two segments are numeric
+            lists:all(fun is_numeric_segment/1, lists:sublist(Segments, 2));
+        _ ->
+            false
+    end;
+is_version_string(_) ->
+    false.
+
+%% @private Strip pre-release and build metadata suffixes from version
+%% "1.0.0-rc1" -> "1.0.0", "1.0.0+build" -> "1.0.0"
+-spec strip_version_suffix(string()) -> string().
+strip_version_suffix(Version) ->
+    %% Find first occurrence of - or + that's not at the start
+    case find_suffix_start(Version, 1) of
+        0 -> Version;
+        Pos -> lists:sublist(Version, Pos - 1)
+    end.
+
+%% @private Find position of first `-` or `+` character in a version string.
+%% Returns position (1-based) of the suffix marker, or 0 if not found.
+%% Used to strip pre-release (-rc1) or build metadata (+build) from versions.
+-spec find_suffix_start(string(), pos_integer()) -> non_neg_integer().
+find_suffix_start([], _Pos) ->
+    0;
+find_suffix_start([$- | _], Pos) ->
+    Pos;
+find_suffix_start([$+ | _], Pos) ->
+    Pos;
+find_suffix_start([_ | Rest], Pos) ->
+    find_suffix_start(Rest, Pos + 1).
+
+%% @private Check if a string segment is numeric (all digits)
+-spec is_numeric_segment(string()) -> boolean().
+is_numeric_segment([]) ->
+    false;
+is_numeric_segment(Segment) ->
+    lists:all(fun(C) -> C >= $0 andalso C =< $9 end, Segment).
+
+%% @private Generate error message for bundled ERTS
+-spec erts_error_message() -> binary().
+erts_error_message() ->
+    <<
+        "Multi-platform builds require 'include_erts' set to false.\n"
+        "Found bundled ERTS in release directory.\n\n"
+        "For Elixir, update mix.exs:\n"
+        "  releases: [\n"
+        "    myapp: [\n"
+        "      include_erts: false,\n"
+        "      include_src: false\n"
+        "    ]\n"
+        "  ]\n\n"
+        "For Erlang, update rebar.config:\n"
+        "  {relx, [\n"
+        "    {include_erts, false}\n"
+        "  ]}.\n\n"
+        "Then use a base image with ERTS, e.g.:\n"
+        "  base_image: \"elixir:1.17-slim\" or \"erlang:27-slim\""
+    >>.
+
+%% @private Warn about native code that may not be portable
+-spec warn_about_nifs([#{app := binary(), file := binary(), extension := binary()}]) -> ok.
+warn_about_nifs(NifFiles) ->
+    io:format(
+        standard_error,
+        "~nWarning: Native code detected that may not be portable across platforms:~n",
+        []
+    ),
+    lists:foreach(
+        fun(#{app := App, file := File}) ->
+            io:format(standard_error, "  - ~s: ~s~n", [App, File])
+        end,
+        NifFiles
+    ),
+    io:format(standard_error, "~nNIFs compiled for one architecture won't work on others.~n", []),
+    io:format(
+        standard_error,
+        "Consider using cross-compilation or Rust-based NIFs with multi-target support.~n~n",
+        []
+    ),
+    ok.

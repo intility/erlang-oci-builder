@@ -26,7 +26,7 @@ The state passed to this adapter is a map containing:
 
 ```erlang
 #{
-    base_image => <<\"debian:slim\">>,
+    base_image => <<\"debian:stable-slim\">>,
     workdir => <<\"/app\">>,
     env => #{<<\"LANG\">> => <<\"C.UTF-8\">>},
     expose => [8080],
@@ -67,7 +67,7 @@ Elixir Mix task, so we just return it with defaults applied.
 -spec get_config(map()) -> ocibuild_adapter:config().
 get_config(State) when is_map(State) ->
     Defaults = #{
-        base_image => <<"debian:slim">>,
+        base_image => <<"debian:stable-slim">>,
         workdir => <<"/app">>,
         env => #{},
         expose => [],

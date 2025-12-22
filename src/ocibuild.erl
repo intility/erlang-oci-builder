@@ -40,10 +40,13 @@ memory limits.
 %% API - Configuration
 -export([entrypoint/2, cmd/2, env/2, workdir/2, expose/2, label/3, user/2, annotation/3]).
 %% API - Output
--export([push/3, push/4, push/5, save/2, save/3, export/2]).
+-export([push/3, push/4, push/5, push_multi/4, push_multi/5, save/2, save/3, export/2]).
 
 %% Types
--export_type([image/0, layer/0, auth/0, base_ref/0]).
+-export_type([image/0, layer/0, auth/0, base_ref/0, platform/0]).
+
+%% Platform utilities
+-export([parse_platform/1, parse_platforms/1]).
 
 -opaque image() ::
     #{
@@ -53,7 +56,8 @@ memory limits.
         auth => auth() | #{},
         layers := [layer()],
         config := map(),
-        annotations => map()
+        annotations => map(),
+        platform => platform()
     }.
 
 -type base_ref() :: {Registry :: binary(), Repo :: binary(), Ref :: binary()}.
@@ -66,6 +70,14 @@ memory limits.
         data := binary()
     }.
 -type auth() :: #{username := binary(), password := binary()} | #{token := binary()}.
+
+-type platform() ::
+    #{
+        os := binary(),
+        architecture := binary(),
+        variant => binary(),
+        os_version => binary()
+    }.
 
 %%%===================================================================
 %%% API - Building images
@@ -127,6 +139,8 @@ Start building an image from a base image with authentication and options.
 Options:
 - `progress`: A callback function `fun(ProgressInfo) -> ok` that receives progress updates.
   ProgressInfo is a map with keys: `phase` (manifest|config|layer), `bytes_received`, `total_bytes`.
+- `platform`: A specific platform to pull (e.g., `#{os => <<"linux">>, architecture => <<"amd64">>}`).
+- `platforms`: A list of platforms for multi-platform builds. Returns a list of images.
 
 Example with progress callback:
 ```
@@ -135,8 +149,17 @@ Progress = fun(#{phase := Phase, bytes_received := Recv, total_bytes := Total}) 
 end,
 {ok, Image} = ocibuild:from(<<"alpine:3.19">>, #{}, #{progress => Progress}).
 ```
+
+Example with multiple platforms (returns list of images):
+```
+{ok, Images} = ocibuild:from(<<"alpine:3.19">>, #{}, #{
+    platforms => [#{os => <<"linux">>, architecture => <<"amd64">>},
+                  #{os => <<"linux">>, architecture => <<"arm64">>}]
+}).
+```
 """.
--spec from(binary() | base_ref(), auth(), map()) -> {ok, image()} | {error, term()}.
+-spec from(binary() | base_ref(), auth(), map()) ->
+    {ok, image()} | {ok, [image()]} | {error, term()}.
 from(Ref, Auth, Opts) when is_binary(Ref) ->
     case parse_image_ref(Ref) of
         {ok, ParsedRef} ->
@@ -144,17 +167,64 @@ from(Ref, Auth, Opts) when is_binary(Ref) ->
         {error, _} = Err ->
             Err
     end;
-from({Registry, Repo, Tag} = Ref, Auth, Opts) ->
+from({_Registry, _Repo, _Tag} = Ref, Auth, Opts) ->
+    case maps:find(platforms, Opts) of
+        {ok, Platforms} when is_list(Platforms), length(Platforms) > 0 ->
+            %% Multi-platform: pull each platform separately
+            from_multi_platform(Ref, Auth, Opts, Platforms);
+        _ ->
+            %% Single platform (possibly with explicit platform option)
+            from_single_platform(Ref, Auth, Opts)
+    end.
+
+%% @private Pull a single platform image
+-spec from_single_platform(base_ref(), auth(), map()) -> {ok, image()} | {error, term()}.
+from_single_platform({Registry, Repo, Tag} = Ref, Auth, Opts) ->
     case ocibuild_registry:pull_manifest(Registry, Repo, Tag, Auth, Opts) of
         {ok, Manifest, Config} ->
+            Platform =
+                case maps:find(platform, Opts) of
+                    {ok, P} ->
+                        P;
+                    error ->
+                        %% Extract from config if available
+                        #{
+                            os => maps:get(~"os", Config, ~"linux"),
+                            architecture => maps:get(~"architecture", Config, ~"amd64")
+                        }
+                end,
             {ok, #{
                 base => Ref,
                 base_manifest => Manifest,
                 base_config => Config,
                 auth => Auth,
                 layers => [],
-                config => init_config(Config)
+                config => init_config(Config),
+                platform => Platform
             }};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Pull multiple platform images
+-spec from_multi_platform(base_ref(), auth(), map(), [platform()]) ->
+    {ok, [image()]} | {error, term()}.
+from_multi_platform({Registry, Repo, Tag} = Ref, Auth, _Opts, Platforms) ->
+    case ocibuild_registry:pull_manifests_for_platforms(Registry, Repo, Tag, Auth, Platforms) of
+        {ok, PlatformResults} ->
+            Images = [
+                #{
+                    base => Ref,
+                    base_manifest => Manifest,
+                    base_config => Config,
+                    auth => Auth,
+                    layers => [],
+                    config => init_config(Config),
+                    platform => Platform
+                }
+             || {Platform, Manifest, Config} <- PlatformResults
+            ],
+            {ok, Images};
         {error, _} = Err ->
             Err
     end.
@@ -372,6 +442,40 @@ push(Image, Registry, RepoTag, Auth, Opts) ->
     ocibuild_registry:push(Image, Registry, Repo, Tag, Auth, Opts).
 
 -doc """
+Push multiple platform-specific images as a single multi-platform image.
+
+This function pushes all images and creates an OCI image index that references
+them. When clients pull the image, they receive the appropriate platform variant.
+
+Each image in the list must have a `platform` field set.
+
+Example:
+```
+%% Build for multiple platforms
+{ok, Images} = ocibuild:from(<<"alpine:3.19">>, #{}, #{
+    platforms => [#{os => <<"linux">>, architecture => <<"amd64">>},
+                  #{os => <<"linux">>, architecture => <<"arm64">>}]
+}),
+%% Add layers to each image
+Images2 = [ocibuild:copy(I, Files, <<"/app">>) || I <- Images],
+%% Push as multi-platform image
+Auth = #{username => <<"user">>, password => <<"pass">>},
+ok = ocibuild:push_multi(Images2, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth).
+```
+""".
+-spec push_multi([image()], Registry :: binary(), RepoTag :: binary(), auth()) ->
+    ok | {error, term()}.
+push_multi(Images, Registry, RepoTag, Auth) ->
+    push_multi(Images, Registry, RepoTag, Auth, #{}).
+
+-doc "Push multiple images as a multi-platform image with options.".
+-spec push_multi([image()], Registry :: binary(), RepoTag :: binary(), auth(), map()) ->
+    ok | {error, term()}.
+push_multi(Images, Registry, RepoTag, Auth, Opts) ->
+    {Repo, Tag} = parse_repo_tag(RepoTag),
+    ocibuild_registry:push_multi(Images, Registry, Repo, Tag, Auth, Opts).
+
+-doc """
 Save the image as a tarball.
 
 The resulting tarball can be loaded with `docker load` or `podman load`:
@@ -407,6 +511,63 @@ ok = ocibuild:export(Image, "./myimage").
 -spec export(image(), file:filename()) -> ok | {error, term()}.
 export(Image, Path) ->
     ocibuild_layout:export_directory(Image, Path).
+
+%%%===================================================================
+%%% Platform utilities
+%%%===================================================================
+
+-doc """
+Parse a platform string into a platform map.
+
+Accepts formats like:
+- "linux/amd64"
+- "linux/arm64"
+- "linux/arm64/v8" (with variant)
+
+```
+{ok, #{os := <<"linux">>, architecture := <<"amd64">>}} =
+    ocibuild:parse_platform(<<"linux/amd64">>).
+```
+""".
+-spec parse_platform(binary()) -> {ok, platform()} | {error, term()}.
+parse_platform(PlatformStr) when is_binary(PlatformStr) ->
+    case binary:split(PlatformStr, <<"/">>, [global]) of
+        [Os, Arch] when byte_size(Os) > 0, byte_size(Arch) > 0 ->
+            {ok, #{os => Os, architecture => Arch}};
+        [Os, Arch, Variant] when byte_size(Os) > 0, byte_size(Arch) > 0, byte_size(Variant) > 0 ->
+            {ok, #{os => Os, architecture => Arch, variant => Variant}};
+        _ ->
+            {error, {invalid_platform, PlatformStr}}
+    end;
+parse_platform(PlatformStr) when is_list(PlatformStr) ->
+    parse_platform(list_to_binary(PlatformStr)).
+
+-doc """
+Parse a comma-separated list of platforms.
+
+```
+{ok, [#{os := <<"linux">>, architecture := <<"amd64">>},
+      #{os := <<"linux">>, architecture := <<"arm64">>}]} =
+    ocibuild:parse_platforms(<<"linux/amd64,linux/arm64">>).
+```
+""".
+-spec parse_platforms(binary()) -> {ok, [platform()]} | {error, term()}.
+parse_platforms(PlatformsStr) when is_binary(PlatformsStr) ->
+    Parts = binary:split(PlatformsStr, <<",">>, [global, trim_all]),
+    parse_platforms_list(Parts, []);
+parse_platforms(PlatformsStr) when is_list(PlatformsStr) ->
+    parse_platforms(list_to_binary(PlatformsStr)).
+
+-spec parse_platforms_list([binary()], [platform()]) -> {ok, [platform()]} | {error, term()}.
+parse_platforms_list([], Acc) ->
+    {ok, lists:reverse(Acc)};
+parse_platforms_list([P | Rest], Acc) ->
+    case parse_platform(P) of
+        {ok, Platform} ->
+            parse_platforms_list(Rest, [Platform | Acc]);
+        {error, _} = Err ->
+            Err
+    end.
 
 %%%===================================================================
 %%% Internal functions

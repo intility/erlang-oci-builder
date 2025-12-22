@@ -56,9 +56,10 @@ build_scratch_image_test() ->
             {~"/app/lib/myapp.beam", ~"beam_data", 8#644}
         ],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app"
+    }),
 
     %% Verify image structure
     ?assert(is_map(Image)),
@@ -77,9 +78,11 @@ build_with_env_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     EnvMap = #{~"LANG" => ~"C.UTF-8", ~"PORT" => ~"8080"},
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", EnvMap, [], #{}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        env => EnvMap
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -92,9 +95,11 @@ build_with_env_test() ->
 build_with_exposed_ports_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [8080, 443], #{}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        expose => [8080, 443]
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -107,9 +112,11 @@ build_with_labels_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     Labels = #{~"org.opencontainers.image.version" => ~"1.0.0"},
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [], Labels
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        labels => Labels
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -298,9 +305,11 @@ build_image_with_custom_cmd_test() ->
             {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
         ],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}, ~"start"
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        cmd => ~"start"
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -437,7 +446,7 @@ find_relx_release_multiple_test() ->
 
 get_base_image_from_args_test() ->
     Args = [{base, "alpine:3.19"}],
-    Config = [{base_image, ~"debian:slim"}],
+    Config = [{base_image, ~"debian:stable-slim"}],
     ?assertEqual(~"alpine:3.19", ocibuild_rebar3:get_base_image(Args, Config)).
 
 get_base_image_from_config_test() ->
@@ -475,15 +484,13 @@ build_image_all_options_test() ->
             {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
         ],
 
-    {ok, Image} = ocibuild_release:build_image(
-        ~"scratch",
-        Files,
-        "myapp",
-        ~"/app",
-        #{~"LANG" => ~"C.UTF-8", ~"DEBUG" => ~"1"},
-        [8080, 443],
-        #{~"version" => ~"1.0.0", ~"author" => ~"test"}
-    ),
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => "myapp",
+        workdir => ~"/app",
+        env => #{~"LANG" => ~"C.UTF-8", ~"DEBUG" => ~"1"},
+        expose => [8080, 443],
+        labels => #{~"version" => ~"1.0.0", ~"author" => ~"test"}
+    }),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -676,6 +683,301 @@ collect_symlink_to_dir_inside_test() ->
     after
         cleanup_temp_dir(TmpDir)
     end.
+
+%%%===================================================================
+%%% Multi-platform validation tests
+%%%===================================================================
+
+has_bundled_erts_true_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add erts directory
+        ErtsDir = filename:join(TmpDir, "erts-27.0"),
+        ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
+        ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), <<"beam">>),
+
+        ?assertEqual(true, ocibuild_release:has_bundled_erts(TmpDir))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+has_bundled_erts_false_test() ->
+    TmpDir = create_mock_release(),
+    try
+        ?assertEqual(false, ocibuild_release:has_bundled_erts(TmpDir))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+has_bundled_erts_nonexistent_test() ->
+    ?assertEqual(false, ocibuild_release:has_bundled_erts("/nonexistent/path")).
+
+check_for_native_code_found_so_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add a .so file in lib/crypto-1.0.0/priv/
+        PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
+        ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+        ok = file:write_file(filename:join(PrivDir, "crypto_nif.so"), <<"fake so">>),
+
+        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+        ?assertEqual(1, length(NifFiles)),
+        [#{app := App, file := File, extension := Ext}] = NifFiles,
+        ?assertEqual(~"crypto", App),
+        ?assertEqual(~"crypto_nif.so", File),
+        ?assertEqual(~".so", Ext)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+check_for_native_code_found_dll_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add a .dll file
+        PrivDir = filename:join([TmpDir, "lib", "nif_app-2.0.0", "priv"]),
+        ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+        ok = file:write_file(filename:join(PrivDir, "nif_app.dll"), <<"fake dll">>),
+
+        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+        ?assertEqual(1, length(NifFiles)),
+        [#{extension := Ext}] = NifFiles,
+        ?assertEqual(~".dll", Ext)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+check_for_native_code_found_dylib_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add a .dylib file
+        PrivDir = filename:join([TmpDir, "lib", "mac_nif-1.0.0", "priv"]),
+        ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+        ok = file:write_file(filename:join(PrivDir, "mac_nif.dylib"), <<"fake dylib">>),
+
+        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+        ?assertEqual(1, length(NifFiles)),
+        [#{extension := Ext}] = NifFiles,
+        ?assertEqual(~".dylib", Ext)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+check_for_native_code_none_test() ->
+    TmpDir = create_mock_release(),
+    try
+        ?assertEqual({ok, []}, ocibuild_release:check_for_native_code(TmpDir))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+check_for_native_code_nested_priv_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add a .so file in a subdirectory of priv
+        NestedDir = filename:join([TmpDir, "lib", "nested-1.0.0", "priv", "native"]),
+        ok = filelib:ensure_dir(filename:join(NestedDir, "placeholder")),
+        ok = file:write_file(filename:join(NestedDir, "nested_nif.so"), <<"fake so">>),
+
+        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+        ?assertEqual(1, length(NifFiles)),
+        [#{file := File}] = NifFiles,
+        %% Should include the path relative to priv
+        ?assert(binary:match(File, ~"native") =/= nomatch)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+validate_multiplatform_single_platform_ok_test() ->
+    %% Single platform builds don't need validation
+    Platform = #{os => ~"linux", architecture => ~"amd64"},
+    ?assertEqual(ok, ocibuild_release:validate_multiplatform("/any/path", [Platform])).
+
+validate_multiplatform_empty_platforms_ok_test() ->
+    %% Empty platforms list is OK
+    ?assertEqual(ok, ocibuild_release:validate_multiplatform("/any/path", [])).
+
+validate_multiplatform_erts_error_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add erts directory
+        ErtsDir = filename:join(TmpDir, "erts-27.0"),
+        ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
+
+        Platforms = [
+            #{os => ~"linux", architecture => ~"amd64"},
+            #{os => ~"linux", architecture => ~"arm64"}
+        ],
+        Result = ocibuild_release:validate_multiplatform(TmpDir, Platforms),
+        ?assertMatch({error, {bundled_erts, _}}, Result)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+validate_multiplatform_ok_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% No ERTS, no NIFs - should be OK
+        Platforms = [
+            #{os => ~"linux", architecture => ~"amd64"},
+            #{os => ~"linux", architecture => ~"arm64"}
+        ],
+        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%%%===================================================================
+%%% CLI Integration tests (run/3 with platforms)
+%%%===================================================================
+
+%% Test that single platform build works without validation
+run_single_platform_test() ->
+    TmpDir = create_mock_release(),
+    try
+        State = create_mock_adapter_state(TmpDir, #{
+            platform => <<"linux/amd64">>
+        }),
+        %% Single platform should work even with ERTS
+        add_mock_erts(TmpDir),
+
+        %% This should succeed (single platform allows ERTS)
+        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+        ?assertMatch({ok, _}, Result)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Test that multi-platform build fails with bundled ERTS
+run_multiplatform_erts_error_test() ->
+    TmpDir = create_mock_release(),
+    try
+        State = create_mock_adapter_state(TmpDir, #{
+            platform => <<"linux/amd64,linux/arm64">>
+        }),
+        %% Add ERTS to trigger validation error
+        add_mock_erts(TmpDir),
+
+        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+        ?assertMatch({error, {bundled_erts, _}}, Result)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Test that multi-platform validation succeeds without ERTS
+%% (Full build would require network access, so we just test validation)
+run_multiplatform_no_erts_test() ->
+    TmpDir = create_mock_release(),
+    try
+        Platforms = [
+            #{os => <<"linux">>, architecture => <<"amd64">>},
+            #{os => <<"linux">>, architecture => <<"arm64">>}
+        ],
+        %% No ERTS, validation should succeed
+        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Test that no platform specified works (default behavior)
+run_no_platform_test() ->
+    TmpDir = create_mock_release(),
+    try
+        State = create_mock_adapter_state(TmpDir, #{
+            platform => undefined
+        }),
+        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+        ?assertMatch({ok, _}, Result)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Test that empty platform string works
+run_empty_platform_test() ->
+    TmpDir = create_mock_release(),
+    try
+        State = create_mock_adapter_state(TmpDir, #{
+            platform => <<>>
+        }),
+        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+        ?assertMatch({ok, _}, Result)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Test that nil platform (Elixir interop) works
+run_nil_platform_test() ->
+    TmpDir = create_mock_release(),
+    try
+        State = create_mock_adapter_state(TmpDir, #{
+            platform => nil
+        }),
+        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+        ?assertMatch({ok, _}, Result)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Test that multi-platform with NIFs passes validation but detects NIFs.
+%% NIFs trigger a warning (visible in test output) but don't block the build.
+run_multiplatform_nif_warning_test() ->
+    TmpDir = create_mock_release(),
+    try
+        %% Add NIF to the release
+        add_mock_nif(TmpDir),
+
+        Platforms = [
+            #{os => <<"linux">>, architecture => <<"amd64">>},
+            #{os => <<"linux">>, architecture => <<"arm64">>}
+        ],
+
+        %% NIFs should be detected by check_for_native_code
+        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+        ?assertEqual(1, length(NifFiles)),
+
+        %% Verify the detected NIF file details
+        [NifInfo] = NifFiles,
+        ?assertEqual(<<"crypto">>, maps:get(app, NifInfo)),
+        ?assertEqual(<<"test_nif.so">>, maps:get(file, NifInfo)),
+
+        %% Validation should succeed - NIFs warn but don't block
+        %% (Warning "Native code detected..." is printed to stderr, visible in test output)
+        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Helper to create mock adapter state
+create_mock_adapter_state(ReleasePath, Overrides) ->
+    OutputPath = filename:join(ReleasePath, "test-image.tar.gz"),
+    BaseState = #{
+        release_path => ReleasePath,
+        release_name => myapp,
+        base_image => <<"scratch">>,
+        workdir => <<"/app">>,
+        env => #{},
+        expose => [],
+        labels => #{},
+        cmd => <<"start">>,
+        description => undefined,
+        tag => <<"myapp:1.0.0">>,
+        output => list_to_binary(OutputPath),
+        push => undefined,
+        chunk_size => undefined,
+        platform => undefined
+    },
+    maps:merge(BaseState, Overrides).
+
+%% Helper to add mock ERTS to release
+add_mock_erts(TmpDir) ->
+    ErtsDir = filename:join(TmpDir, "erts-27.0"),
+    ok = filelib:ensure_dir(filename:join([ErtsDir, "bin", "placeholder"])),
+    ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), <<"beam">>).
+
+%% Helper to add mock NIF to release
+add_mock_nif(TmpDir) ->
+    PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
+    ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+    ok = file:write_file(filename:join(PrivDir, "test_nif.so"), <<"fake so">>).
 
 %%%===================================================================
 %%% Test fixtures

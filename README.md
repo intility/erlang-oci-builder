@@ -26,7 +26,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Tarball export**            | ✅     | Export images for `podman load`, skopeo, crane, buildah.               |
 | **OCI annotations**           | ✅     | Add custom annotations to image manifests.                             |
 | **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                    |
-| **Multi-platform images**     | 🔜     | Build for multiple architectures (amd64, arm64) from a single command. |
+| **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command. |
 | **Reproducible builds**       | 🔜     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
 | **Smart dependency layering** | 🔜     | Separate layers for ERTS, dependencies, and application code.          |
 | **Non-root by default**       | 🔜     | Run containers as non-root user (UID 65534) for security.              |
@@ -70,7 +70,7 @@ def project do
   [
     # ...
     ocibuild: [
-      base_image: "debian:slim",
+      base_image: "debian:stable-slim",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080]
     ]
@@ -116,7 +116,7 @@ The easiest way to use `ocibuild` with Erlang:
 {deps, [{ocibuild, "~> 0.1"}]}.
 
 {ocibuild, [
-    {base_image, "debian:slim"},
+    {base_image, "debian:stable-slim"},
     {env, #{~"LANG" => ~"C.UTF-8"}},
     {expose, [8080]}
 ]}.
@@ -146,8 +146,8 @@ rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 Image1 = ocibuild:copy(Image0, [{~"myapp", AppBinary}], ~"/app"),
 
 %% Configure the container
-Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"start"]),
-Image3 = ocibuild:env(Image2, #{~"MIX_ENV" => ~"prod"}),
+Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"foreground"]),
+Image3 = ocibuild:env(Image2, #{~"LANG" => ~"C.UTF-8"}),
 
 %% Push to a registry
 Auth = #{username => list_to_binary(os:getenv("OCIBUILD_PUSH_USERNAME")),
@@ -182,19 +182,21 @@ auth = %{username: System.get_env("OCIBUILD_PUSH_USERNAME"),
 
 Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
-| Option       | Short | Description                                   |
-|--------------|-------|-----------------------------------------------|
-| `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
-| `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
-| `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
-| `--desc`     | `-d`  | Image description (OCI manifest annotation)   |
-| `--base`     |       | Override base image                           |
-| `--release`  |       | Release name (if multiple configured)         |
-| `--cmd`      | `-c`  | Release start command (Elixir only)           |
+| Option       | Short | Description                                      |
+|--------------|-------|--------------------------------------------------|
+| `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                   |
+| `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`)    |
+| `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`          |
+| `--desc`     | `-d`  | Image description (OCI manifest annotation)      |
+| `--platform` | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64`|
+| `--base`     |       | Override base image                              |
+| `--release`  |       | Release name (if multiple configured)            |
+| `--cmd`      | `-c`  | Release start command (Elixir only)              |
 
 **Notes:**
 - Tag defaults to `app:version` in Mix, required in rebar3
 - `--cmd` options (Elixir): `start`, `start_iex`, `daemon`, `daemon_iex`
+- Multi-platform builds require `include_erts: false` and a base image with ERTS
 
 ## Configuration
 
@@ -202,7 +204,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
 ```erlang
 {ocibuild, [
-    {base_image, "debian:slim"},           % Base image (default: debian:slim)
+    {base_image, "debian:stable-slim"},           % Base image (default: debian:stable-slim)
     {workdir, "/app"},                     % Working directory in container
     {env, #{                               % Environment variables
         ~"LANG" => ~"C.UTF-8"
@@ -224,7 +226,7 @@ def project do
     version: "1.0.0",
     # ...
     ocibuild: [
-      base_image: "debian:slim",           # Base image (default: debian:slim)
+      base_image: "debian:stable-slim",           # Base image (default: debian:stable-slim)
       tag: "myapp:1.0.0",                  # Optional, defaults to app:version
       workdir: "/app",                     # Working directory in container
       cmd: "start",                        # Release command (default: start)
@@ -317,7 +319,7 @@ For specific dependencies, create a base image once and reuse it:
 
 ```dockerfile
 # Dockerfile.base
-FROM debian:slim
+FROM debian:stable-slim
 RUN apt-get update && apt-get install -y libncurses6 libssl3 \
     && rm -rf /var/lib/apt/lists/*
 ```
@@ -332,3 +334,80 @@ Then use it with `ocibuild`:
 ```erlang
 {ocibuild, [{base_image, "myorg/erlang-base:1.0"}]}.
 ```
+
+## Multi-Platform Images
+
+Build images for multiple architectures (e.g., `linux/amd64` and `linux/arm64`) from a single command.
+
+### Requirements
+
+Multi-platform builds require:
+1. **No bundled ERTS** - Set `include_erts: false` in your release config
+2. **Base image with ERTS** - Use `erlang:27-slim`, `elixir:1.17-slim`, or similar
+
+BEAM bytecode is platform-independent, so only the base image layers differ between platforms.
+
+### Configuration
+
+**rebar.config:**
+```erlang
+{relx, [
+    {include_erts, false},
+    {system_libs, false}
+]}.
+
+{ocibuild, [
+    {base_image, "erlang:27-slim"}
+]}.
+```
+
+**mix.exs:**
+```elixir
+releases: [
+  myapp: [
+    include_erts: false
+  ]
+],
+ocibuild: [
+  base_image: "elixir:1.17-slim"
+]
+```
+
+### Usage
+
+```bash
+# Build and push multi-platform image
+rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg --platform linux/amd64,linux/arm64
+mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg -P linux/amd64,linux/arm64
+
+# Build multi-platform tarball (OCI image index)
+rebar3 ocibuild -t myapp:1.0.0 --platform linux/amd64,linux/arm64
+```
+
+### Programmatic API
+
+```erlang
+%% Build for multiple platforms
+{ok, Platforms} = ocibuild:parse_platforms(~"linux/amd64,linux/arm64"),
+{ok, Images} = ocibuild:from(~"erlang:27-slim", #{}, #{
+    platforms => Platforms
+}),
+
+%% Configure all platform images
+Images2 = [ocibuild:entrypoint(I, [~"/app/bin/myapp", ~"foreground"]) || I <- Images],
+
+%% Push multi-platform image with index
+Auth = #{username => ..., password => ...},
+ok = ocibuild:push_multi(Images2, ~"ghcr.io", ~"myorg/myapp:1.0.0", Auth).
+```
+
+### Validation
+
+The build will fail if multi-platform is requested but ERTS is bundled:
+
+```
+Error: Multi-platform builds require include_erts set to false.
+Found bundled ERTS in release directory.
+```
+
+Native code (NIFs) in the release will trigger a warning since `.so` files may not be portable across platforms.

@@ -34,7 +34,7 @@ src/
 ├── ocibuild.erl          → Public API (from, copy, push, save, annotation, etc.)
 ├── ocibuild_adapter.erl  → Behaviour for build system adapters
 ├── ocibuild_release.erl  → Shared release handling (file collection, image building,
-│                           auth, progress display, save/push operations)
+│                           auth, progress display, save/push operations, validation)
 ├── ocibuild_rebar3.erl   → Rebar3 provider (implements ocibuild_adapter)
 ├── ocibuild_mix.erl      → Mix adapter (implements ocibuild_adapter)
 ├── ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar format)
@@ -42,8 +42,9 @@ src/
 ├── ocibuild_digest.erl   → SHA256 digest utilities
 ├── ocibuild_json.erl     → JSON encode/decode (OTP 27 native + fallback)
 ├── ocibuild_manifest.erl → OCI manifest generation (with annotations support)
-├── ocibuild_layout.erl   → Export to directory or tarball
-├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry, dedicated profile)
+├── ocibuild_index.erl    → OCI image index for multi-platform images
+├── ocibuild_layout.erl   → Export to directory or tarball (including multi-platform)
+├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry, multi-platform)
 └── ocibuild_cache.erl    → Layer caching for base images
 
 lib/
@@ -93,24 +94,25 @@ User API (ocibuild.erl)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers.
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index).
 
-**Not Implemented:** Multi-platform images, resumable uploads, zstd compression.
+**Not Implemented:** Resumable uploads, zstd compression.
 
 ## CLI Reference
 
 Both `rebar3 ocibuild` and `mix ocibuild` support:
 
-| Option         | Short | Description                                   |
-|----------------|-------|-----------------------------------------------|
-| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
-| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
-| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
-| `--desc`       | `-d`  | Image description (OCI manifest annotation)   |
-| `--base`       |       | Override base image                           |
-| `--release`    |       | Release name (if multiple configured)         |
-| `--cmd`        | `-c`  | Release start command (Elixir only)           |
-| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)     |
+| Option         | Short | Description                                      |
+|----------------|-------|--------------------------------------------------|
+| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                   |
+| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)    |
+| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`          |
+| `--desc`       | `-d`  | Image description (OCI manifest annotation)      |
+| `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64`|
+| `--base`       |       | Override base image                              |
+| `--release`    |       | Release name (if multiple configured)            |
+| `--cmd`        | `-c`  | Release start command (Elixir only)              |
+| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)        |
 
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
 files to support the new functionality.
@@ -121,7 +123,7 @@ files to support the new functionality.
 
 ```erlang
 {ocibuild, [
-    {base_image, "debian:slim"},
+    {base_image, "debian:stable-slim"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
@@ -136,7 +138,7 @@ files to support the new functionality.
 def project do
   [
     ocibuild: [
-      base_image: "debian:slim",
+      base_image: "debian:stable-slim",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080],
       description: "My application"
@@ -187,7 +189,7 @@ Environment variables:
 
 | Function | Description |
 |----------|-------------|
-| `from/1`, `from/2`, `from/3` | Start from base image |
+| `from/1`, `from/2`, `from/3` | Start from base image (with optional platform(s)) |
 | `scratch/0` | Start from empty image |
 | `add_layer/2` | Add layer with file modes |
 | `copy/3` | Copy files to destination |
@@ -200,7 +202,8 @@ Environment variables:
 | `user/2` | Set user |
 | `annotation/3` | Add manifest annotation |
 | `push/3`, `push/4` | Push to registry |
-| `save/2`, `save/3` | Save as tarball |
+| `push_multi/4`, `push_multi/5` | Push multi-platform image with index |
+| `save/2`, `save/3` | Save as tarball (supports multi-platform) |
 | `export/2` | Export as directory |
 
 ## Common Development Tasks
