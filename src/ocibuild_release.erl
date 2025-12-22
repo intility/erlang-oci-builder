@@ -1485,7 +1485,7 @@ is_native_file(Filename) ->
 %% Examples:
 %%   "cowboy-2.10.0" -> "cowboy"
 %%   "my_app-1.0.0"  -> "my_app"
-%%   "my-app-2"      -> "my-app-2" (not a valid version, no dot)
+%%   "my-app-2"      -> "my-app-2" ("2" lacks a dot, so not a version)
 %%   "jsx-3.1.0"     -> "jsx"
 -spec extract_app_name(string()) -> string().
 extract_app_name(AppDir) ->
@@ -1537,12 +1537,13 @@ strip_version_suffix(Version) ->
         Pos -> lists:sublist(Version, Pos - 1)
     end.
 
-%% @private Find position of first - or + after initial version digits
+%% @private Find position of first `-` or `+` character in a version string.
+%% Returns position (1-based) of the suffix marker, or 0 if not found.
+%% Used to strip pre-release (-rc1) or build metadata (+build) from versions.
 -spec find_suffix_start(string(), pos_integer()) -> non_neg_integer().
 find_suffix_start([], _Pos) ->
     0;
 find_suffix_start([$- | _], Pos) ->
-    %% Only treat as suffix if we've seen at least one dot
     Pos;
 find_suffix_start([$+ | _], Pos) ->
     Pos;

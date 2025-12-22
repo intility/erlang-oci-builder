@@ -917,12 +917,12 @@ run_nil_platform_test() ->
         cleanup_temp_dir(TmpDir)
     end.
 
-%% Test that multi-platform with NIFs passes validation but detects NIFs
-%% (NIFs only trigger warning, not error)
+%% Test that multi-platform with NIFs passes validation but detects NIFs.
+%% NIFs trigger a warning (visible in test output) but don't block the build.
 run_multiplatform_nif_warning_test() ->
     TmpDir = create_mock_release(),
     try
-        %% Add NIF
+        %% Add NIF to the release
         add_mock_nif(TmpDir),
 
         Platforms = [
@@ -930,12 +930,18 @@ run_multiplatform_nif_warning_test() ->
             #{os => <<"linux">>, architecture => <<"arm64">>}
         ],
 
-        %% Validation should succeed (NIFs don't block, just warn)
-        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms)),
-
-        %% But NIFs should be detected
+        %% NIFs should be detected by check_for_native_code
         {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
-        ?assertEqual(1, length(NifFiles))
+        ?assertEqual(1, length(NifFiles)),
+
+        %% Verify the detected NIF file details
+        [NifInfo] = NifFiles,
+        ?assertEqual(<<"crypto">>, maps:get(app, NifInfo)),
+        ?assertEqual(<<"test_nif.so">>, maps:get(file, NifInfo)),
+
+        %% Validation should succeed - NIFs warn but don't block
+        %% (Warning "Native code detected..." is printed to stderr, visible in test output)
+        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
     after
         cleanup_temp_dir(TmpDir)
     end.
@@ -971,7 +977,7 @@ add_mock_erts(TmpDir) ->
 add_mock_nif(TmpDir) ->
     PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
     ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-    ok = file:write_file(filename:join(PrivDir, "crypto_nif.so"), <<"fake so">>).
+    ok = file:write_file(filename:join(PrivDir, "test_nif.so"), <<"fake so">>).
 
 %%%===================================================================
 %%% Test fixtures
