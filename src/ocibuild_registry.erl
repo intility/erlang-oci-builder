@@ -41,7 +41,10 @@ See: https://github.com/opencontainers/distribution-spec
 -type progress_callback() :: fun((progress_info()) -> ok).
 -type pull_opts() :: #{
     progress => progress_callback(),
-    auth => map()
+    auth => map(),
+    size => non_neg_integer(),
+    layer_index => non_neg_integer(),
+    total_layers => non_neg_integer()
 }.
 
 %% Chunked upload types
@@ -86,7 +89,9 @@ See: https://github.com/opencontainers/distribution-spec
     acc :: binary(),
     url :: string(),
     headers :: [{string(), string()}],
-    redirects_left :: non_neg_integer()
+    redirects_left :: non_neg_integer(),
+    layer_index :: non_neg_integer(),
+    total_layers :: non_neg_integer()
 }).
 
 %% Registry URL mappings
@@ -188,7 +193,9 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
                                     Auth,
                                     ProgressFn,
                                     config,
-                                    ConfigSize
+                                    ConfigSize,
+                                    0,
+                                    1
                                 )
                             of
                                 {ok, ConfigJson} ->
@@ -260,7 +267,9 @@ pull_blob(Registry, Repo, Digest, Auth) ->
 pull_blob(Registry, Repo, Digest, Auth, Opts) ->
     ProgressFn = maps:get(progress, Opts, undefined),
     TotalBytes = maps:get(size, Opts, unknown),
-    pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, layer, TotalBytes).
+    LayerIndex = maps:get(layer_index, Opts, 0),
+    TotalLayers = maps:get(total_layers, Opts, 1),
+    pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, layer, TotalBytes, LayerIndex, TotalLayers).
 
 %% Internal blob pull with progress support
 -spec pull_blob_internal(
@@ -270,10 +279,12 @@ pull_blob(Registry, Repo, Digest, Auth, Opts) ->
     map(),
     progress_callback() | undefined,
     progress_phase(),
-    non_neg_integer() | unknown
+    non_neg_integer() | unknown,
+    non_neg_integer(),
+    non_neg_integer()
 ) ->
     {ok, binary()} | {error, term()}.
-pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes) ->
+pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes, LayerIndex, TotalLayers) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
@@ -284,8 +295,9 @@ pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes) 
                 [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
+            ProgressOpts = #{layer_index => LayerIndex, total_layers => TotalLayers},
             case
-                http_get_with_progress(lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes)
+                http_get_with_progress(lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes, ProgressOpts)
             of
                 {ok, Data} ->
                     %% Verify downloaded content matches expected digest
@@ -1852,27 +1864,29 @@ maybe_report_progress(ProgressFn, Info) when is_function(ProgressFn, 1) ->
     [{string(), string()}],
     progress_callback() | undefined,
     progress_phase(),
-    non_neg_integer() | unknown
+    non_neg_integer() | unknown,
+    map()
 ) ->
     {ok, binary()} | {error, term()}.
-http_get_with_progress(Url, Headers, undefined, _Phase, _TotalBytes) ->
+http_get_with_progress(Url, Headers, undefined, _Phase, _TotalBytes, _ProgressOpts) ->
     %% No progress callback - use regular http_get
     ?MODULE:http_get(Url, Headers);
-http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes) ->
-    http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, 5).
+http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts) ->
+    http_get_with_progress_internal(Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts, 5).
 
--spec http_get_with_progress(
+-spec http_get_with_progress_internal(
     string(),
     [{string(), string()}],
     progress_callback(),
     progress_phase(),
     non_neg_integer() | unknown,
+    map(),
     non_neg_integer()
 ) ->
     {ok, binary()} | {error, term()}.
-http_get_with_progress(_Url, _Headers, _ProgressFn, _Phase, _TotalBytes, 0) ->
+http_get_with_progress_internal(_Url, _Headers, _ProgressFn, _Phase, _TotalBytes, _ProgressOpts, 0) ->
     {error, too_many_redirects};
-http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLeft) ->
+http_get_with_progress_internal(Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts, RedirectsLeft) ->
     ensure_started(),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
@@ -1883,6 +1897,8 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
         {stream, self},
         {socket_opts, [{keepalive, false}]}
     ],
+    LayerIndex = maps:get(layer_index, ProgressOpts, 0),
+    TotalLayers = maps:get(total_layers, ProgressOpts, 1),
 
     case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, RequestId} ->
@@ -1894,7 +1910,9 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
                 acc = <<>>,
                 url = Url,
                 headers = Headers,
-                redirects_left = RedirectsLeft
+                redirects_left = RedirectsLeft,
+                layer_index = LayerIndex,
+                total_layers = TotalLayers
             },
             receive_stream(State);
         {error, Reason} ->
@@ -1911,7 +1929,9 @@ receive_stream(
         total_bytes = TotalBytes,
         acc = Acc,
         headers = Headers,
-        redirects_left = RedirectsLeft
+        redirects_left = RedirectsLeft,
+        layer_index = LayerIndex,
+        total_layers = TotalLayers
     } = State
 ) ->
     receive
@@ -1934,7 +1954,9 @@ receive_stream(
             maybe_report_progress(ProgressFn, #{
                 phase => Phase,
                 bytes_received => BytesReceived,
-                total_bytes => TotalBytes
+                total_bytes => TotalBytes,
+                layer_index => LayerIndex,
+                total_layers => TotalLayers
             }),
             receive_stream(State#stream_state{acc = NewAcc});
         {http, {RequestId, stream_end, _FinalHeaders}} ->
@@ -1942,7 +1964,9 @@ receive_stream(
             maybe_report_progress(ProgressFn, #{
                 phase => Phase,
                 bytes_received => byte_size(Acc),
-                total_bytes => byte_size(Acc)
+                total_bytes => byte_size(Acc),
+                layer_index => LayerIndex,
+                total_layers => TotalLayers
             }),
             {ok, Acc};
         {http, {RequestId, {{_, Status, _}, _RespHeaders, Body}}} when
@@ -1952,7 +1976,9 @@ receive_stream(
             maybe_report_progress(ProgressFn, #{
                 phase => Phase,
                 bytes_received => byte_size(Body),
-                total_bytes => byte_size(Body)
+                total_bytes => byte_size(Body),
+                layer_index => LayerIndex,
+                total_layers => TotalLayers
             }),
             {ok, Body};
         {http, {RequestId, {{_, Status, _}, RespHeaders, _Body}}} when
@@ -1962,12 +1988,14 @@ receive_stream(
             case get_redirect_location(RespHeaders) of
                 {ok, RedirectUrl} ->
                     RedirectHeaders = strip_auth_headers(Headers),
-                    http_get_with_progress(
+                    ProgressOpts = #{layer_index => LayerIndex, total_layers => TotalLayers},
+                    http_get_with_progress_internal(
                         RedirectUrl,
                         RedirectHeaders,
                         ProgressFn,
                         Phase,
                         TotalBytes,
+                        ProgressOpts,
                         RedirectsLeft - 1
                     );
                 error ->

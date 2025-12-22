@@ -165,7 +165,8 @@ run(AdapterModule, AdapterState, Opts) ->
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
-            platforms => Platforms
+            platforms => Platforms,
+            progress => ProgressFn
         },
         do_output(AdapterModule, AdapterState, Images, OutputOpts)
     else
@@ -351,14 +352,15 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
 
     %% For multi-platform, use ocibuild:save with list of images
     %% For single platform, use single image
+    SaveOpts = #{tag => Tag, progress => maps:get(progress, Opts, undefined)},
     SaveResult =
         case Images of
             [SingleImage] ->
-                save_image(SingleImage, OutputPath, Tag);
+                save_image(SingleImage, OutputPath, SaveOpts);
             ImageList when is_list(ImageList) ->
-                save_multi_image(ImageList, OutputPath, Tag);
+                save_multi_image(ImageList, OutputPath, SaveOpts);
             SingleImage ->
-                save_image(SingleImage, OutputPath, Tag)
+                save_image(SingleImage, OutputPath, SaveOpts)
         end,
 
     case SaveResult of
@@ -385,9 +387,12 @@ format_platform_list(Platforms) ->
     string:join(PlatformStrs, ", ").
 
 %% @private Save multi-platform image
--spec save_multi_image([ocibuild:image()], string(), binary()) -> ok | {error, term()}.
-save_multi_image(Images, OutputPath, Tag) ->
-    ocibuild:save(Images, list_to_binary(OutputPath), #{tag => Tag}).
+-spec save_multi_image([ocibuild:image()], string(), map()) -> ok | {error, term()}.
+save_multi_image(Images, OutputPath, Opts) ->
+    Tag = maps:get(tag, Opts, <<"latest">>),
+    ProgressFn = maps:get(progress, Opts, undefined),
+    SaveOpts = #{tag => Tag, progress => ProgressFn},
+    ocibuild:save(Images, list_to_binary(OutputPath), SaveOpts).
 
 %% @private Generate default output path from tag
 default_output_path(Tag) ->
@@ -870,9 +875,11 @@ Save an image to a tarball file.
 
 The image is saved in OCI layout format compatible with `podman load`.
 """.
--spec save_image(ocibuild:image(), file:filename(), binary()) -> ok | {error, term()}.
-save_image(Image, OutputPath, Tag) ->
-    SaveOpts = #{tag => Tag},
+-spec save_image(ocibuild:image(), file:filename(), map()) -> ok | {error, term()}.
+save_image(Image, OutputPath, Opts) ->
+    Tag = maps:get(tag, Opts, <<"latest">>),
+    ProgressFn = maps:get(progress, Opts, undefined),
+    SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Image, OutputPath, SaveOpts).
 
 -doc """
@@ -1021,14 +1028,17 @@ make_progress_callback() ->
         #{phase := Phase, total_bytes := Total} = Info,
         Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
         LayerIndex = maps:get(layer_index, Info, 0),
+        TotalLayers = maps:get(total_layers, Info, 1),
         HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
         IsComplete = Bytes =:= Total,
+        %% Use Total (layer size) in key to distinguish between different layers
+        %% across platforms that might have the same index
         AlreadyPrinted =
             case IsTTY of
                 true ->
                     false;
                 false when IsComplete ->
-                    Key = {ocibuild_progress_done, Phase, LayerIndex},
+                    Key = {ocibuild_progress_done, Phase, LayerIndex, Total},
                     case get(Key) of
                         true ->
                             true;
@@ -1046,8 +1056,14 @@ make_progress_callback() ->
                     case Phase of
                         manifest -> "Fetching manifest";
                         config -> "Fetching config  ";
-                        layer -> "Downloading layer";
-                        uploading -> "Uploading layer  "
+                        layer when TotalLayers > 1 ->
+                            io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+                        layer ->
+                            "Downloading layer";
+                        uploading when TotalLayers > 1 ->
+                            io_lib:format("Layer ~B/~B        ", [LayerIndex, TotalLayers]);
+                        uploading ->
+                            "Uploading layer  "
                     end,
                 ProgressStr = format_progress(Bytes, Total),
                 case IsTTY of

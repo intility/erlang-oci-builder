@@ -139,6 +139,7 @@ save_tarball([Image], Path, Opts) ->
 save_tarball(Image, Path, Opts) when is_map(Image) ->
     try
         Tag = maps:get(tag, Opts, ~"latest"),
+        ProgressFn = maps:get(progress, Opts, undefined),
 
         %% Build all the blobs and metadata
         {ConfigJson, ConfigDigest} = build_config_blob(Image),
@@ -165,7 +166,7 @@ save_tarball(Image, Path, Opts) when is_map(Image) ->
 
         %% Collect all files for the tarball
         %% Include base image layers if available
-        BaseLayerFiles = build_base_layers(Image),
+        BaseLayerFiles = build_base_layers(Image, ProgressFn),
 
         Files =
             [
@@ -196,12 +197,13 @@ save_tarball(Image, Path, Opts) when is_map(Image) ->
 save_tarball_multi(Images, Path, Opts) ->
     try
         Tag = maps:get(tag, Opts, ~"latest"),
+        ProgressFn = maps:get(progress, Opts, undefined),
 
         %% Build oci-layout
         OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
 
         %% Build each platform's manifest and collect blobs
-        {ManifestDescriptors, AllFiles} = build_platform_manifests(Images, []),
+        {ManifestDescriptors, AllFiles} = build_platform_manifests(Images, [], ProgressFn),
 
         %% Build the image index
         Index = build_multi_platform_index(ManifestDescriptors, Tag),
@@ -225,16 +227,16 @@ save_tarball_multi(Images, Path, Opts) ->
     end.
 
 %% Build manifests for each platform and collect all blob files
--spec build_platform_manifests([ocibuild:image()], list()) ->
+-spec build_platform_manifests([ocibuild:image()], list(), ocibuild_registry:progress_callback() | undefined) ->
     {[{ocibuild:platform(), binary(), non_neg_integer()}], [{binary(), binary(), integer()}]}.
-build_platform_manifests([], Acc) ->
+build_platform_manifests([], Acc, _ProgressFn) ->
     %% Reverse to maintain platform order, deduplicate blob files
     {ManifestDescs, FilesList} = lists:unzip(lists:reverse(Acc)),
     AllFiles = lists:flatten(FilesList),
     %% Deduplicate files by path (layers may be shared between platforms)
     UniqueFiles = deduplicate_files(AllFiles),
     {ManifestDescs, UniqueFiles};
-build_platform_manifests([Image | Rest], Acc) ->
+build_platform_manifests([Image | Rest], Acc, ProgressFn) ->
     Platform = maps:get(platform, Image, #{os => ~"linux", architecture => ~"amd64"}),
 
     %% Build config blob
@@ -259,7 +261,7 @@ build_platform_manifests([Image | Rest], Acc) ->
     ManifestDesc = {Platform, ManifestDigest, byte_size(ManifestJson)},
 
     %% Collect files for this platform
-    BaseLayerFiles = build_base_layers(Image),
+    BaseLayerFiles = build_base_layers(Image, ProgressFn),
     PlatformFiles =
         [
             {blob_path(ConfigDigest), ConfigJson, ?MODE_FILE},
@@ -271,7 +273,7 @@ build_platform_manifests([Image | Rest], Acc) ->
             ] ++
             BaseLayerFiles,
 
-    build_platform_manifests(Rest, [{ManifestDesc, PlatformFiles} | Acc]).
+    build_platform_manifests(Rest, [{ManifestDesc, PlatformFiles} | Acc], ProgressFn).
 
 %% Deduplicate files by path (first occurrence wins)
 -spec deduplicate_files([{binary(), binary(), integer()}]) -> [{binary(), binary(), integer()}].
@@ -327,19 +329,21 @@ build_platform_json(Platform) ->
 %%%===================================================================
 
 %% Download base image layers from registry (with caching)
--spec build_base_layers(ocibuild:image()) -> [{binary(), binary(), integer()}].
+-spec build_base_layers(ocibuild:image(), ocibuild_registry:progress_callback() | undefined) ->
+    [{binary(), binary(), integer()}].
 build_base_layers(
     #{
         base := {Registry, Repo, _Tag},
         base_manifest := #{~"layers" := ManifestLayers}
-    } = Image
+    } = Image,
+    ProgressFn
 ) ->
     Auth = maps:get(auth, Image, #{}),
     TotalLayers = length(ManifestLayers),
     {_, Files} = lists:foldl(
         fun(#{~"digest" := Digest, ~"size" := Size}, {Index, Acc}) ->
             CompressedData = get_or_download_layer(
-                Registry, Repo, Digest, Auth, Size, Index, TotalLayers
+                Registry, Repo, Digest, Auth, Size, Index, TotalLayers, ProgressFn
             ),
             %% OCI format keeps layers compressed with digest as path
             {Index + 1, Acc ++ [{blob_path(Digest), CompressedData, ?MODE_FILE}]}
@@ -348,14 +352,21 @@ build_base_layers(
         ManifestLayers
     ),
     Files;
-build_base_layers(_Image) ->
+build_base_layers(_Image, _ProgressFn) ->
     [].
 
 %% Get layer from cache or download from registry
 -spec get_or_download_layer(
-    binary(), binary(), binary(), map(), non_neg_integer(), pos_integer(), pos_integer()
+    binary(),
+    binary(),
+    binary(),
+    map(),
+    non_neg_integer(),
+    pos_integer(),
+    pos_integer(),
+    ocibuild_registry:progress_callback() | undefined
 ) -> binary().
-get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
+get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers, ProgressFn) ->
     case ocibuild_cache:get(Digest) of
         {ok, CachedData} ->
             io:format("  Layer ~B/~B cached (~s)~n", [
@@ -364,12 +375,12 @@ get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
             CachedData;
         {error, _} ->
             %% Not in cache or corrupted, download from registry
-            io:format("  Downloading layer ~B/~B (~s)...~n", [
-                Index, TotalLayers, ocibuild_release:format_bytes(Size)
-            ]),
-            case pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, 3) of
+            case pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, Index, TotalLayers, ProgressFn, 3) of
                 {ok, CompressedData} ->
-                    io:format("  Layer ~B/~B complete~n", [Index, TotalLayers]),
+                    ocibuild_release:clear_progress_line(),
+                    io:format("  Layer ~B/~B downloaded (~s)~n", [
+                        Index, TotalLayers, ocibuild_release:format_bytes(Size)
+                    ]),
                     %% Cache the downloaded layer for future builds
                     case ocibuild_cache:put(Digest, CompressedData) of
                         ok ->
@@ -387,11 +398,24 @@ get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
 
 %% Pull blob with retry logic for transient failures
 -spec pull_blob_with_retry(
-    binary(), binary(), binary(), map(), non_neg_integer(), non_neg_integer()
+    binary(),
+    binary(),
+    binary(),
+    map(),
+    non_neg_integer(),
+    pos_integer(),
+    pos_integer(),
+    ocibuild_registry:progress_callback() | undefined,
+    non_neg_integer()
 ) ->
     {ok, binary()} | {error, term()}.
-pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, MaxRetries) ->
-    Opts = #{size => Size},
+pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, Index, TotalLayers, ProgressFn, MaxRetries) ->
+    Opts = #{
+        size => Size,
+        progress => ProgressFn,
+        layer_index => Index,
+        total_layers => TotalLayers
+    },
     ocibuild_registry:with_retry(
         fun() -> ocibuild_registry:pull_blob(Registry, Repo, Digest, Auth, Opts) end,
         MaxRetries
