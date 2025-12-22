@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 - *not yet released*
+## 0.2.0 - 2025-12-22
 
 ### Features
 
