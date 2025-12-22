@@ -241,7 +241,7 @@ get_push_registry(Args) ->
         Registry -> list_to_binary(Registry)
     end.
 
-%% @private Get chunk size from args (validated to MIN-MAX MB)
+%% @private Get chunk size from args (validated to MIN-MAX MB, falls back to default)
 get_chunk_size(Args) ->
     MinMB = ocibuild_adapter:min_chunk_size_mb(),
     MaxMB = ocibuild_adapter:max_chunk_size_mb(),
@@ -252,10 +252,10 @@ get_chunk_size(Args) ->
             Size * 1024 * 1024;
         Size ->
             io:format(
-                "Warning: chunk_size ~p MB out of range (~B-~B), using default~n",
-                [Size, MinMB, MaxMB]
+                "Warning: chunk_size ~p MB out of range (~B-~B), using default (~B MB)~n",
+                [Size, MinMB, MaxMB, ocibuild_adapter:default_chunk_size_mb()]
             ),
-            undefined
+            ocibuild_adapter:default_chunk_size()
     end.
 
 %% @private Get platform(s) from args or config

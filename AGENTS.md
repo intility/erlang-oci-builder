@@ -47,6 +47,10 @@ Legend: ✅ Implemented | 🔜 Planned (P# = Priority) | ❌ Not implemented
 
 - Primary target: OTP 27+ (has built-in `json` module)
 
+### Code style
+
+- Always prefer using `maybe` instead of deeply nested `case...of`
+
 ---
 
 ## Architecture

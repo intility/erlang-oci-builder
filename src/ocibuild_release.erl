@@ -1,5 +1,6 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_release).
+-feature(maybe_expr, enable).
 -moduledoc """
 Shared release handling for OCI image building.
 
@@ -108,124 +109,93 @@ or `{error, Reason}` on failure.
 """.
 -spec run(module(), term(), map()) -> {ok, term()} | {error, term()}.
 run(AdapterModule, AdapterState, Opts) ->
-    try
-        %% Get configuration from adapter
-        Config = AdapterModule:get_config(AdapterState),
-        #{
-            base_image := BaseImage,
-            workdir := Workdir,
-            env := EnvMap,
-            expose := ExposePorts,
-            labels := Labels,
-            cmd := DefaultCmd,
-            description := Description,
-            tag := TagOpt,
-            output := OutputOpt,
-            push := PushRegistry,
-            chunk_size := ChunkSize
-        } = Config,
+    %% Get configuration from adapter
+    Config = AdapterModule:get_config(AdapterState),
+    #{
+        base_image := BaseImage,
+        workdir := Workdir,
+        env := EnvMap,
+        expose := ExposePorts,
+        labels := Labels,
+        cmd := DefaultCmd,
+        description := Description,
+        tag := Tag,
+        output := OutputOpt,
+        push := PushRegistry,
+        chunk_size := ChunkSize
+    } = Config,
 
-        %% Get optional platform configuration
-        PlatformOpt = maps:get(platform, Config, undefined),
+    %% Get optional platform configuration
+    PlatformOpt = maps:get(platform, Config, undefined),
 
-        %% Get tag (required)
-        Tag =
-            case TagOpt of
-                undefined -> throw({error, missing_tag});
-                T -> T
-            end,
-
+    maybe
+        %% Validate tag exists
+        true ?= Tag =/= undefined,
         AdapterModule:info("Building OCI image: ~s", [Tag]),
-
-        %% Find release using adapter
-        case AdapterModule:find_release(AdapterState, Opts) of
-            {ok, ReleaseName, ReleasePath} ->
-                AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
-
-                %% Parse platforms if specified
-                Platforms = parse_platform_option(PlatformOpt),
-
-                %% Validate multi-platform requirements
-                case validate_platform_requirements(AdapterModule, ReleasePath, Platforms) of
-                    ok ->
-                        %% Collect files from release
-                        case collect_release_files(ReleasePath) of
-                            {ok, Files} ->
-                                AdapterModule:info("Collected ~p files from release", [
-                                    length(Files)
-                                ]),
-
-                                %% Build the image(s)
-                                AdapterModule:info("Base image: ~s", [BaseImage]),
-                                Cmd = maps:get(cmd, Opts, DefaultCmd),
-
-                                ProgressFn = make_progress_callback(),
-                                PullAuth = get_pull_auth(),
-
-                                %% Consolidate all build options
-                                BuildOpts = #{
-                                    release_name => ReleaseName,
-                                    workdir => Workdir,
-                                    env => EnvMap,
-                                    expose => ExposePorts,
-                                    labels => Labels,
-                                    cmd => Cmd,
-                                    description => Description,
-                                    auth => PullAuth,
-                                    progress => ProgressFn
-                                },
-
-                                %% Build single or multi-platform image
-                                Result = build_platform_images(
-                                    BaseImage, Files, Platforms, BuildOpts
-                                ),
-                                clear_progress_line(),
-
-                                case Result of
-                                    {ok, Images} ->
-                                        %% Output the image(s) (save and optionally push)
-                                        OutputOpts = #{
-                                            tag => Tag,
-                                            output => OutputOpt,
-                                            push => PushRegistry,
-                                            chunk_size => ChunkSize,
-                                            platforms => Platforms
-                                        },
-                                        do_output(AdapterModule, AdapterState, Images, OutputOpts);
-                                    {error, BuildError} ->
-                                        {error, {build_failed, BuildError}}
-                                end;
-                            {error, CollectError} ->
-                                {error, {collect_failed, CollectError}}
-                        end;
-                    {error, ValidationError} ->
-                        {error, ValidationError}
-                end;
-            {error, FindError} ->
-                {error, {release_not_found, FindError}}
-        end
-    catch
-        throw:{error, Reason} ->
+        %% Find release
+        {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
+        AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
+        %% Parse and validate platforms
+        {ok, Platforms} ?= parse_platform_option(PlatformOpt),
+        ok ?= validate_platform_requirements(AdapterModule, ReleasePath, Platforms),
+        %% Collect release files
+        {ok, Files} ?= collect_release_files(ReleasePath),
+        AdapterModule:info("Collected ~p files from release", [length(Files)]),
+        %% Build image(s)
+        AdapterModule:info("Base image: ~s", [BaseImage]),
+        Cmd = maps:get(cmd, Opts, DefaultCmd),
+        ProgressFn = make_progress_callback(),
+        PullAuth = get_pull_auth(),
+        BuildOpts = #{
+            release_name => ReleaseName,
+            workdir => Workdir,
+            env => EnvMap,
+            expose => ExposePorts,
+            labels => Labels,
+            cmd => Cmd,
+            description => Description,
+            auth => PullAuth,
+            progress => ProgressFn
+        },
+        {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
+        clear_progress_line(),
+        %% Output the image(s)
+        OutputOpts = #{
+            tag => Tag,
+            output => OutputOpt,
+            push => PushRegistry,
+            chunk_size => ChunkSize,
+            platforms => Platforms
+        },
+        do_output(AdapterModule, AdapterState, Images, OutputOpts)
+    else
+        false ->
+            {error, missing_tag};
+        {error, {invalid_platform_value, _} = Reason} ->
+            {error, {invalid_platform, Reason}};
+        {error, {invalid_platform, _} = Reason} ->
             {error, Reason};
-        throw:Reason ->
+        {error, {bundled_erts, _} = Reason} ->
+            {error, Reason};
+        {error, Reason} when is_atom(Reason) ->
+            {error, {release_not_found, Reason}};
+        {error, Reason} ->
             {error, Reason}
     end.
 
 %% @private Parse platform option string into list of platforms
--spec parse_platform_option(binary() | undefined | nil) -> [ocibuild:platform()].
+-spec parse_platform_option(binary() | undefined | nil) ->
+    {ok, [ocibuild:platform()]} | {error, term()}.
 parse_platform_option(undefined) ->
-    [];
+    {ok, []};
 parse_platform_option(nil) ->
-    [];
+    {ok, []};
 parse_platform_option(<<>>) ->
-    [];
+    {ok, []};
 parse_platform_option(PlatformStr) when is_binary(PlatformStr) ->
-    case ocibuild:parse_platforms(PlatformStr) of
-        {ok, Platforms} -> Platforms;
-        {error, _} -> []
-    end;
-parse_platform_option(_) ->
-    [].
+    ocibuild:parse_platforms(PlatformStr);
+parse_platform_option(Value) ->
+    {error, {invalid_platform_value, Value}}.
 
 %% @private Validate platform requirements (ERTS check, NIF warning)
 -spec validate_platform_requirements(module(), file:filename(), [ocibuild:platform()]) ->
@@ -1312,14 +1282,21 @@ is_native_file(Filename) ->
     end.
 
 %% @private Extract app name from versioned directory (e.g., "crypto-1.0.0" -> "crypto")
+%% Uses heuristic: version must start with digit AND contain a dot to avoid
+%% incorrectly stripping app names like "my-app-2"
 -spec extract_app_name(string()) -> string().
 extract_app_name(AppDir) ->
     case string:split(AppDir, "-", trailing) of
-        [Name, _Version] ->
-            %% Check if it looks like a version (starts with digit)
-            case _Version of
-                [C | _] when C >= $0, C =< $9 -> Name;
-                _ -> AppDir
+        [Name, Version] ->
+            %% Check if it looks like a version (starts with digit AND contains a dot)
+            case Version of
+                [C | _] when C >= $0, C =< $9 ->
+                    case lists:member($., Version) of
+                        true -> Name;
+                        false -> AppDir
+                    end;
+                _ ->
+                    AppDir
             end;
         _ ->
             AppDir
@@ -1343,7 +1320,7 @@ erts_error_message() ->
         "    {include_erts, false}\n"
         "  ]}.\n\n"
         "Then use a base image with ERTS, e.g.:\n"
-        "  base_image: \"elixir:1.17-alpine\" or \"erlang:27-alpine\""
+        "  base_image: \"elixir:1.17-slim\" or \"erlang:27-slim\""
     >>.
 
 %% @private Warn about native code that may not be portable

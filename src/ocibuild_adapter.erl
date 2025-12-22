@@ -48,12 +48,23 @@ error(Format, Args) ->
 %%% Constants (shared by all adapters)
 %%%===================================================================
 
-%% Chunk size limits for uploads (in MB)
+%% Chunk size limits for uploads (in MB and bytes)
 -define(MIN_CHUNK_SIZE_MB, 1).
 -define(MAX_CHUNK_SIZE_MB, 100).
+-define(DEFAULT_CHUNK_SIZE_MB, 5).
+-define(MIN_CHUNK_SIZE, ?MIN_CHUNK_SIZE_MB * 1024 * 1024).
+-define(MAX_CHUNK_SIZE, ?MAX_CHUNK_SIZE_MB * 1024 * 1024).
+-define(DEFAULT_CHUNK_SIZE, ?DEFAULT_CHUNK_SIZE_MB * 1024 * 1024).
 
 %% Export macros as functions for use by adapters
--export([min_chunk_size_mb/0, max_chunk_size_mb/0]).
+-export([
+    min_chunk_size_mb/0,
+    max_chunk_size_mb/0,
+    default_chunk_size_mb/0,
+    min_chunk_size/0,
+    max_chunk_size/0,
+    default_chunk_size/0
+]).
 
 %%%===================================================================
 %%% Type Definitions
@@ -142,3 +153,19 @@ min_chunk_size_mb() -> ?MIN_CHUNK_SIZE_MB.
 -doc "Maximum chunk size for uploads in MB.".
 -spec max_chunk_size_mb() -> pos_integer().
 max_chunk_size_mb() -> ?MAX_CHUNK_SIZE_MB.
+
+-doc "Default chunk size for uploads in MB.".
+-spec default_chunk_size_mb() -> pos_integer().
+default_chunk_size_mb() -> ?DEFAULT_CHUNK_SIZE_MB.
+
+-doc "Minimum chunk size for uploads in bytes.".
+-spec min_chunk_size() -> pos_integer().
+min_chunk_size() -> ?MIN_CHUNK_SIZE.
+
+-doc "Maximum chunk size for uploads in bytes.".
+-spec max_chunk_size() -> pos_integer().
+max_chunk_size() -> ?MAX_CHUNK_SIZE.
+
+-doc "Default chunk size for uploads in bytes.".
+-spec default_chunk_size() -> pos_integer().
+default_chunk_size() -> ?DEFAULT_CHUNK_SIZE.

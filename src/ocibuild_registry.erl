@@ -59,8 +59,6 @@ See: https://github.com/opencontainers/distribution-spec
 -export_type([progress_callback/0, progress_info/0, pull_opts/0, push_opts/0, upload_session/0]).
 
 -define(DEFAULT_TIMEOUT, 30000).
-%% Default chunk size for chunked uploads: 5MB
--define(DEFAULT_CHUNK_SIZE, 5 * 1024 * 1024).
 %% Stand-alone httpc profile for ocibuild (not supervised by inets)
 -define(HTTPC_PROFILE, ocibuild).
 -define(HTTPC_KEY, {?MODULE, httpc_pid}).
@@ -1145,7 +1143,7 @@ push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
 -spec do_push_blob(string(), binary(), binary(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
 do_push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
-    ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
+    ChunkSize = maps:get(chunk_size, Opts, ocibuild_adapter:default_chunk_size()),
     case byte_size(Data) >= ChunkSize of
         true ->
             %% Try chunked upload for large blobs
@@ -1326,7 +1324,7 @@ complete_upload(Session, Digest, Token, FinalChunk) ->
 -spec upload_blob_chunked(string(), binary(), binary(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
 upload_blob_chunked(BaseUrl, Repo, Digest, Data, Token, Opts) ->
-    ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
+    ChunkSize = maps:get(chunk_size, Opts, ocibuild_adapter:default_chunk_size()),
     TotalSize = byte_size(Data),
     ProgressFn = maps:get(progress, Opts, undefined),
     LayerIndex = maps:get(layer_index, Opts, 0),
