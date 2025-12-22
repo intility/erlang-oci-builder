@@ -673,7 +673,7 @@ jib separates Java apps into distinct layers (dependencies vs application code).
 
 With ERTS (`include_erts: true`, single-platform):
 ```
-Base image (e.g., debian:slim)
+Base image (e.g., debian:stable-slim)
   └── Layer 1: ERTS + system libs (erts-*, lib/stdlib-*, lib/kernel-*)
         └── Layer 2: Dependencies (lib/* from lock file)
               └── Layer 3: Application code (lib/myapp-*, bin/, releases/)

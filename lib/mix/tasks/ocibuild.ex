@@ -32,7 +32,7 @@ defmodule Mix.Tasks.Ocibuild do
         [
           # ...
           ocibuild: [
-            base_image: "debian:slim",
+            base_image: "debian:stable-slim",
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
             expose: [8080],
@@ -137,7 +137,7 @@ defmodule Mix.Tasks.Ocibuild do
       release_path: to_charlist(release_path),
       # Configuration with CLI overrides
       base_image:
-        get_opt(opts, :base, ocibuild_config, :base_image, "debian:slim") |> to_binary(),
+        get_opt(opts, :base, ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),

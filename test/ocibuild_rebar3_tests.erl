@@ -437,7 +437,7 @@ find_relx_release_multiple_test() ->
 
 get_base_image_from_args_test() ->
     Args = [{base, "alpine:3.19"}],
-    Config = [{base_image, ~"debian:slim"}],
+    Config = [{base_image, ~"debian:stable-slim"}],
     ?assertEqual(~"alpine:3.19", ocibuild_rebar3:get_base_image(Args, Config)).
 
 get_base_image_from_config_test() ->

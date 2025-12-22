@@ -123,7 +123,7 @@ files to support the new functionality.
 
 ```erlang
 {ocibuild, [
-    {base_image, "debian:slim"},
+    {base_image, "debian:stable-slim"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
@@ -138,7 +138,7 @@ files to support the new functionality.
 def project do
   [
     ocibuild: [
-      base_image: "debian:slim",
+      base_image: "debian:stable-slim",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080],
       description: "My application"

@@ -31,7 +31,7 @@ Add to your `rebar.config`:
 
 ```
 {ocibuild, [
-    {base_image, "debian:slim"},
+    {base_image, "debian:stable-slim"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},

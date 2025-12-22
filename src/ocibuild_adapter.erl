@@ -24,7 +24,7 @@ is provided by `ocibuild_release`.
 
 get_config(State) ->
     %% Extract and normalize config from your build system
-    #{base_image => <<"debian:slim">>, ...}.
+    #{base_image => <<"debian:stable-slim">>, ...}.
 
 find_release(State, Opts) ->
     %% Find the release directory
@@ -49,7 +49,7 @@ error(Format, Args) ->
 %%%===================================================================
 
 -type config() :: #{
-    %% Base image to use (e.g., <<"debian:slim">>)
+    %% Base image to use (e.g., <<"debian:stable-slim">>)
     base_image => binary(),
     %% Working directory in container (default: /app)
     workdir => binary(),

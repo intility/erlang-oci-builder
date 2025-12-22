@@ -70,7 +70,7 @@ def project do
   [
     # ...
     ocibuild: [
-      base_image: "debian:slim",
+      base_image: "debian:stable-slim",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080]
     ]
@@ -116,7 +116,7 @@ The easiest way to use `ocibuild` with Erlang:
 {deps, [{ocibuild, "~> 0.1"}]}.
 
 {ocibuild, [
-    {base_image, "debian:slim"},
+    {base_image, "debian:stable-slim"},
     {env, #{~"LANG" => ~"C.UTF-8"}},
     {expose, [8080]}
 ]}.
@@ -204,7 +204,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
 ```erlang
 {ocibuild, [
-    {base_image, "debian:slim"},           % Base image (default: debian:slim)
+    {base_image, "debian:stable-slim"},           % Base image (default: debian:stable-slim)
     {workdir, "/app"},                     % Working directory in container
     {env, #{                               % Environment variables
         ~"LANG" => ~"C.UTF-8"
@@ -226,7 +226,7 @@ def project do
     version: "1.0.0",
     # ...
     ocibuild: [
-      base_image: "debian:slim",           # Base image (default: debian:slim)
+      base_image: "debian:stable-slim",           # Base image (default: debian:stable-slim)
       tag: "myapp:1.0.0",                  # Optional, defaults to app:version
       workdir: "/app",                     # Working directory in container
       cmd: "start",                        # Release command (default: start)
@@ -319,7 +319,7 @@ For specific dependencies, create a base image once and reuse it:
 
 ```dockerfile
 # Dockerfile.base
-FROM debian:slim
+FROM debian:stable-slim
 RUN apt-get update && apt-get install -y libncurses6 libssl3 \
     && rm -rf /var/lib/apt/lists/*
 ```

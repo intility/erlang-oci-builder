@@ -16,7 +16,7 @@ defmodule Ocibuild.MixRelease do
             ]
           ],
           ocibuild: [
-            base_image: "debian:slim",
+            base_image: "debian:stable-slim",
             push: "ghcr.io/myorg",  # Registry to push to (omit to skip push)
             tag: "myapp:1.0.0",     # Optional, defaults to release_name:version
             workdir: "/app",
@@ -35,7 +35,7 @@ defmodule Ocibuild.MixRelease do
 
   ## Configuration Options
 
-    * `:base_image` - Base image (default: "debian:slim")
+    * `:base_image` - Base image (default: "debian:stable-slim")
     * `:tag` - Image tag (default: release_name:release_version)
     * `:push` - Registry to push to (e.g., "ghcr.io/myorg"). Omit to skip push.
     * `:workdir` - Working directory in container (default: "/app")
@@ -80,7 +80,7 @@ defmodule Ocibuild.MixRelease do
       release_name: release.name,
       release_path: to_charlist(release.path),
       # Configuration
-      base_image: Keyword.get(ocibuild_config, :base_image, "debian:slim") |> to_binary(),
+      base_image: Keyword.get(ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),
