@@ -452,8 +452,6 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 | ocibuild_index    | ✅ Tested                      |
 | ocibuild (API)    | ✅ Tested                      |
 
-**Total: 232 Erlang tests + 20 Elixir tests**
-
 ---
 
 ## Roadmap (Prioritized)
