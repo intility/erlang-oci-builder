@@ -146,8 +146,8 @@ rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 Image1 = ocibuild:copy(Image0, [{~"myapp", AppBinary}], ~"/app"),
 
 %% Configure the container
-Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"start"]),
-Image3 = ocibuild:env(Image2, #{~"MIX_ENV" => ~"prod"}),
+Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"foreground"]),
+Image3 = ocibuild:env(Image2, #{~"LANG" => ~"C.UTF-8"}),
 
 %% Push to a registry
 Auth = #{username => list_to_binary(os:getenv("OCIBUILD_PUSH_USERNAME")),
@@ -388,16 +388,17 @@ rebar3 ocibuild -t myapp:1.0.0 --platform linux/amd64,linux/arm64
 
 ```erlang
 %% Build for multiple platforms
-{ok, Images} = ocibuild:from(<<"erlang:27-slim">>, #{
-    platforms => [<<"linux/amd64">>, <<"linux/arm64">>]
+{ok, Platforms} = ocibuild:parse_platforms(~"linux/amd64,linux/arm64"),
+{ok, Images} = ocibuild:from(~"erlang:27-slim", #{}, #{
+    platforms => Platforms
 }),
 
 %% Configure all platform images
-Images2 = [ocibuild:entrypoint(I, [<<"/app/bin/myapp">>, <<"start">>]) || I <- Images],
+Images2 = [ocibuild:entrypoint(I, [~"/app/bin/myapp", ~"foreground"]) || I <- Images],
 
 %% Push multi-platform image with index
 Auth = #{username => ..., password => ...},
-ok = ocibuild:push_multi(Images2, <<"ghcr.io">>, <<"myorg/myapp:1.0.0">>, Auth).
+ok = ocibuild:push_multi(Images2, ~"ghcr.io", ~"myorg/myapp:1.0.0", Auth).
 ```
 
 ### Validation
