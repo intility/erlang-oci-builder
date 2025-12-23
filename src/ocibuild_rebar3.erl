@@ -107,7 +107,8 @@ init(State) ->
                 {chunk_size, undefined, "chunk-size", integer,
                     "Chunk size in MB for uploads (default: 5)"},
                 {platform, $P, "platform", string,
-                    "Target platforms (e.g., linux/amd64,linux/arm64)"}
+                    "Target platforms (e.g., linux/amd64,linux/arm64)"},
+                {uid, undefined, "uid", integer, "User ID to run as (default: 65534)"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -205,7 +206,8 @@ get_config(State) ->
         output => get_output(Args),
         push => get_push_registry(Args),
         chunk_size => get_chunk_size(Args),
-        platform => get_platform(Args, Config)
+        platform => get_platform(Args, Config),
+        uid => get_uid(Args, Config)
     }.
 
 %% @private Get description from args or config
@@ -270,6 +272,13 @@ get_platform(Args, Config) ->
             end;
         Platform ->
             list_to_binary(Platform)
+    end.
+
+%% @private Get uid from args or config (default applied in ocibuild_release)
+get_uid(Args, Config) ->
+    case proplists:get_value(uid, Args) of
+        undefined -> proplists:get_value(uid, Config);
+        Uid -> Uid
     end.
 
 -doc "Find release directory from rebar state.".

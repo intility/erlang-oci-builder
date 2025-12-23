@@ -74,7 +74,8 @@ defmodule Mix.Tasks.Ocibuild do
           cmd: :string,
           desc: :string,
           chunk_size: :integer,
-          platform: :string
+          platform: :string,
+          uid: :integer
         ]
       )
 
@@ -148,7 +149,8 @@ defmodule Mix.Tasks.Ocibuild do
       output: get_opt_binary(opts, :output),
       push: get_opt_binary(opts, :push),
       chunk_size: get_chunk_size(opts),
-      platform: get_platform(opts, ocibuild_config)
+      platform: get_platform(opts, ocibuild_config),
+      uid: opts[:uid] || Keyword.get(ocibuild_config, :uid)
     }
   end
 

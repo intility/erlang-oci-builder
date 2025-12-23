@@ -130,6 +130,9 @@ run(AdapterModule, AdapterState, Opts) ->
     %% Get optional platform configuration
     PlatformOpt = maps:get(platform, Config, undefined),
 
+    %% Get optional uid configuration (default applied in configure_release_image)
+    Uid = maps:get(uid, Config, undefined),
+
     maybe
         %% Validate tag exists
         true ?= Tag =/= undefined,
@@ -157,7 +160,8 @@ run(AdapterModule, AdapterState, Opts) ->
             labels => Labels,
             cmd => Cmd,
             description => Description,
-            auth => PullAuth
+            auth => PullAuth,
+            uid => Uid
         },
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
         %% Output the image(s) - this is where layer downloads happen for save
@@ -278,7 +282,19 @@ format_platform(#{os := OS, architecture := Arch} = Platform) ->
 
 %% @private Configure a release image with files and settings
 %%
-%% Opts: release_name, workdir, env, expose, labels, cmd, description
+%% This is the single source of truth for image configuration, used by both
+%% the programmatic API (build_image/3) and CLI adapters (run/3).
+%%
+%% Opts:
+%%   - release_name: Release name for entrypoint (default: <<"app">>)
+%%   - workdir: Working directory in container (default: <<"/app">>)
+%%   - env: Environment variables map (default: #{})
+%%   - expose: Ports to expose (default: [])
+%%   - labels: Image labels map (default: #{})
+%%   - cmd: Release start command (default: <<"foreground">>)
+%%   - uid: User ID to run as (default: 65534 for nobody)
+%%   - annotations: Manifest annotations map (default: #{})
+%%   - description: Image description annotation (default: undefined)
 -spec configure_release_image(
     Image :: ocibuild:image(),
     Files :: [{binary(), binary(), non_neg_integer()}],
@@ -286,12 +302,14 @@ format_platform(#{os := OS, architecture := Arch} = Platform) ->
 ) -> ocibuild:image().
 configure_release_image(Image0, Files, Opts) ->
     ReleaseName = maps:get(release_name, Opts, <<"app">>),
-    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    Workdir = to_binary(maps:get(workdir, Opts, <<"/app">>)),
     EnvMap = maps:get(env, Opts, #{}),
     ExposePorts = maps:get(expose, Opts, []),
     Labels = maps:get(labels, Opts, #{}),
-    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    Cmd = to_binary(maps:get(cmd, Opts, <<"foreground">>)),
     Description = maps:get(description, Opts, undefined),
+    Uid = maps:get(uid, Opts, undefined),
+    Annotations = maps:get(annotations, Opts, #{}),
 
     %% Add release layer
     Image1 = ocibuild:add_layer(Image0, Files),
@@ -299,22 +317,58 @@ configure_release_image(Image0, Files, Opts) ->
     %% Set working directory
     Image2 = ocibuild:workdir(Image1, Workdir),
 
-    %% Set entrypoint
+    %% Set entrypoint and clear inherited Cmd from base image
     ReleaseNameBin = to_binary(ReleaseName),
     EntrypointPath = <<Workdir/binary, "/bin/", ReleaseNameBin/binary>>,
-    Image3 = ocibuild:entrypoint(Image2, [EntrypointPath, Cmd]),
+    Image3a = ocibuild:entrypoint(Image2, [EntrypointPath, Cmd]),
+    Image3 = ocibuild:cmd(Image3a, []),
 
     %% Set environment variables
-    Image4 = ocibuild:env(Image3, EnvMap),
+    Image4 = case map_size(EnvMap) of
+        0 -> Image3;
+        _ -> ocibuild:env(Image3, EnvMap)
+    end,
 
     %% Expose ports
     Image5 = lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
 
     %% Add labels
-    Image6 = maps:fold(fun(K, V, Img) -> ocibuild:label(Img, K, V) end, Image5, Labels),
+    Image6 = case map_size(Labels) of
+        0 -> Image5;
+        _ -> maps:fold(
+            fun(K, V, Img) -> ocibuild:label(Img, to_binary(K), to_binary(V)) end,
+            Image5,
+            Labels
+        )
+    end,
 
-    %% Add description annotation
-    add_description(Image6, Description).
+    %% Add annotations
+    Image7 = case map_size(Annotations) of
+        0 -> Image6;
+        _ -> maps:fold(
+            fun(K, V, Img) -> ocibuild:annotation(Img, to_binary(K), to_binary(V)) end,
+            Image6,
+            Annotations
+        )
+    end,
+
+    %% Set user; when no UID is configured, default to 65534 (nobody) for non-root security
+    %% Note: Elixir passes `nil` instead of `undefined` when not configured
+    Image8 = case Uid of
+        undefined ->
+            ocibuild:user(Image7, <<"65534">>);
+        nil ->
+            ocibuild:user(Image7, <<"65534">>);
+        U when is_integer(U), U >= 0 ->
+            ocibuild:user(Image7, integer_to_binary(U));
+        U when is_integer(U), U < 0 ->
+            erlang:error({invalid_uid, U, "UID must be non-negative"});
+        Other ->
+            erlang:error({invalid_uid_type, Other, "UID must be an integer"})
+    end,
+
+    %% Add description annotation (convenience for OCI description)
+    add_description(Image8, Description).
 
 %% @private Output the image (save and optionally push)
 %% Handles both single image and list of images (multi-platform)
@@ -540,6 +594,7 @@ Options:
 - `expose` - Ports to expose (default: `[]`)
 - `labels` - Image labels map (default: `#{}`)
 - `cmd` - Release start command (default: `<<"foreground">>`)
+- `uid` - User ID to run as (default: 65534 for nobody; use 0 for root)
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
 - `annotations` - Map of manifest annotations
@@ -617,53 +672,18 @@ do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labe
                     end
             end,
 
-        %% Add release files as a layer
-        Image1 = ocibuild:add_layer(Image0, Files),
+        %% Configure the image using the shared configuration function
+        ConfigOpts = Opts#{
+            release_name => ReleaseName,
+            workdir => Workdir,
+            env => EnvMap,
+            expose => ExposePorts,
+            labels => Labels,
+            cmd => Cmd
+        },
+        Image1 = configure_release_image(Image0, Files, ConfigOpts),
 
-        %% Set working directory
-        Image2 = ocibuild:workdir(Image1, to_binary(Workdir)),
-
-        %% Set entrypoint and clear inherited Cmd from base image
-        ReleaseNameBin = to_binary(ReleaseName),
-        CmdBin = to_binary(Cmd),
-        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, CmdBin],
-        Image3a = ocibuild:entrypoint(Image2, Entrypoint),
-        %% Clear Cmd to prevent base image's Cmd from being appended
-        Image3 = ocibuild:cmd(Image3a, []),
-
-        %% Set environment variables
-        Image4 =
-            case map_size(EnvMap) of
-                0 -> Image3;
-                _ -> ocibuild:env(Image3, EnvMap)
-            end,
-
-        %% Expose ports
-        Image5 =
-            lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
-
-        %% Add labels
-        Image6 =
-            maps:fold(
-                fun(Key, Value, Img) ->
-                    ocibuild:label(Img, to_binary(Key), to_binary(Value))
-                end,
-                Image5,
-                Labels
-            ),
-
-        %% Add annotations
-        Annotations = maps:get(annotations, Opts, #{}),
-        Image7 =
-            maps:fold(
-                fun(Key, Value, Img) ->
-                    ocibuild:annotation(Img, to_binary(Key), to_binary(Value))
-                end,
-                Image6,
-                Annotations
-            ),
-
-        {ok, Image7}
+        {ok, Image1}
     catch
         throw:Reason ->
             {error, Reason};

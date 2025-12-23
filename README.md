@@ -29,7 +29,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command. |
 | **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
 | **Smart dependency layering** | ⏳     | Separate layers for ERTS, dependencies, and application code.          |
-| **Non-root by default**       | ⏳     | Run containers as non-root user (UID 65534) for security.              |
+| **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.         |
 | **Auto OCI annotations**      | ⏳     | Automatically populate source URL and revision from VCS.               |
 | **SBOM generation**           | ⏳     | Generate SPDX Software Bill of Materials embedded in images.           |
 | **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                |
@@ -182,16 +182,18 @@ auth = %{username: System.get_env("OCIBUILD_PUSH_USERNAME"),
 
 Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
-| Option       | Short | Description                                      |
-|--------------|-------|--------------------------------------------------|
-| `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                   |
-| `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`)    |
-| `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`          |
-| `--desc`     | `-d`  | Image description (OCI manifest annotation)      |
-| `--platform` | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64`|
-| `--base`     |       | Override base image                              |
-| `--release`  |       | Release name (if multiple configured)            |
-| `--cmd`      | `-c`  | Release start command (Elixir only)              |
+| Option         | Short | Description                                       |
+|----------------|-------|---------------------------------------------------|
+| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                    |
+| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
+| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
+| `--desc`       | `-d`  | Image description (OCI manifest annotation)       |
+| `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
+| `--base`       |       | Override base image                               |
+| `--release`    |       | Release name (if multiple configured)             |
+| `--cmd`        | `-c`  | Release start command (Elixir only)               |
+| `--uid`        |       | User ID to run as (default: 65534 for nobody)     |
+| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
 
 **Notes:**
 - Tag defaults to `app:version` in Mix, required in rebar3
@@ -204,7 +206,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
 ```erlang
 {ocibuild, [
-    {base_image, "debian:stable-slim"},           % Base image (default: debian:stable-slim)
+    {base_image, "debian:stable-slim"},    % Base image (default: debian:stable-slim)
     {workdir, "/app"},                     % Working directory in container
     {env, #{                               % Environment variables
         ~"LANG" => ~"C.UTF-8"
@@ -213,6 +215,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
     {labels, #{                            % Image labels
         ~"org.opencontainers.image.source" => ~"https://github.com/..."
     }},
+    {uid, 65534},                          % User ID (optional, defaults to 65534)
     {description, "My application"}        % OCI manifest annotation
 ]}.
 ```
@@ -226,7 +229,7 @@ def project do
     version: "1.0.0",
     # ...
     ocibuild: [
-      base_image: "debian:stable-slim",           # Base image (default: debian:stable-slim)
+      base_image: "debian:stable-slim",    # Base image (default: debian:stable-slim)
       tag: "myapp:1.0.0",                  # Optional, defaults to app:version
       workdir: "/app",                     # Working directory in container
       cmd: "start",                        # Release command (default: start)
@@ -235,6 +238,7 @@ def project do
       labels: %{                           # Image labels
         "org.opencontainers.image.source" => "https://github.com/..."
       },
+      uid: 65534,                          # User ID (optional, defaults to 65534)
       description: "My application"        # OCI manifest annotation
     ]
   ]

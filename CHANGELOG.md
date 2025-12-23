@@ -4,6 +4,9 @@
 
 ### Features
 
+- **Non-root by default**: Containers now run as UID 65534 (nobody) by default for improved security
+  - Add `--uid` CLI option to override (e.g., `--uid 1000` for custom user, `--uid 0` for root)
+  - Configurable via `uid` option in rebar.config or mix.exs
 - **Reproducible builds**: Support for `SOURCE_DATE_EPOCH` environment variable to produce identical images from identical inputs
   - All timestamps (config `created`, history entries, TAR file mtimes) use the epoch value when set
   - Files are sorted alphabetically for deterministic layer ordering
@@ -11,6 +14,11 @@
 - **New `ocibuild_time` module**: Centralized timestamp utilities with `get_timestamp/0`, `get_iso8601/0`, and `unix_to_iso8601/1`
 - **New `ocibuild_tar:create/2`**: TAR creation now accepts options map with `mtime` parameter for reproducible archives
 - **New `ocibuild_layer:create/2`**: Layer creation now accepts options map for passing mtime through to TAR
+
+### Improvements
+
+- **Unified image configuration**: `configure_release_image/3` is now the single source of truth for image configuration, used by both CLI adapters and the programmatic API (`build_image/3`)
+- **`build_image/3` now supports all options**: The programmatic API now supports `uid`, `annotations`, and properly clears inherited `Cmd` from base images
 
 ## 0.2.0 - 2025-12-22
 
