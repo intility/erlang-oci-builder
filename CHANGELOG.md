@@ -15,6 +15,11 @@
 - **New `ocibuild_tar:create/2`**: TAR creation now accepts options map with `mtime` parameter for reproducible archives
 - **New `ocibuild_layer:create/2`**: Layer creation now accepts options map for passing mtime through to TAR
 
+### Improvements
+
+- **Unified image configuration**: `configure_release_image/3` is now the single source of truth for image configuration, used by both CLI adapters and the programmatic API (`build_image/3`)
+- **`build_image/3` now supports all options**: The programmatic API now supports `uid`, `annotations`, and properly clears inherited `Cmd` from base images
+
 ## 0.2.0 - 2025-12-22
 
 ### Features

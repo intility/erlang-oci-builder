@@ -33,8 +33,9 @@ rebar3 fmt -w
 src/
 ├── ocibuild.erl          → Public API (from, copy, push, save, annotation, etc.)
 ├── ocibuild_adapter.erl  → Behaviour for build system adapters
-├── ocibuild_release.erl  → Shared release handling (file collection, image building,
-│                           auth, progress display, save/push operations, validation)
+├── ocibuild_release.erl  → Shared release handling (configure_release_image is the single
+│                           source of truth for image config; file collection, auth,
+│                           progress display, save/push operations, validation)
 ├── ocibuild_rebar3.erl   → Rebar3 provider (implements ocibuild_adapter)
 ├── ocibuild_mix.erl      → Mix adapter (implements ocibuild_adapter)
 ├── ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar format)

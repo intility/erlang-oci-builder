@@ -64,7 +64,9 @@ src/
 ├── ocibuild_adapter.erl   # Behaviour for build system adapters (rebar3, Mix, etc.)
 ├── ocibuild_rebar3.erl    # Rebar3 provider (implements ocibuild_adapter)
 ├── ocibuild_mix.erl       # Mix adapter (implements ocibuild_adapter)
-├── ocibuild_release.erl   # Shared release handling (file collection, image building, auth)
+├── ocibuild_release.erl   # Shared release handling (configure_release_image is the single
+│                          # source of truth for image config: layers, env, ports, labels,
+│                          # annotations, uid, etc. Used by both CLI and programmatic API)
 ├── ocibuild_tar.erl       # In-memory TAR archive builder (POSIX ustar format)
 ├── ocibuild_layer.erl     # OCI layer creation (tar + gzip + digests)
 ├── ocibuild_digest.erl    # SHA256 digest utilities
@@ -206,7 +208,9 @@ The `parse_image_ref/1` function handles various formats:
 
 **Status: ✅ Implemented and tested**
 
-Provides common functionality for collecting release files and building OCI images, used by both rebar3 and Mix integrations.
+Provides common functionality for collecting release files and building OCI images. The
+`configure_release_image/3` function is the **single source of truth** for image configuration,
+used by both the programmatic API (`build_image/3`) and CLI adapters (`run/3`).
 
 **Key Functions:**
 
@@ -214,15 +218,34 @@ Provides common functionality for collecting release files and building OCI imag
 %% Collect files from release directory (with symlink security)
 -spec collect_release_files(ReleasePath) -> {ok, Files} | {error, term()}.
 
-%% Build OCI image from release files
--spec build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts) ->
-    {ok, image()} | {error, term()}.
+%% Build OCI image from release files (programmatic API)
+-spec build_image(BaseImage, Files, Opts) -> {ok, image()} | {error, term()}.
+
+%% Configure image with all settings (internal, single source of truth)
+%% Handles: layers, workdir, entrypoint, env, ports, labels, annotations, uid, description
+-spec configure_release_image(Image, Files, Opts) -> image().
+```
+
+**Unified Code Path:**
+```
+CLI (rebar3/mix)           Programmatic API
+       │                         │
+       ▼                         ▼
+    run/3                   build_image/3
+       │                         │
+       └────────┬────────────────┘
+                │
+                ▼
+       configure_release_image/3
+       (layers, env, ports, labels,
+        annotations, uid, user, etc.)
 ```
 
 **Security Features:**
 - Symlinks pointing outside the release directory are rejected
 - Broken symlinks are skipped with a warning
 - Path traversal via `..` components is prevented
+- Non-root by default (UID 65534)
 
 ---
 
