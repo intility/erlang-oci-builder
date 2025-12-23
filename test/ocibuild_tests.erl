@@ -970,3 +970,195 @@ save_tarball_base_layer_failure_test() ->
     after
         file:delete(TmpFile)
     end.
+
+%%%===================================================================
+%%% Reproducible builds tests (ocibuild_time)
+%%%===================================================================
+
+time_get_timestamp_default_test() ->
+    %% Test that get_timestamp returns current time when no env var is set
+    os:unsetenv("SOURCE_DATE_EPOCH"),
+    Before = erlang:system_time(second),
+    Timestamp = ocibuild_time:get_timestamp(),
+    After = erlang:system_time(second),
+    ?assert(Timestamp >= Before),
+    ?assert(Timestamp =< After).
+
+time_get_timestamp_from_env_test() ->
+    %% Test that get_timestamp reads SOURCE_DATE_EPOCH
+    os:putenv("SOURCE_DATE_EPOCH", "1234567890"),
+    try
+        ?assertEqual(1234567890, ocibuild_time:get_timestamp())
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+time_get_timestamp_invalid_env_test() ->
+    %% Test that invalid SOURCE_DATE_EPOCH falls back to current time
+    os:putenv("SOURCE_DATE_EPOCH", "not_a_number"),
+    try
+        Before = erlang:system_time(second),
+        Timestamp = ocibuild_time:get_timestamp(),
+        After = erlang:system_time(second),
+        ?assert(Timestamp >= Before),
+        ?assert(Timestamp =< After)
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+time_get_timestamp_negative_env_test() ->
+    %% Test that negative SOURCE_DATE_EPOCH falls back to current time
+    os:putenv("SOURCE_DATE_EPOCH", "-100"),
+    try
+        Before = erlang:system_time(second),
+        Timestamp = ocibuild_time:get_timestamp(),
+        After = erlang:system_time(second),
+        ?assert(Timestamp >= Before),
+        ?assert(Timestamp =< After)
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+time_unix_to_iso8601_epoch_test() ->
+    %% Test that Unix epoch (0) converts correctly
+    ?assertEqual(~"1970-01-01T00:00:00Z", ocibuild_time:unix_to_iso8601(0)).
+
+time_unix_to_iso8601_known_value_test() ->
+    %% Test a known timestamp conversion
+    %% 1700000000 = 2023-11-14T22:13:20Z
+    ?assertEqual(~"2023-11-14T22:13:20Z", ocibuild_time:unix_to_iso8601(1700000000)).
+
+time_get_iso8601_with_env_test() ->
+    %% Test that get_iso8601 uses SOURCE_DATE_EPOCH
+    os:putenv("SOURCE_DATE_EPOCH", "1700000000"),
+    try
+        ?assertEqual(~"2023-11-14T22:13:20Z", ocibuild_time:get_iso8601())
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+%%%===================================================================
+%%% TAR reproducibility tests
+%%%===================================================================
+
+tar_file_sorting_test() ->
+    %% Test that files are sorted regardless of input order
+    Files = [
+        {~"/z/file.txt", ~"z", 8#644},
+        {~"/a/file.txt", ~"a", 8#644},
+        {~"/m/file.txt", ~"m", 8#644}
+    ],
+    MTime = 1700000000,
+    Tar1 = ocibuild_tar:create(Files, #{mtime => MTime}),
+    %% Same files in different order
+    Tar2 = ocibuild_tar:create(lists:reverse(Files), #{mtime => MTime}),
+    %% Should produce identical output
+    ?assertEqual(Tar1, Tar2).
+
+tar_mtime_option_test() ->
+    %% Test that mtime option is used
+    Files = [{~"/test.txt", ~"content", 8#644}],
+    FixedTime = 1234567890,
+    Tar1 = ocibuild_tar:create(Files, #{mtime => FixedTime}),
+    Tar2 = ocibuild_tar:create(Files, #{mtime => FixedTime}),
+    ?assertEqual(Tar1, Tar2),
+    %% Verify digests match
+    ?assertEqual(ocibuild_digest:sha256(Tar1), ocibuild_digest:sha256(Tar2)).
+
+tar_reproducible_test() ->
+    %% Test full reproducibility with fixed mtime
+    Files = [
+        {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755},
+        {~"/app/config.json", ~"{\"key\": \"value\"}", 8#644}
+    ],
+    MTime = 1700000000,
+    %% Create twice with same mtime
+    Tar1 = ocibuild_tar:create(Files, #{mtime => MTime}),
+    Tar2 = ocibuild_tar:create(Files, #{mtime => MTime}),
+    ?assertEqual(Tar1, Tar2),
+    %% Verify the digests match
+    ?assertEqual(ocibuild_digest:sha256(Tar1), ocibuild_digest:sha256(Tar2)).
+
+%%%===================================================================
+%%% Layer reproducibility tests
+%%%===================================================================
+
+layer_mtime_option_test() ->
+    %% Test that layer respects mtime option
+    Files = [{~"/test.txt", ~"content", 8#644}],
+    MTime = 1700000000,
+    Layer1 = ocibuild_layer:create(Files, #{mtime => MTime}),
+    Layer2 = ocibuild_layer:create(Files, #{mtime => MTime}),
+    %% Digests should match
+    ?assertEqual(maps:get(digest, Layer1), maps:get(digest, Layer2)),
+    ?assertEqual(maps:get(diff_id, Layer1), maps:get(diff_id, Layer2)).
+
+layer_reproducible_test() ->
+    %% Test that layers are reproducible with SOURCE_DATE_EPOCH
+    os:putenv("SOURCE_DATE_EPOCH", "1700000000"),
+    try
+        Files = [{~"/app/file", ~"data", 8#644}],
+        MTime = ocibuild_time:get_timestamp(),
+        Layer1 = ocibuild_layer:create(Files, #{mtime => MTime}),
+        Layer2 = ocibuild_layer:create(Files, #{mtime => MTime}),
+        ?assertEqual(maps:get(digest, Layer1), maps:get(digest, Layer2))
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+%%%===================================================================
+%%% Full image reproducibility tests
+%%%===================================================================
+
+reproducible_scratch_image_test() ->
+    %% Test that scratch images are reproducible with SOURCE_DATE_EPOCH
+    os:putenv("SOURCE_DATE_EPOCH", "1700000000"),
+    try
+        {ok, Image1} = ocibuild:scratch(),
+        {ok, Image2} = ocibuild:scratch(),
+        %% Configs should be identical
+        Config1 = maps:get(config, Image1),
+        Config2 = maps:get(config, Image2),
+        ?assertEqual(maps:get(~"created", Config1), maps:get(~"created", Config2)),
+        ?assertEqual(~"2023-11-14T22:13:20Z", maps:get(~"created", Config1))
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+reproducible_image_with_layer_test() ->
+    %% Test full image reproducibility with layer
+    os:putenv("SOURCE_DATE_EPOCH", "1700000000"),
+    try
+        {ok, Image1} = ocibuild:scratch(),
+        Image1a = ocibuild:add_layer(Image1, [{~"/test", ~"data", 8#644}]),
+
+        {ok, Image2} = ocibuild:scratch(),
+        Image2a = ocibuild:add_layer(Image2, [{~"/test", ~"data", 8#644}]),
+
+        %% Layer digests should be identical
+        [Layer1] = maps:get(layers, Image1a),
+        [Layer2] = maps:get(layers, Image2a),
+        ?assertEqual(maps:get(digest, Layer1), maps:get(digest, Layer2)),
+        ?assertEqual(maps:get(diff_id, Layer1), maps:get(diff_id, Layer2)),
+
+        %% Config timestamps should be identical
+        Config1 = maps:get(config, Image1a),
+        Config2 = maps:get(config, Image2a),
+        ?assertEqual(maps:get(~"created", Config1), maps:get(~"created", Config2))
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
+
+history_timestamp_test() ->
+    %% Test that history entries use SOURCE_DATE_EPOCH
+    os:putenv("SOURCE_DATE_EPOCH", "1700000000"),
+    try
+        {ok, Image0} = ocibuild:scratch(),
+        Image1 = ocibuild:add_layer(Image0, [{~"/test", ~"data", 8#644}]),
+        Config = maps:get(config, Image1),
+        History = maps:get(~"history", Config),
+        [HistoryEntry | _] = History,
+        ?assertEqual(~"2023-11-14T22:13:20Z", maps:get(~"created", HistoryEntry))
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.

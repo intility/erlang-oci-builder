@@ -12,7 +12,7 @@ The TAR format consists of 512-byte blocks:
 - Archive ends with two 512-byte blocks of zeros
 """.
 
--export([create/1, create_compressed/1]).
+-export([create/1, create/2, create_compressed/1, create_compressed/2]).
 
 -define(BLOCK_SIZE, 512).
 %% TAR header field offsets and sizes (POSIX ustar format)
@@ -74,12 +74,40 @@ TarData = ocibuild_tar:create([
 """.
 -spec create([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> binary().
 create(Files) ->
+    create(Files, #{}).
+
+-doc """
+Create a TAR archive in memory with options.
+
+Options:
+- `mtime`: Unix timestamp for file modification times (for reproducible builds)
+
+Files are sorted alphabetically for reproducibility.
+
+```
+%% With fixed mtime for reproducible builds
+TarData = ocibuild_tar:create(Files, #{mtime => 1700000000}).
+```
+""".
+-spec create(Files, Opts) -> binary() when
+    Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
+    Opts :: #{mtime => non_neg_integer()}.
+create(Files, Opts) ->
+    %% Sort files alphabetically for reproducibility
+    SortedFiles = lists:sort(fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end, Files),
+
+    %% Get mtime (use provided value or current time)
+    MTime = maps:get(mtime, Opts, erlang:system_time(second)),
+
     %% Collect all directories that need to be created
-    Dirs = collect_directories(Files),
+    Dirs = collect_directories(SortedFiles),
 
     %% Build directory entries first, then file entries
-    DirEntries = [build_dir_entry(Dir) || Dir <- lists:sort(Dirs)],
-    FileEntries = [build_file_entry(Path, Content, Mode) || {Path, Content, Mode} <- Files],
+    DirEntries = [build_dir_entry(Dir, MTime) || Dir <- lists:sort(Dirs)],
+    FileEntries = [
+        build_file_entry(Path, Content, Mode, MTime)
+     || {Path, Content, Mode} <- SortedFiles
+    ],
 
     %% End of archive marker: two 512-byte zero blocks
     EndMarker = <<0:(?BLOCK_SIZE * 2 * 8)>>,
@@ -90,7 +118,14 @@ create(Files) ->
 -spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
     binary().
 create_compressed(Files) ->
-    Tar = create(Files),
+    create_compressed(Files, #{}).
+
+-doc "Create a gzip-compressed TAR archive in memory with options.".
+-spec create_compressed(Files, Opts) -> binary() when
+    Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
+    Opts :: #{mtime => non_neg_integer()}.
+create_compressed(Files, Opts) ->
+    Tar = create(Files, Opts),
     zlib:gzip(Tar).
 
 %%%===================================================================
@@ -159,8 +194,8 @@ normalize_path_internal(Path) ->
     <<"./", Path/binary>>.
 
 %% Build a directory entry
--spec build_dir_entry(binary()) -> iolist().
-build_dir_entry(Path) ->
+-spec build_dir_entry(binary(), non_neg_integer()) -> iolist().
+build_dir_entry(Path, MTime) ->
     %% Directories have trailing slash in tar
     DirPath =
         case binary:last(Path) of
@@ -170,25 +205,23 @@ build_dir_entry(Path) ->
                 <<Path/binary, "/">>
         end,
     NormPath = normalize_path(DirPath),
-    Header = build_header(NormPath, 0, ?MODE_EXEC, ?DIRTYPE),
+    Header = build_header(NormPath, 0, ?MODE_EXEC, ?DIRTYPE, MTime),
     [Header].
 
 %% Build a file entry (header + content + padding)
--spec build_file_entry(binary(), binary(), integer()) -> iolist().
-build_file_entry(Path, Content, Mode) ->
+-spec build_file_entry(binary(), binary(), integer(), non_neg_integer()) -> iolist().
+build_file_entry(Path, Content, Mode, MTime) ->
     NormPath = normalize_path(Path),
     Size = byte_size(Content),
-    Header = build_header(NormPath, Size, Mode, ?FILETYPE),
+    Header = build_header(NormPath, Size, Mode, ?FILETYPE, MTime),
     Padding = padding(Size),
     [Header, Content, Padding].
 
 %% Build a TAR header
--spec build_header(binary(), non_neg_integer(), integer(), byte()) -> binary().
-build_header(Name, Size, Mode, TypeFlag) ->
+-spec build_header(binary(), non_neg_integer(), integer(), byte(), non_neg_integer()) -> binary().
+build_header(Name, Size, Mode, TypeFlag, MTime) ->
     %% Handle long names using prefix field if needed
     {Prefix, ShortName} = split_name(Name),
-
-    MTime = erlang:system_time(second),
 
     %% Build header with placeholder checksum (spaces)
 

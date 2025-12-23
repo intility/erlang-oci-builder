@@ -503,7 +503,12 @@ collect_release_files(ReleasePath, Opts) ->
     Workdir = maps:get(workdir, Opts, "/app"),
     try
         Files = collect_files_recursive(ReleasePath, ReleasePath, Workdir),
-        {ok, Files}
+        %% Sort files alphabetically for reproducible builds
+        SortedFiles = lists:sort(
+            fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end,
+            Files
+        ),
+        {ok, SortedFiles}
     catch
         throw:{file_error, Path, Reason} ->
             {error, {file_read_error, Path, Reason}}

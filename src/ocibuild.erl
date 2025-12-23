@@ -272,7 +272,9 @@ Image1 = ocibuild:add_layer(Image, [
 -spec add_layer(image(), [{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
     image().
 add_layer(#{layers := Layers, config := Config} = Image, Files) ->
-    Layer = ocibuild_layer:create(Files),
+    %% Get reproducible timestamp for layer mtime
+    MTime = ocibuild_time:get_timestamp(),
+    Layer = ocibuild_layer:create(Files, #{mtime => MTime}),
     NewConfig = add_layer_to_config(Config, Layer),
     %% Prepend for O(1) - layers are stored in reverse order, reversed on export
     Image#{layers := [Layer | Layers], config := NewConfig}.
@@ -675,10 +677,5 @@ get_config_field(Config, Field, Default) ->
 
 -spec iso8601_now() -> binary().
 iso8601_now() ->
-    {{Y, Mo, D}, {H, Mi, S}} = calendar:universal_time(),
-    iolist_to_binary(
-        io_lib:format(
-            "~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
-            [Y, Mo, D, H, Mi, S]
-        )
-    ).
+    %% Uses SOURCE_DATE_EPOCH if set for reproducible builds
+    ocibuild_time:get_iso8601().

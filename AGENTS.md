@@ -21,7 +21,7 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | OCI annotations               | ✅                 | ✅          | ✅                | ✅              |
 | Build system integration      | ✅ (rebar3/Mix)    | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
 | **Multi-platform images**     | ✅                 | ✅          | ✅                | ✅              |
-| **Reproducible builds**       | 🔜 Planned (P2)    | ✅          | ✅                | ✅              |
+| **Reproducible builds**       | ✅                 | ✅          | ✅                | ✅              |
 | **Smart dependency layering** | 🔜 Planned (P3)    | N/A         | ✅                | ✅              |
 | **Non-root by default**       | 🔜 Planned (P4)    | ✅          | ❌                | ✅              |
 | **Auto OCI annotations**      | 🔜 Planned (P5)    | ✅          | ✅                | ✅              |
@@ -71,6 +71,7 @@ src/
 ├── ocibuild_layout.erl    # OCI image layout export (directory/tarball)
 ├── ocibuild_registry.erl  # Registry client (pull/push via HTTP with retry logic)
 ├── ocibuild_cache.erl     # Layer caching for base images
+├── ocibuild_time.erl      # Timestamp utilities for reproducible builds
 └── ocibuild.app.src       # OTP application spec
 
 lib/

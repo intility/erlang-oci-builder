@@ -45,7 +45,8 @@ src/
 ├── ocibuild_index.erl    → OCI image index for multi-platform images
 ├── ocibuild_layout.erl   → Export to directory or tarball (including multi-platform)
 ├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry, multi-platform)
-└── ocibuild_cache.erl    → Layer caching for base images
+├── ocibuild_cache.erl    → Layer caching for base images
+└── ocibuild_time.erl     → Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
 
 lib/
 ├── mix/tasks/ocibuild.ex → Mix task (mix ocibuild command)
@@ -94,7 +95,7 @@ User API (ocibuild.erl)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index).
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH).
 
 **Not Implemented:** Resumable uploads, zstd compression.
 

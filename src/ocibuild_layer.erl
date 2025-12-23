@@ -8,7 +8,7 @@ An OCI layer is a gzip-compressed tar archive with two digests:
 - `diff_id`: SHA256 of the uncompressed tar (used in config rootfs)
 """.
 
--export([create/1]).
+-export([create/1, create/2]).
 
 -type layer() ::
     #{
@@ -41,8 +41,25 @@ Returns a layer map containing:
 """.
 -spec create([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> layer().
 create(Files) ->
-    %% Create uncompressed tar
-    Tar = ocibuild_tar:create(Files),
+    create(Files, #{}).
+
+-doc """
+Create a layer from a list of files with options.
+
+Options:
+- `mtime`: Unix timestamp for file modification times (for reproducible builds)
+
+```
+%% With fixed mtime for reproducible builds
+Layer = ocibuild_layer:create(Files, #{mtime => 1700000000}).
+```
+""".
+-spec create(Files, Opts) -> layer() when
+    Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
+    Opts :: #{mtime => non_neg_integer()}.
+create(Files, Opts) ->
+    %% Create uncompressed tar (with options for reproducibility)
+    Tar = ocibuild_tar:create(Files, Opts),
 
     %% Calculate diff_id from uncompressed tar
     DiffId = ocibuild_digest:sha256(Tar),
