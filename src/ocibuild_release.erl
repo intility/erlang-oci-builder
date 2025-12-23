@@ -503,12 +503,8 @@ collect_release_files(ReleasePath, Opts) ->
     Workdir = maps:get(workdir, Opts, "/app"),
     try
         Files = collect_files_recursive(ReleasePath, ReleasePath, Workdir),
-        %% Sort files alphabetically for reproducible builds
-        SortedFiles = lists:sort(
-            fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end,
-            Files
-        ),
-        {ok, SortedFiles}
+        %% Note: Files are sorted in ocibuild_tar:create/2 for reproducibility
+        {ok, Files}
     catch
         throw:{file_error, Path, Reason} ->
             {error, {file_read_error, Path, Reason}}
