@@ -1,9 +1,24 @@
 # Changelog
 
-## 0.3.0 - 2025-12-23
+## 0.3.0 - 2025-12-24
 
 ### Features
 
+- **Automatic OCI annotations from VCS**: Images are now automatically annotated with version control information
+  - `org.opencontainers.image.source` - Repository URL (from VCS remote or CI environment)
+  - `org.opencontainers.image.revision` - Commit SHA
+  - `org.opencontainers.image.version` - Application version from build system
+  - `org.opencontainers.image.created` - Build timestamp (respects `SOURCE_DATE_EPOCH`)
+  - `org.opencontainers.image.base.name` - Base image reference
+  - `org.opencontainers.image.base.digest` - Base image digest
+- **CI environment variable support**: VCS information is automatically detected from CI systems
+  - GitHub Actions: `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`
+  - GitLab CI: `CI_PROJECT_URL`, `CI_COMMIT_SHA`
+  - Azure DevOps: `BUILD_REPOSITORY_URI`, `BUILD_SOURCEVERSION`
+- **New `ocibuild_vcs` behaviour**: Pluggable VCS adapter system for future support of Mercurial, SVN, etc.
+- **New `ocibuild_vcs_git` module**: Git adapter for VCS annotations base on Git repositories.
+- **New `--no-vcs-annotations` CLI flag**: Disable automatic VCS annotations when not desired
+- **New `vcs_annotations` config option**: Set to `false` in rebar.config or mix.exs to disable by default
 - **Non-root by default**: Containers now run as UID 65534 (nobody) by default for improved security
   - Add `--uid` CLI option to override (e.g., `--uid 1000` for custom user, `--uid 0` for root)
   - Configurable via `uid` option in rebar.config or mix.exs
@@ -17,6 +32,8 @@
 
 ### Improvements
 
+- **Adapter `get_app_version/1` callback**: Optional callback for adapters to provide application version for annotations
+- **SSH to HTTPS URL conversion**: Git SSH URLs (e.g., `git@github.com:org/repo.git`) are automatically converted to HTTPS for public visibility
 - **Unified image configuration**: `configure_release_image/3` is now the single source of truth for image configuration, used by both CLI adapters and the programmatic API (`build_image/3`)
 - **`build_image/3` now supports all options**: The programmatic API now supports `uid`, `annotations`, and properly clears inherited `Cmd` from base images
 
