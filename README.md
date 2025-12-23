@@ -29,7 +29,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command. |
 | **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
 | **Smart dependency layering** | ⏳     | Separate layers for ERTS, dependencies, and application code.          |
-| **Non-root by default**       | ⏳     | Run containers as non-root user (UID 65534) for security.              |
+| **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.         |
 | **Auto OCI annotations**      | ⏳     | Automatically populate source URL and revision from VCS.               |
 | **SBOM generation**           | ⏳     | Generate SPDX Software Bill of Materials embedded in images.           |
 | **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                |

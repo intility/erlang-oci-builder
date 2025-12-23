@@ -23,7 +23,7 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | **Multi-platform images**     | ✅                 | ✅          | ✅                | ✅              |
 | **Reproducible builds**       | ✅                 | ✅          | ✅                | ✅              |
 | **Smart dependency layering** | ⏳ Planned (P3)    | N/A         | ✅                | ✅              |
-| **Non-root by default**       | ⏳ Planned (P4)    | ✅          | ❌                | ✅              |
+| **Non-root by default**       | ✅                 | ✅          | ❌                | ✅              |
 | **Auto OCI annotations**      | ⏳ Planned (P5)    | ✅          | ✅                | ✅              |
 | **SBOM generation**           | ⏳ Planned (P6)    | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
 | **Image signing**             | ⏳ Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
@@ -61,17 +61,20 @@ Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented
 ```
 src/
 ├── ocibuild.erl           # Public API - the main interface users interact with
-├── ocibuild_rebar3.erl    # Rebar3 provider (rebar3 ocibuild command)
-├── ocibuild_release.erl   # Shared release handling for rebar3/Mix integrations
+├── ocibuild_adapter.erl   # Behaviour for build system adapters (rebar3, Mix, etc.)
+├── ocibuild_rebar3.erl    # Rebar3 provider (implements ocibuild_adapter)
+├── ocibuild_mix.erl       # Mix adapter (implements ocibuild_adapter)
+├── ocibuild_release.erl   # Shared release handling (file collection, image building, auth)
 ├── ocibuild_tar.erl       # In-memory TAR archive builder (POSIX ustar format)
 ├── ocibuild_layer.erl     # OCI layer creation (tar + gzip + digests)
 ├── ocibuild_digest.erl    # SHA256 digest utilities
 ├── ocibuild_json.erl      # JSON encode/decode (OTP 27 native + fallback)
 ├── ocibuild_manifest.erl  # OCI manifest generation (with annotations support)
-├── ocibuild_layout.erl    # OCI image layout export (directory/tarball)
+├── ocibuild_index.erl     # OCI image index for multi-platform images
+├── ocibuild_layout.erl    # OCI image layout export (directory/tarball, multi-platform)
 ├── ocibuild_registry.erl  # Registry client (pull/push via HTTP with retry logic)
 ├── ocibuild_cache.erl     # Layer caching for base images
-├── ocibuild_time.erl      # Timestamp utilities for reproducible builds
+├── ocibuild_time.erl      # Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
 └── ocibuild.app.src       # OTP application spec
 
 lib/
@@ -79,29 +82,58 @@ lib/
 └── ocibuild/mix_release.ex    # Mix release step integration
 ```
 
+**Adapter Pattern:**
+```
+                    ocibuild_release.erl
+           (Shared: auth, progress, save, push, validation)
+                          ▲
+                          │ uses
+    ┌─────────────────────┼─────────────────────┐
+    │                     │                     │
+ocibuild_rebar3    ocibuild_mix         (Future adapters)
+(rebar3 provider)  (Mix integration)    (Gleam, LFE, etc.)
+    │                     │
+    └──────────┬──────────┘
+               │
+       ocibuild_adapter (behaviour)
+         - get_config/1
+         - find_release/2
+         - info/2, console/2, error/2
+```
+
 ### Data Flow
 
 ```
-User Code
+User Code / CLI (rebar3 ocibuild, mix ocibuild)
     │
     ▼
-ocibuild.erl (Public API)
+ocibuild_rebar3 / ocibuild_mix (Adapters)
     │
-    ├─► ocibuild_registry.erl ──► Pull base image manifest + config + layers
-    │       │
-    │       └─► ocibuild_cache.erl ──► Cache layers locally in _build/
+    ├─► ocibuild_adapter ──────► Behaviour interface (get_config, find_release, logging)
     │
-    ├─► ocibuild_layer.erl ─────► Create new layers
-    │       │
-    │       └─► ocibuild_tar.erl ──► Build tar in memory
-    │       └─► zlib:gzip/1 ───────► Compress
-    │       └─► ocibuild_digest.erl ► Calculate SHA256
-    │
-    ├─► ocibuild_manifest.erl ──► Generate manifest JSON (with annotations)
-    │
-    └─► ocibuild_layout.erl ────► Export to directory/tarball
-        OR
-        ocibuild_registry.erl ──► Push to registry
+    └─► ocibuild_release ──────► Shared release handling
+            │
+            ├─► ocibuild_time ─────► Timestamps (respects SOURCE_DATE_EPOCH)
+            │
+            └─► ocibuild.erl (Public API)
+                    │
+                    ├─► ocibuild_registry ──► Pull base image manifest + config + layers
+                    │       │
+                    │       └─► ocibuild_cache ──► Cache layers locally in _build/
+                    │
+                    ├─► ocibuild_layer ─────► Create new layers
+                    │       │
+                    │       ├─► ocibuild_tar ──► Build tar in memory (sorted, deterministic mtime)
+                    │       ├─► zlib:gzip/1 ───► Compress
+                    │       └─► ocibuild_digest ► Calculate SHA256
+                    │
+                    ├─► ocibuild_manifest ──► Generate manifest JSON (with annotations)
+                    │
+                    ├─► ocibuild_index ─────► Generate OCI image index (multi-platform)
+                    │
+                    └─► ocibuild_layout ────► Export to directory/tarball
+                        OR
+                        ocibuild_registry ──► Push to registry (single or multi-platform)
 ```
 
 ---
@@ -141,30 +173,31 @@ The main public interface. Key types:
 
 **Public Functions:**
 
-| Function                     | Description               | Status                    |
-|------------------------------|---------------------------|---------------------------|
-| `from/1`, `from/2`, `from/3` | Start from base image     | ✅ Implemented            |
-| `scratch/0`                  | Start from empty image    | ✅ Implemented            |
-| `add_layer/2`                | Add layer with file modes | ✅ Implemented            |
-| `copy/3`                     | Copy files to destination | ✅ Implemented            |
-| `entrypoint/2`               | Set entrypoint            | ✅ Implemented            |
-| `cmd/2`                      | Set CMD                   | ✅ Implemented            |
-| `env/2`                      | Set environment variables | ✅ Implemented            |
-| `workdir/2`                  | Set working directory     | ✅ Implemented            |
-| `expose/2`                   | Expose port               | ✅ Implemented            |
-| `label/3`                    | Add config label          | ✅ Implemented            |
-| `user/2`                     | Set user                  | ✅ Implemented            |
-| `annotation/3`               | Add manifest annotation   | ✅ Implemented            |
-| `push/3`, `push/4`           | Push to registry          | ✅ Implemented and tested |
-| `save/2`, `save/3`           | Save as tarball           | ✅ Implemented and tested |
-| `export/2`                   | Export as directory       | ✅ Implemented and tested |
+| Function                       | Description                        | Status                    |
+|--------------------------------|------------------------------------|---------------------------|
+| `from/1`, `from/2`, `from/3`   | Start from base image              | ✅ Implemented            |
+| `scratch/0`                    | Start from empty image             | ✅ Implemented            |
+| `add_layer/2`                  | Add layer with file modes          | ✅ Implemented            |
+| `copy/3`                       | Copy files to destination          | ✅ Implemented            |
+| `entrypoint/2`                 | Set entrypoint                     | ✅ Implemented            |
+| `cmd/2`                        | Set CMD                            | ✅ Implemented            |
+| `env/2`                        | Set environment variables          | ✅ Implemented            |
+| `workdir/2`                    | Set working directory              | ✅ Implemented            |
+| `expose/2`                     | Expose port                        | ✅ Implemented            |
+| `label/3`                      | Add config label                   | ✅ Implemented            |
+| `user/2`                       | Set user (UID or username)         | ✅ Implemented            |
+| `annotation/3`                 | Add manifest annotation            | ✅ Implemented            |
+| `push/3`, `push/4`             | Push single image to registry      | ✅ Implemented and tested |
+| `push_multi/4`, `push_multi/5` | Push multi-platform image w/ index | ✅ Implemented and tested |
+| `save/2`, `save/3`             | Save as tarball (multi-platform)   | ✅ Implemented and tested |
+| `export/2`                     | Export as directory                | ✅ Implemented and tested |
 
 **Image Reference Parsing:**
 
 The `parse_image_ref/1` function handles various formats:
-- `"alpine:3.19"` → `{<<"docker.io">>, <<"library/alpine">>, <<"3.19">>}`
+- `"alpine:3.19"` → `{~"docker.io", ~"library/alpine", ~"3.19"}`
 - `"docker.io/library/alpine:3.19"` → same as above
-- `"ghcr.io/myorg/myapp:v1"` → `{<<"ghcr.io">>, <<"myorg/myapp">>, <<"v1">>}`
+- `"ghcr.io/myorg/myapp:v1"` → `{~"ghcr.io", ~"myorg/myapp", ~"v1"}`
 - `"myregistry.com:5000/myapp:latest"` → handles port in registry
 
 ---
@@ -254,12 +287,12 @@ Creates OCI layers from file lists. An OCI layer has two digests:
 Simple wrapper around `:crypto` for OCI-style digests.
 
 ```erlang
-%% Returns <<"sha256:abc123...">>
+%% Returns ~"sha256:abc123..."
 -spec sha256(binary()) -> digest().
 
 %% Extract parts
--spec algorithm(digest()) -> binary().  % <<"sha256">>
--spec encoded(digest()) -> binary().    % <<"abc123...">>
+-spec algorithm(digest()) -> binary().  % ~"sha256"
+-spec encoded(digest()) -> binary().    % ~"abc123..."
 ```
 
 ---
@@ -456,6 +489,7 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 | ocibuild_cache    | ✅ Tested                      |
 | ocibuild_release  | ✅ Tested                      |
 | ocibuild_index    | ✅ Tested                      |
+| ocibuild_time     | ✅ Tested                      |
 | ocibuild (API)    | ✅ Tested                      |
 
 ---
@@ -577,8 +611,8 @@ BEAM bytecode is platform-independent, but ERTS is native code. For multi-platfo
 
 ```erlang
 %% Build for multiple platforms
-{ok, Images} = ocibuild:from(<<"alpine:3.19">>, #{
-    platforms => [<<"linux/amd64">>, <<"linux/arm64">>]
+{ok, Images} = ocibuild:from(~"alpine:3.19", #{
+    platforms => [~"linux/amd64", ~"linux/arm64"]
 }),
 %% Returns list of images, one per platform
 Images2 = [ocibuild:entrypoint(I, [...]) || I <- Images],
@@ -607,11 +641,11 @@ rebar3 ocibuild -t myapp:1.0.0 --platform linux/amd64,linux/arm64
 | Layout | `ocibuild_layout.erl` | Multi-platform tarball support with OCI image index |
 | CLI | `ocibuild_rebar3.erl`, `lib/mix/tasks/ocibuild.ex` | `--platform/-P` option |
 
-### Priority 2: Reproducible Builds
+### Priority 2: Reproducible Builds ✅ IMPLEMENTED
 
-**Impact:** Build verification, security audits
+**Status:** Fully implemented and tested
 
-ko and jib produce identical images from identical inputs. Currently ocibuild has non-deterministic timestamps and file ordering.
+**Impact:** Build verification, security audits, registry deduplication
 
 **Approach:** Support `SOURCE_DATE_EPOCH` environment variable ([spec](https://reproducible-builds.org/docs/source-date-epoch/))
 
@@ -623,49 +657,24 @@ rebar3 ocibuild --push ghcr.io/myorg
 
 No CLI flag - environment variable only (it's the standard).
 
-**Sources of Non-Determinism:**
+**Implementation Summary:**
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Timestamp utilities | `ocibuild_time.erl` | `get_timestamp/0`, `get_iso8601/0`, `unix_to_iso8601/1` |
+| TAR creation | `ocibuild_tar.erl` | `create/2` with `mtime` option, alphabetical file sorting |
+| Layer creation | `ocibuild_layer.erl` | `create/2` passes mtime through to TAR |
+| Config timestamps | `ocibuild.erl` | `iso8601_now/0` delegates to `ocibuild_time` |
+
+**Sources of Non-Determinism (all fixed):**
 
 | Source | Fix |
 |--------|-----|
-| Config `created` timestamp | Use `SOURCE_DATE_EPOCH` |
-| History `created` timestamps | Use `SOURCE_DATE_EPOCH` |
-| TAR file `mtime` headers | Use `SOURCE_DATE_EPOCH` for all files |
-| File ordering in TAR | Sort alphabetically by path |
-
-**Implementation Steps:**
-
-1. **Read SOURCE_DATE_EPOCH** (`ocibuild_release.erl` or new utility):
-   ```erlang
-   get_source_date() ->
-       case os:getenv("SOURCE_DATE_EPOCH") of
-           false ->
-               erlang:system_time(second);
-           Epoch ->
-               list_to_integer(Epoch)
-       end.
-   ```
-
-2. **Update TAR creation** (`ocibuild_tar.erl`):
-   - Accept optional timestamp parameter
-   - Sort files alphabetically before building archive
-   - Use provided timestamp for all mtime headers
-   ```erlang
-   -spec create(Files, Opts) -> binary() when
-       Files :: [{Path, Content, Mode}],
-       Opts :: #{mtime => non_neg_integer()}.
-   ```
-
-3. **Update config timestamps** (`ocibuild.erl` / `ocibuild_manifest.erl`):
-   - Use `SOURCE_DATE_EPOCH` for `created` field in config
-   - Use `SOURCE_DATE_EPOCH` for history entries
-
-4. **Consistent file ordering** (`ocibuild_release.erl`):
-   ```erlang
-   collect_release_files(ReleasePath) ->
-       Files = collect_files_recursive(ReleasePath),
-       %% Sort for reproducibility
-       lists:sort(fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end, Files).
-   ```
+| Config `created` timestamp | ✅ Uses `SOURCE_DATE_EPOCH` via `ocibuild_time` |
+| History `created` timestamps | ✅ Uses `SOURCE_DATE_EPOCH` via `ocibuild_time` |
+| TAR file `mtime` headers | ✅ Uses `SOURCE_DATE_EPOCH` for all files |
+| File ordering in TAR | ✅ Sorted alphabetically by path in `ocibuild_tar` |
+| Gzip MTIME header | ✅ Already zero (Erlang's `zlib:gzip/1` sets MTIME=0) |
 
 ### Priority 3: Smart Dependency Layering
 
@@ -700,7 +709,7 @@ This is the default behavior, not an option. Layer count is determined by whethe
        {ok, [#{name := binary(), version := binary(), source := binary()}]} |
        {error, term()}.
    %% Returns full dependency info from lock file
-   %% e.g., [#{name => <<"cowboy">>, version => <<"2.10.0">>, source => <<"hex">>}, ...]
+   %% e.g., [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}, ...]
    ```
 
    This keeps build system logic in adapters, enabling future Gleam/LFE support.
@@ -756,7 +765,7 @@ This is the default behavior, not an option. Layer count is determined by whethe
 
 rebar.lock format:
 ```erlang
-{<<"cowboy">>, {pkg, <<"cowboy">>, <<"2.10.0">>}, 0}.
+{~"cowboy", {pkg, ~"cowboy", ~"2.10.0"}, 0}.
 ```
 
 mix.lock format:
@@ -764,7 +773,9 @@ mix.lock format:
 %{"cowboy": {:hex, :cowboy, "2.10.0", ...}}
 ```
 
-### Priority 4: Non-Root by Default
+### Priority 4: Non-Root by Default ✅ IMPLEMENTED
+
+**Status:** Fully implemented and tested
 
 **Impact:** Security best practice
 
@@ -783,30 +794,26 @@ rebar3 ocibuild --push ghcr.io/myorg --uid 1000
 rebar3 ocibuild --push ghcr.io/myorg --uid 0
 ```
 
-**Implementation Steps:**
+**Implementation Summary:**
 
-1. **Add `--uid` CLI option** (default: 65534):
-   - Update `ocibuild_rebar3.erl` and `lib/mix/tasks/ocibuild.ex`
-   - Config option: `{uid, 65534}` / `uid: 65534`
+| Component | File | Description |
+|-----------|------|-------------|
+| CLI option | `ocibuild_rebar3.erl` | `--uid` option, `get_uid/2` helper |
+| CLI option | `lib/mix/tasks/ocibuild.ex` | `uid: :integer` switch |
+| Config type | `ocibuild_adapter.erl` | `uid => non_neg_integer() \| undefined` |
+| Defaults | `ocibuild_mix.erl` | `uid => undefined` in defaults |
+| Application | `ocibuild_release.erl` | Applies user in `configure_release_image/3` |
 
-2. **Set User in image config** (`ocibuild.erl`):
-   ```erlang
-   %% When building release image, apply UID
-   Image = ocibuild:user(Image0, integer_to_binary(Uid))
-   ```
+**Behavior:**
+- **Default (undefined):** UID 65534 (nobody) - containers run as non-root
+- **Custom UID:** `--uid 1000` - run as specified user
+- **Root (UID 0):** `--uid 0` - explicitly run as root (no User field set)
 
-   Resulting config:
-   ```json
-   {
-     "config": {
-       "User": "65534"
-     }
-   }
-   ```
-
-3. **File permissions**: Keep current behavior (root owns files, world-readable). BEAM files only need to be readable, not writable. If the app needs writable directories (logs, mnesia), users should either:
-   - Mount a volume at runtime
-   - Use a base image with appropriate directory permissions
+**Kubernetes/OpenShift Compatibility:**
+- Works with any Kubernetes distribution including OpenShift
+- OpenShift's SCC overrides the `User` field with a random UID at runtime
+- Setting `User: 65534` signals "designed for non-root" which is the expected pattern
+- BEAM releases are UID-agnostic and work with any assigned UID
 
 ### Priority 5: Auto-Populate OCI Annotations
 
@@ -1088,12 +1095,12 @@ application/vnd.oci.image.index.v1+json
   "os": "linux",
   "config": {
     "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
-    "Entrypoint": ["/app/myapp"],
-    "Cmd": ["--help"],
+    "Entrypoint": ["/app/bin/myapp"],
+    "Cmd": ["foreground"],
     "WorkingDir": "/app",
     "ExposedPorts": {"8080/tcp": {}},
     "Labels": {"version": "1.0"},
-    "User": "nobody"
+    "User": "65534"
   },
   "rootfs": {
     "type": "layers",
@@ -1107,6 +1114,8 @@ application/vnd.oci.image.index.v1+json
   ]
 }
 ```
+
+Note: `User` defaults to `"65534"` (nobody) for non-root security. Override with `--uid`.
 
 ---
 
@@ -1126,11 +1135,11 @@ application/vnd.oci.image.index.v1+json
 io:format("~s~n", [ocibuild_json:encode(Map)]).
 
 % Inspect a layer
-Layer = ocibuild_layer:create([{<<"/test">>, <<"hello">>, 8#644}]),
+Layer = ocibuild_layer:create([{~"/test", ~"hello", 8#644}]),
 io:format("Digest: ~s~n", [maps:get(digest, Layer)]).
 
 % Test tar creation
-Tar = ocibuild_tar:create([{<<"/test.txt">>, <<"content">>, 8#644}]),
+Tar = ocibuild_tar:create([{~"/test.txt", ~"content", 8#644}]),
 file:write_file("/tmp/test.tar", Tar).
 % Then: tar -tvf /tmp/test.tar
 ```
@@ -1147,30 +1156,38 @@ file:write_file("/tmp/test.tar", Tar).
 
 ```erlang
 %% Build from a base image
-{ok, Image0} = ocibuild:from(<<"alpine:3.19">>),
+{ok, Image0} = ocibuild:from(~"alpine:3.19"),
 
 %% Add application layer
 {ok, AppBin} = file:read_file("myapp"),
 Image1 = ocibuild:add_layer(Image0, [
-    {<<"/app/myapp">>, AppBin, 8#755},
-    {<<"/app/config.json">>, <<"{\"port\": 8080}">>, 8#644}
+    {~"/app/myapp", AppBin, 8#755},
+    {~"/app/config.json", ~"{\"port\": 8080}", 8#644}
 ]),
 
 %% Configure
-Image2 = ocibuild:entrypoint(Image1, [<<"/app/myapp">>]),
+Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp"]),
 Image3 = ocibuild:env(Image2, #{
-    <<"PORT">> => <<"8080">>,
-    <<"ENV">> => <<"production">>
+    ~"PORT" => ~"8080",
+    ~"ENV" => ~"production"
 }),
 Image4 = ocibuild:expose(Image3, 8080),
-Image5 = ocibuild:workdir(Image4, <<"/app">>),
-Image6 = ocibuild:label(Image5, <<"org.opencontainers.image.version">>, <<"1.0.0">>),
+Image5 = ocibuild:workdir(Image4, ~"/app"),
+Image6 = ocibuild:label(Image5, ~"org.opencontainers.image.version", ~"1.0.0"),
+
+%% Set user (default is 65534/nobody when using CLI, explicit here for API)
+Image7 = ocibuild:user(Image6, ~"65534"),
 
 %% Add manifest annotation (displayed on registry UI)
-Image7 = ocibuild:annotation(Image6, <<"org.opencontainers.image.description">>, <<"My app">>),
+Image8 = ocibuild:annotation(Image7, ~"org.opencontainers.image.description", ~"My app"),
 
 %% Export
-ok = ocibuild:save(Image7, "myapp.tar.gz").
+ok = ocibuild:save(Image8, "myapp.tar.gz").
 
 %% Load with: podman load < myapp.tar.gz
+```
+
+**Reproducible builds:** Set `SOURCE_DATE_EPOCH` before building for identical images:
+```bash
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
 ```
