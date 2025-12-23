@@ -103,17 +103,18 @@ User API (ocibuild.erl)
 
 Both `rebar3 ocibuild` and `mix ocibuild` support:
 
-| Option         | Short | Description                                      |
-|----------------|-------|--------------------------------------------------|
-| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                   |
-| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)    |
-| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`          |
-| `--desc`       | `-d`  | Image description (OCI manifest annotation)      |
-| `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64`|
-| `--base`       |       | Override base image                              |
-| `--release`    |       | Release name (if multiple configured)            |
-| `--cmd`        | `-c`  | Release start command (Elixir only)              |
-| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)        |
+| Option         | Short | Description                                       |
+|----------------|-------|---------------------------------------------------|
+| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                    |
+| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
+| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
+| `--desc`       | `-d`  | Image description (OCI manifest annotation)       |
+| `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
+| `--base`       |       | Override base image                               |
+| `--release`    |       | Release name (if multiple configured)             |
+| `--cmd`        | `-c`  | Release start command (Elixir only)               |
+| `--uid`        |       | User ID to run as (default: 65534 for nobody)     |
+| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
 
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
 files to support the new functionality.

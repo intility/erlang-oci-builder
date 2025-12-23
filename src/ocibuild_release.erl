@@ -130,6 +130,9 @@ run(AdapterModule, AdapterState, Opts) ->
     %% Get optional platform configuration
     PlatformOpt = maps:get(platform, Config, undefined),
 
+    %% Get optional uid configuration (default applied in configure_release_image)
+    Uid = maps:get(uid, Config, undefined),
+
     maybe
         %% Validate tag exists
         true ?= Tag =/= undefined,
@@ -157,7 +160,8 @@ run(AdapterModule, AdapterState, Opts) ->
             labels => Labels,
             cmd => Cmd,
             description => Description,
-            auth => PullAuth
+            auth => PullAuth,
+            uid => Uid
         },
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
         %% Output the image(s) - this is where layer downloads happen for save
@@ -292,6 +296,7 @@ configure_release_image(Image0, Files, Opts) ->
     Labels = maps:get(labels, Opts, #{}),
     Cmd = maps:get(cmd, Opts, <<"foreground">>),
     Description = maps:get(description, Opts, undefined),
+    Uid = maps:get(uid, Opts, undefined),
 
     %% Add release layer
     Image1 = ocibuild:add_layer(Image0, Files),
@@ -313,8 +318,15 @@ configure_release_image(Image0, Files, Opts) ->
     %% Add labels
     Image6 = maps:fold(fun(K, V, Img) -> ocibuild:label(Img, K, V) end, Image5, Labels),
 
+    %% Set user (default to 65534 - nobody for non-root security)
+    Image7 = case Uid of
+        undefined -> ocibuild:user(Image6, <<"65534">>);
+        0 -> Image6;  % UID 0 = root, don't set User field (use base image default)
+        _ -> ocibuild:user(Image6, integer_to_binary(Uid))
+    end,
+
     %% Add description annotation
-    add_description(Image6, Description).
+    add_description(Image7, Description).
 
 %% @private Output the image (save and optionally push)
 %% Handles both single image and list of images (multi-platform)

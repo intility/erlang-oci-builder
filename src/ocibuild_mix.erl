@@ -78,7 +78,8 @@ get_config(State) when is_map(State) ->
         tag => undefined,
         output => undefined,
         push => undefined,
-        chunk_size => undefined
+        chunk_size => undefined,
+        uid => undefined
     },
     maps:merge(Defaults, State).
 

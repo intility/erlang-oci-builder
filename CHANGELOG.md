@@ -4,6 +4,9 @@
 
 ### Features
 
+- **Non-root by default**: Containers now run as UID 65534 (nobody) by default for improved security
+  - Add `--uid` CLI option to override (e.g., `--uid 1000` for custom user, `--uid 0` for root)
+  - Configurable via `uid` option in rebar.config or mix.exs
 - **Reproducible builds**: Support for `SOURCE_DATE_EPOCH` environment variable to produce identical images from identical inputs
   - All timestamps (config `created`, history entries, TAR file mtimes) use the epoch value when set
   - Files are sorted alphabetically for deterministic layer ordering

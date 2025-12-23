@@ -92,7 +92,9 @@ error(Format, Args) ->
     %% Registry to push to (e.g., <<"ghcr.io/myorg">>)
     push => binary() | undefined,
     %% Chunk size for uploads in bytes
-    chunk_size => pos_integer() | undefined
+    chunk_size => pos_integer() | undefined,
+    %% User ID to run as (default: 65534 for nobody)
+    uid => non_neg_integer() | undefined
 }.
 
 -export_type([config/0]).

@@ -773,6 +773,42 @@ config_architecture_test() ->
     ?assertEqual(~"linux", maps:get(~"os", Config)).
 
 %%%===================================================================
+%%% User/UID tests (non-root by default feature)
+%%%===================================================================
+
+%% Test that ocibuild:user/2 sets the User field correctly
+user_set_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:user(Image0, ~"65534"),
+    Config = maps:get(config, Image1),
+    InnerConfig = maps:get(~"config", Config),
+    ?assertEqual(~"65534", maps:get(~"User", InnerConfig)).
+
+%% Test custom UID
+user_custom_uid_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:user(Image0, ~"1000"),
+    Config = maps:get(config, Image1),
+    InnerConfig = maps:get(~"config", Config),
+    ?assertEqual(~"1000", maps:get(~"User", InnerConfig)).
+
+%% Test that user can be a username string
+user_string_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:user(Image0, ~"nobody"),
+    Config = maps:get(config, Image1),
+    InnerConfig = maps:get(~"config", Config),
+    ?assertEqual(~"nobody", maps:get(~"User", InnerConfig)).
+
+%% Test user:group format
+user_with_group_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:user(Image0, ~"1000:1000"),
+    Config = maps:get(config, Image1),
+    InnerConfig = maps:get(~"config", Config),
+    ?assertEqual(~"1000:1000", maps:get(~"User", InnerConfig)).
+
+%%%===================================================================
 %%% Layout tests - additional coverage
 %%%===================================================================
 
