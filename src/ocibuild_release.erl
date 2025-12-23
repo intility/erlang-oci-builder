@@ -319,13 +319,10 @@ configure_release_image(Image0, Files, Opts) ->
     Image6 = maps:fold(fun(K, V, Img) -> ocibuild:label(Img, K, V) end, Image5, Labels),
 
     %% Set user (default to 65534 - nobody for non-root security)
-    %% UID 0 means "use base image default" (typically root), not "explicitly set to root"
     Image7 = case Uid of
         undefined ->
             ocibuild:user(Image6, <<"65534">>);
-        0 ->
-            Image6;  % Use base image default user (typically root)
-        U when is_integer(U), U > 0 ->
+        U when is_integer(U), U >= 0 ->
             ocibuild:user(Image6, integer_to_binary(U));
         U when is_integer(U), U < 0 ->
             erlang:error({invalid_uid, U, "UID must be non-negative"});
