@@ -70,6 +70,8 @@ export OCIBUILD_PULL_PASSWORD="pass"
 
 %% Adapter callbacks (ocibuild_adapter behaviour)
 -export([get_config/1, find_release/2, info/2, console/2, error/2]).
+%% Optional adapter callback
+-export([get_app_version/1]).
 
 %% Exports for testing
 -ifdef(TEST).
@@ -108,7 +110,9 @@ init(State) ->
                     "Chunk size in MB for uploads (default: 5)"},
                 {platform, $P, "platform", string,
                     "Target platforms (e.g., linux/amd64,linux/arm64)"},
-                {uid, undefined, "uid", integer, "User ID to run as (default: 65534)"}
+                {uid, undefined, "uid", integer, "User ID to run as (default: 65534)"},
+                {no_vcs_annotations, undefined, "no-vcs-annotations", boolean,
+                    "Disable automatic VCS annotations"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -207,7 +211,9 @@ get_config(State) ->
         push => get_push_registry(Args),
         chunk_size => get_chunk_size(Args),
         platform => get_platform(Args, Config),
-        uid => get_uid(Args, Config)
+        uid => get_uid(Args, Config),
+        app_version => get_app_version(State),
+        vcs_annotations => get_vcs_annotations(Args, Config)
     }.
 
 %% @private Get description from args or config
@@ -280,6 +286,49 @@ get_uid(Args, Config) ->
         undefined -> proplists:get_value(uid, Config);
         Uid -> Uid
     end.
+
+%% @private Get VCS annotations setting: CLI flag takes precedence, then config, then default true
+get_vcs_annotations(Args, Config) ->
+    case proplists:get_value(no_vcs_annotations, Args) of
+        true ->
+            %% CLI --no-vcs-annotations disables VCS annotations
+            false;
+        _ ->
+            %% Check config, default to true
+            proplists:get_value(vcs_annotations, Config, true)
+    end.
+
+-doc """
+Get application version from rebar state.
+
+Extracts the version from the first release in the relx configuration.
+This is used for the `org.opencontainers.image.version` annotation.
+""".
+-spec get_app_version(rebar_state:t()) -> binary() | undefined.
+get_app_version(State) ->
+    RelxConfig = rebar_state:get(State, relx, []),
+    get_version_from_relx(RelxConfig).
+
+%% @private Extract version from relx config
+get_version_from_relx([]) ->
+    undefined;
+get_version_from_relx([{release, {_Name, Vsn}, _Apps} | _]) ->
+    normalize_version(Vsn);
+get_version_from_relx([{release, {_Name, Vsn}, _Apps, _Opts} | _]) ->
+    normalize_version(Vsn);
+get_version_from_relx([_ | Rest]) ->
+    get_version_from_relx(Rest).
+
+%% @private Normalize version to binary
+normalize_version(Vsn) when is_list(Vsn) ->
+    list_to_binary(Vsn);
+normalize_version(Vsn) when is_binary(Vsn) ->
+    Vsn;
+normalize_version(Vsn) when is_atom(Vsn) ->
+    %% Handle atoms like semver or git
+    atom_to_binary(Vsn);
+normalize_version(_) ->
+    undefined.
 
 -doc "Find release directory from rebar state.".
 -spec find_release(rebar_state:t(), map()) ->

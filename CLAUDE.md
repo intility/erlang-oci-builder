@@ -47,7 +47,9 @@ src/
 ├── ocibuild_layout.erl   → Export to directory or tarball (including multi-platform)
 ├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry, multi-platform)
 ├── ocibuild_cache.erl    → Layer caching for base images
-└── ocibuild_time.erl     → Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
+├── ocibuild_time.erl     → Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
+├── ocibuild_vcs.erl      → VCS behaviour and detection for auto-annotations
+└── ocibuild_vcs_git.erl  → Git adapter (source URL, revision from git or CI env vars)
 
 lib/
 ├── mix/tasks/ocibuild.ex → Mix task (mix ocibuild command)
@@ -96,7 +98,7 @@ User API (ocibuild.erl)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH).
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH), automatic VCS annotations (Git, GitHub Actions, GitLab CI, Azure DevOps).
 
 **Not Implemented:** Resumable uploads, zstd compression.
 
@@ -116,6 +118,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--cmd`        | `-c`  | Release start command (Elixir only)               |
 | `--uid`        |       | User ID to run as (default: 65534 for nobody)     |
 | `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
+| `--no-vcs-annotations` | | Disable automatic VCS annotations            |
 
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
 files to support the new functionality.
@@ -131,7 +134,8 @@ files to support the new functionality.
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
     {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}},
-    {description, "My application"}
+    {description, "My application"},
+    {vcs_annotations, true}    % Automatic VCS annotations (default: true)
 ]}.
 ```
 
@@ -144,7 +148,8 @@ def project do
       base_image: "debian:stable-slim",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080],
-      description: "My application"
+      description: "My application",
+      vcs_annotations: true    # Automatic VCS annotations (default: true)
     ]
   ]
 end

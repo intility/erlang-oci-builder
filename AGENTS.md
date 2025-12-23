@@ -24,7 +24,7 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | **Reproducible builds**       | ✅                 | ✅          | ✅                | ✅              |
 | **Smart dependency layering** | ⏳ Planned (P3)    | N/A         | ✅                | ✅              |
 | **Non-root by default**       | ✅                 | ✅          | ❌                | ✅              |
-| **Auto OCI annotations**      | ⏳ Planned (P5)    | ✅          | ✅                | ✅              |
+| **Auto OCI annotations**      | ✅                 | ✅          | ✅                | ✅              |
 | **SBOM generation**           | ⏳ Planned (P6)    | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
 | **Image signing**             | ⏳ Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
 | Zstd compression              | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
@@ -77,6 +77,8 @@ src/
 ├── ocibuild_registry.erl  # Registry client (pull/push via HTTP with retry logic)
 ├── ocibuild_cache.erl     # Layer caching for base images
 ├── ocibuild_time.erl      # Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
+├── ocibuild_vcs.erl       # VCS behaviour and detection for auto-annotations
+├── ocibuild_vcs_git.erl   # Git adapter (source URL, revision from git or CI env vars)
 └── ocibuild.app.src       # OTP application spec
 
 lib/
@@ -513,6 +515,8 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 | ocibuild_release  | ✅ Tested                      |
 | ocibuild_index    | ✅ Tested                      |
 | ocibuild_time     | ✅ Tested                      |
+| ocibuild_vcs      | ✅ Tested                      |
+| ocibuild_vcs_git  | ✅ Tested                      |
 | ocibuild (API)    | ✅ Tested                      |
 
 ---
@@ -838,26 +842,36 @@ rebar3 ocibuild --push ghcr.io/myorg --uid 0
 - Setting `User: 65534` signals "designed for non-root" which is the expected pattern
 - BEAM releases are UID-agnostic and work with any assigned UID
 
-### Priority 5: Auto-Populate OCI Annotations
+### Priority 5: Auto-Populate OCI Annotations ✅ IMPLEMENTED
+
+**Status:** Fully implemented and tested
 
 **Impact:** Image provenance, debugging
 
 .NET and ko add useful labels automatically from build context. The OCI spec defines standard annotation keys that are VCS-agnostic.
 
-**Annotations to populate:**
+**Annotations populated:**
 
 | Annotation | Source |
 |------------|--------|
-| `org.opencontainers.image.source` | VCS remote URL |
-| `org.opencontainers.image.revision` | VCS revision (commit SHA, SVN rev, etc.) |
+| `org.opencontainers.image.source` | VCS remote URL (Git) |
+| `org.opencontainers.image.revision` | VCS revision (commit SHA) |
 | `org.opencontainers.image.version` | App version from build system |
-| `org.opencontainers.image.created` | Build timestamp |
+| `org.opencontainers.image.created` | Build timestamp (respects SOURCE_DATE_EPOCH) |
 | `org.opencontainers.image.base.name` | Base image reference |
 | `org.opencontainers.image.base.digest` | Base image digest |
 
-**Approach:** VCS behaviour with pluggable adapters
+**Implementation Summary:**
 
-The OCI spec is VCS-agnostic. Use a behaviour to support Git now, others later:
+| Component | File | Description |
+|-----------|------|-------------|
+| VCS behaviour | `ocibuild_vcs.erl` | `detect/1`, `get_annotations/2` |
+| Git adapter | `ocibuild_vcs_git.erl` | CI env vars + git commands via ports |
+| Adapter callback | `ocibuild_adapter.erl` | Optional `get_app_version/1` callback |
+| Auto-annotations | `ocibuild_release.erl` | `build_auto_annotations/3` |
+| CLI option | `ocibuild_rebar3.erl`, `lib/mix/tasks/ocibuild.ex` | `--no-vcs-annotations` flag |
+
+**VCS Behaviour:**
 
 ```erlang
 %% ocibuild_vcs.erl
@@ -866,35 +880,41 @@ The OCI spec is VCS-agnostic. Use a behaviour to support Git now, others later:
 -callback get_revision(Path :: file:filename()) -> {ok, binary()} | {error, term()}.
 ```
 
-**Implementation Steps:**
+**Git Adapter Features:**
 
-1. **New behaviour** (`ocibuild_vcs.erl`):
-   ```erlang
-   -spec detect(Path) -> {ok, module()} | not_found.
-   detect(Path) ->
-       Adapters = [ocibuild_vcs_git], % Add more later
-       find_vcs(Path, Adapters).
-   ```
+- Walks up directory tree to find `.git/`
+- CI environment variable support (checked first for reliability):
+  - GitHub Actions: `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`
+  - GitLab CI: `CI_PROJECT_URL`, `CI_COMMIT_SHA`
+  - Azure DevOps: `BUILD_REPOSITORY_URI`, `BUILD_SOURCEVERSION`
+- Falls back to git commands via Erlang ports (not `os:cmd`)
+- SSH to HTTPS URL conversion for public visibility
 
-2. **Git adapter** (`ocibuild_vcs_git.erl`):
-   - `detect/1` - check for `.git/` directory
-   - `get_source_url/1` - try CI env vars first (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`), fall back to `git remote get-url origin`
-   - `get_revision/1` - try CI env vars first (`GITHUB_SHA`, `CI_COMMIT_SHA`), fall back to `git rev-parse HEAD`
+**CLI Usage:**
 
-3. **Version from adapter** (`ocibuild_adapter.erl`):
-   ```erlang
-   -callback get_app_version(State :: term()) -> {ok, binary()} | {error, term()}.
-   ```
-   - rebar3: parse `.app.src` for `{vsn, "1.2.3"}`
-   - Mix: get from `Mix.Project.config()[:version]`
+```bash
+# Annotations enabled by default
+rebar3 ocibuild --push ghcr.io/myorg
 
-4. **Base image info** (`ocibuild.erl`):
-   - Already have base image reference and digest after `from/1`
-   - Store in image record, add as annotations
+# Disable VCS annotations
+rebar3 ocibuild --push ghcr.io/myorg --no-vcs-annotations
+```
 
-5. **CLI opt-out**:
-   - `--no-vcs-annotations` flag to disable VCS detection
-   - Config option: `{vcs_annotations, false}` / `vcs_annotations: false`
+**Configuration:**
+
+```erlang
+%% rebar.config
+{ocibuild, [
+    {vcs_annotations, false}  % Disable VCS annotations
+]}.
+```
+
+```elixir
+# mix.exs
+ocibuild: [
+  vcs_annotations: false  # Disable VCS annotations
+]
+```
 
 **Future VCS adapters:**
 - `ocibuild_vcs_hg.erl` - Mercurial

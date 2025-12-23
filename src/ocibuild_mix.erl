@@ -53,6 +53,8 @@ The state passed to this adapter is a map containing:
 
 %% Behaviour callbacks
 -export([get_config/1, find_release/2, info/2, console/2, error/2]).
+%% Optional adapter callback
+-export([get_app_version/1]).
 
 %%%===================================================================
 %%% Behaviour Implementation
@@ -67,19 +69,21 @@ Elixir Mix task, so we just return it with defaults applied.
 -spec get_config(map()) -> ocibuild_adapter:config().
 get_config(State) when is_map(State) ->
     Defaults = #{
-        base_image => <<"debian:stable-slim">>,
-        workdir => <<"/app">>,
+        base_image => ~"debian:stable-slim",
+        workdir => ~"/app",
         env => #{},
         expose => [],
         labels => #{},
         % Elixir uses "start" instead of "foreground"
-        cmd => <<"start">>,
+        cmd => ~"start",
         description => undefined,
         tag => undefined,
         output => undefined,
         push => undefined,
         chunk_size => undefined,
-        uid => undefined
+        uid => undefined,
+        app_version => undefined,
+        vcs_annotations => true
     },
     maps:merge(Defaults, State).
 
@@ -103,6 +107,21 @@ find_release(State, _Opts) ->
             {ok, Name, Path};
         {Name, Path} when is_list(Name) ->
             {ok, list_to_binary(Name), Path}
+    end.
+
+-doc """
+Get application version from Mix state.
+
+The version is passed from Elixir via the state map as `app_version`.
+This is used for the `org.opencontainers.image.version` annotation.
+""".
+-spec get_app_version(map()) -> binary() | undefined.
+get_app_version(State) when is_map(State) ->
+    case maps:get(app_version, State, undefined) of
+        undefined -> undefined;
+        Version when is_binary(Version) -> Version;
+        Version when is_list(Version) -> list_to_binary(Version);
+        _ -> undefined
     end.
 
 -doc """

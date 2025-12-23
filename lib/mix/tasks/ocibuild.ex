@@ -23,6 +23,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
     * `--chunk-size` - Chunk size in MB for uploads (default: 5)
+    * `--no-vcs-annotations` - Disable automatic VCS annotations
 
   ## Configuration
 
@@ -75,7 +76,8 @@ defmodule Mix.Tasks.Ocibuild do
           desc: :string,
           chunk_size: :integer,
           platform: :string,
-          uid: :integer
+          uid: :integer,
+          no_vcs_annotations: :boolean
         ]
       )
 
@@ -150,7 +152,9 @@ defmodule Mix.Tasks.Ocibuild do
       push: get_opt_binary(opts, :push),
       chunk_size: get_chunk_size(opts),
       platform: get_platform(opts, ocibuild_config),
-      uid: opts[:uid] || Keyword.get(ocibuild_config, :uid)
+      uid: opts[:uid] || Keyword.get(ocibuild_config, :uid),
+      app_version: get_app_version(config),
+      vcs_annotations: get_vcs_annotations(opts, ocibuild_config)
     }
   end
 
@@ -173,6 +177,27 @@ defmodule Mix.Tasks.Ocibuild do
       nil -> nil
       platform when is_binary(platform) -> platform
       platform when is_list(platform) -> to_binary(platform)
+    end
+  end
+
+  # Get application version from Mix project config
+  defp get_app_version(config) do
+    case config[:version] do
+      nil -> :undefined
+      version -> to_binary(version)
+    end
+  end
+
+  # Get VCS annotations setting: CLI flag takes precedence, then config, then default true
+  defp get_vcs_annotations(opts, ocibuild_config) do
+    cond do
+      # CLI --no-vcs-annotations disables VCS annotations
+      opts[:no_vcs_annotations] -> false
+      # Check config for explicit setting
+      Keyword.has_key?(ocibuild_config, :vcs_annotations) ->
+        Keyword.get(ocibuild_config, :vcs_annotations)
+      # Default to enabled
+      true -> true
     end
   end
 

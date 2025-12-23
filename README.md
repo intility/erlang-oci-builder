@@ -30,7 +30,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
 | **Smart dependency layering** | ⏳     | Separate layers for ERTS, dependencies, and application code.          |
 | **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.         |
-| **Auto OCI annotations**      | ⏳     | Automatically populate source URL and revision from VCS.               |
+| **Auto OCI annotations**      | ✅     | Automatically populate source URL, revision, version from VCS.         |
 | **SBOM generation**           | ⏳     | Generate SPDX Software Bill of Materials embedded in images.           |
 | **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                |
 
@@ -216,7 +216,8 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
         ~"org.opencontainers.image.source" => ~"https://github.com/..."
     }},
     {uid, 65534},                          % User ID (optional, defaults to 65534)
-    {description, "My application"}        % OCI manifest annotation
+    {description, "My application"},       % OCI manifest annotation
+    {vcs_annotations, true}                % Auto VCS annotations (default: true)
 ]}.
 ```
 
@@ -239,7 +240,8 @@ def project do
         "org.opencontainers.image.source" => "https://github.com/..."
       },
       uid: 65534,                          # User ID (optional, defaults to 65534)
-      description: "My application"        # OCI manifest annotation
+      description: "My application",       # OCI manifest annotation
+      vcs_annotations: true                # Auto VCS annotations (default: true)
     ]
   ]
 end
@@ -271,6 +273,45 @@ Auth = #{username => list_to_binary(os:getenv("OCIBUILD_PUSH_USERNAME")),
 ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:latest", Auth).
 ocibuild:push(Image, ~"docker.io", ~"myuser/myapp:latest", Auth).
 ```
+
+## Automatic OCI Annotations
+
+`ocibuild` automatically adds standard OCI annotations to your images:
+
+| Annotation | Source | Description |
+|------------|--------|-------------|
+| `org.opencontainers.image.source` | Git remote URL | Repository URL (converted to HTTPS) |
+| `org.opencontainers.image.revision` | Git commit SHA | Current commit hash |
+| `org.opencontainers.image.version` | Release version | Application version from build system |
+| `org.opencontainers.image.created` | Build time | ISO 8601 timestamp |
+| `org.opencontainers.image.base.name` | Base image | Base image reference (e.g., `debian:stable-slim`) |
+| `org.opencontainers.image.base.digest` | Base manifest | SHA256 digest of base image manifest |
+
+### CI Environment Support
+
+In CI environments, VCS information is read from environment variables for reliability:
+
+- **GitHub Actions:** `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`
+- **GitLab CI:** `CI_PROJECT_URL`, `CI_COMMIT_SHA`
+- **Azure DevOps:** `BUILD_REPOSITORY_URI`, `BUILD_SOURCEVERSION`
+
+When not in CI, `ocibuild` falls back to `git` commands.
+
+### Disabling Automatic Annotations
+
+To disable automatic VCS annotations, use `--no-vcs-annotations` or set in config:
+
+```erlang
+%% rebar.config
+{ocibuild, [{vcs_annotations, false}]}.
+```
+
+```elixir
+# mix.exs
+ocibuild: [vcs_annotations: false]
+```
+
+The `created` timestamp respects `SOURCE_DATE_EPOCH` for reproducible builds.
 
 ## How It Works
 

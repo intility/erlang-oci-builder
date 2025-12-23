@@ -91,7 +91,9 @@ defmodule Ocibuild.MixRelease do
       output: nil,
       push: get_push(ocibuild_config),
       chunk_size: get_chunk_size(ocibuild_config),
-      platform: get_platform(ocibuild_config)
+      platform: get_platform(ocibuild_config),
+      app_version: to_binary(release.version),
+      vcs_annotations: Keyword.get(ocibuild_config, :vcs_annotations, true)
     }
   end
 
