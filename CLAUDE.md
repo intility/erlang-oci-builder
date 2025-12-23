@@ -113,7 +113,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--base`       |       | Override base image                               |
 | `--release`    |       | Release name (if multiple configured)             |
 | `--cmd`        | `-c`  | Release start command (Elixir only)               |
-| `--uid`        |       | User ID to run as (default: 65534 for nobody)     |
+| `--uid`        |       | User ID to run as (default: 65534); use 0 for base image default |
 | `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
 
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
