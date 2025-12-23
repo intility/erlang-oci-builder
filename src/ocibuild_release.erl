@@ -557,6 +557,7 @@ Options:
 - `expose` - Ports to expose (default: `[]`)
 - `labels` - Image labels map (default: `#{}`)
 - `cmd` - Release start command (default: `<<"foreground">>`)
+- `uid` - User ID to run as (default: 65534 for nobody; use 0 for root)
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
 - `annotations` - Map of manifest annotations
@@ -680,7 +681,20 @@ do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labe
                 Annotations
             ),
 
-        {ok, Image7}
+        %% Set user (default to 65534 - nobody for non-root security)
+        Uid = maps:get(uid, Opts, undefined),
+        Image8 = case Uid of
+            undefined ->
+                ocibuild:user(Image7, <<"65534">>);
+            U when is_integer(U), U >= 0 ->
+                ocibuild:user(Image7, integer_to_binary(U));
+            U when is_integer(U), U < 0 ->
+                erlang:error({invalid_uid, U, "UID must be non-negative"});
+            Other ->
+                erlang:error({invalid_uid_type, Other, "UID must be an integer"})
+        end,
+
+        {ok, Image8}
     catch
         throw:Reason ->
             {error, Reason};

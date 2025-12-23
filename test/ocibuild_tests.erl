@@ -809,6 +809,60 @@ user_with_group_test() ->
     ?assertEqual(~"1000:1000", maps:get(~"User", InnerConfig)).
 
 %%%===================================================================
+%%% UID Integration tests (build_image with uid option)
+%%%===================================================================
+
+%% Helper to extract User field from built image
+get_user_from_image(Image) ->
+    Config = maps:get(config, Image),
+    InnerConfig = maps:get(~"config", Config),
+    maps:get(~"User", InnerConfig, undefined).
+
+%% Test that build_image defaults to UID 65534 (nobody) when uid not specified
+build_image_uid_default_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app"
+    }),
+    ?assertEqual(~"65534", get_user_from_image(Image)).
+
+%% Test that build_image with uid=0 sets User to "0" (root)
+build_image_uid_zero_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        uid => 0
+    }),
+    ?assertEqual(~"0", get_user_from_image(Image)).
+
+%% Test that build_image with positive uid sets User correctly
+build_image_uid_positive_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        uid => 1000
+    }),
+    ?assertEqual(~"1000", get_user_from_image(Image)).
+
+%% Test that build_image with negative uid raises error
+build_image_uid_negative_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    Result = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        uid => -1
+    }),
+    ?assertMatch({error, {{invalid_uid, -1, _}, _}}, Result).
+
+%% Test that build_image with non-integer uid raises error
+build_image_uid_invalid_type_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    Result = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        uid => "1000"
+    }),
+    ?assertMatch({error, {{invalid_uid_type, "1000", _}, _}}, Result).
+
+%%%===================================================================
 %%% Layout tests - additional coverage
 %%%===================================================================
 
