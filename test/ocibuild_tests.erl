@@ -977,12 +977,16 @@ save_tarball_base_layer_failure_test() ->
 
 time_get_timestamp_default_test() ->
     %% Test that get_timestamp returns current time when no env var is set
-    os:unsetenv("SOURCE_DATE_EPOCH"),
-    Before = erlang:system_time(second),
-    Timestamp = ocibuild_time:get_timestamp(),
-    After = erlang:system_time(second),
-    ?assert(Timestamp >= Before),
-    ?assert(Timestamp =< After).
+    try
+        os:unsetenv("SOURCE_DATE_EPOCH"),
+        Before = erlang:system_time(second),
+        Timestamp = ocibuild_time:get_timestamp(),
+        After = erlang:system_time(second),
+        ?assert(Timestamp >= Before),
+        ?assert(Timestamp =< After)
+    after
+        os:unsetenv("SOURCE_DATE_EPOCH")
+    end.
 
 time_get_timestamp_from_env_test() ->
     %% Test that get_timestamp reads SOURCE_DATE_EPOCH
@@ -1092,6 +1096,16 @@ layer_mtime_option_test() ->
     %% Digests should match
     ?assertEqual(maps:get(digest, Layer1), maps:get(digest, Layer2)),
     ?assertEqual(maps:get(diff_id, Layer1), maps:get(diff_id, Layer2)).
+
+gzip_mtime_is_zero_test() ->
+    %% Verify that Erlang's zlib:gzip sets MTIME to 0 in gzip header (RFC 1952)
+    %% This is important for reproducible builds - if MTIME contained current time,
+    %% compressed layers would have different digests on each build.
+    Data = ~"test data for gzip",
+    Gzipped = zlib:gzip(Data),
+    %% Gzip header format: ID1 ID2 CM FLG MTIME(4 bytes little-endian) XFL OS
+    <<16#1f, 16#8b, _CM, _FLG, MTime:32/little, _XFL, _OS, _Rest/binary>> = Gzipped,
+    ?assertEqual(0, MTime).
 
 layer_reproducible_test() ->
     %% Test that layers are reproducible with SOURCE_DATE_EPOCH

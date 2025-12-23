@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2025-12-23
+
+### Features
+
+- **Reproducible builds**: Support for `SOURCE_DATE_EPOCH` environment variable to produce identical images from identical inputs
+  - All timestamps (config `created`, history entries, TAR file mtimes) use the epoch value when set
+  - Files are sorted alphabetically for deterministic layer ordering
+  - Enables build verification, security audits, and registry deduplication
+- **New `ocibuild_time` module**: Centralized timestamp utilities with `get_timestamp/0`, `get_iso8601/0`, and `unix_to_iso8601/1`
+- **New `ocibuild_tar:create/2`**: TAR creation now accepts options map with `mtime` parameter for reproducible archives
+- **New `ocibuild_layer:create/2`**: Layer creation now accepts options map for passing mtime through to TAR
+
 ## 0.2.0 - 2025-12-22
 
 ### Features
