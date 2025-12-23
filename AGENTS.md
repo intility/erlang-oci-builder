@@ -22,14 +22,14 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | Build system integration      | ✅ (rebar3/Mix)    | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
 | **Multi-platform images**     | ✅                 | ✅          | ✅                | ✅              |
 | **Reproducible builds**       | ✅                 | ✅          | ✅                | ✅              |
-| **Smart dependency layering** | 🔜 Planned (P3)    | N/A         | ✅                | ✅              |
-| **Non-root by default**       | 🔜 Planned (P4)    | ✅          | ❌                | ✅              |
-| **Auto OCI annotations**      | 🔜 Planned (P5)    | ✅          | ✅                | ✅              |
-| **SBOM generation**           | 🔜 Planned (P6)    | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
-| **Image signing**             | 🔜 Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
+| **Smart dependency layering** | ⏳ Planned (P3)    | N/A         | ✅                | ✅              |
+| **Non-root by default**       | ⏳ Planned (P4)    | ✅          | ❌                | ✅              |
+| **Auto OCI annotations**      | ⏳ Planned (P5)    | ✅          | ✅                | ✅              |
+| **SBOM generation**           | ⏳ Planned (P6)    | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
+| **Image signing**             | ⏳ Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
 | Zstd compression              | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
 
-Legend: ✅ Implemented | 🔜 Planned (P# = Priority) | ❌ Not implemented
+Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented
 
 **References:**
 - [ko: Easy Go Containers](https://ko.build/)
