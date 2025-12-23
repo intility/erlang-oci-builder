@@ -862,6 +862,15 @@ build_image_uid_invalid_type_test() ->
     }),
     ?assertMatch({error, {{invalid_uid_type, "1000", _}, _}}, Result).
 
+%% Test that build_image with nil uid (Elixir compatibility) defaults to 65534
+build_image_uid_nil_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    {ok, Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        uid => nil
+    }),
+    ?assertEqual(~"65534", get_user_from_image(Image)).
+
 %%%===================================================================
 %%% Layout tests - additional coverage
 %%%===================================================================

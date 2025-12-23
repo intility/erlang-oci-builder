@@ -353,8 +353,11 @@ configure_release_image(Image0, Files, Opts) ->
     end,
 
     %% Set user; when no UID is configured, default to 65534 (nobody) for non-root security
+    %% Note: Elixir passes `nil` instead of `undefined` when not configured
     Image8 = case Uid of
         undefined ->
+            ocibuild:user(Image7, <<"65534">>);
+        nil ->
             ocibuild:user(Image7, <<"65534">>);
         U when is_integer(U), U >= 0 ->
             ocibuild:user(Image7, integer_to_binary(U));
