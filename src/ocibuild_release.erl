@@ -333,20 +333,26 @@ configure_release_image(Image0, Files, Opts) ->
     Image5 = lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
 
     %% Add labels
-    Image6 = maps:fold(
-        fun(K, V, Img) -> ocibuild:label(Img, to_binary(K), to_binary(V)) end,
-        Image5,
-        Labels
-    ),
+    Image6 = case map_size(Labels) of
+        0 -> Image5;
+        _ -> maps:fold(
+            fun(K, V, Img) -> ocibuild:label(Img, to_binary(K), to_binary(V)) end,
+            Image5,
+            Labels
+        )
+    end,
 
     %% Add annotations
-    Image7 = maps:fold(
-        fun(K, V, Img) -> ocibuild:annotation(Img, to_binary(K), to_binary(V)) end,
-        Image6,
-        Annotations
-    ),
+    Image7 = case map_size(Annotations) of
+        0 -> Image6;
+        _ -> maps:fold(
+            fun(K, V, Img) -> ocibuild:annotation(Img, to_binary(K), to_binary(V)) end,
+            Image6,
+            Annotations
+        )
+    end,
 
-    %% Set user (default to 65534 - nobody for non-root security)
+    %% Set user; when no UID is configured, default to 65534 (nobody) for non-root security
     Image8 = case Uid of
         undefined ->
             ocibuild:user(Image7, <<"65534">>);

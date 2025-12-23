@@ -830,7 +830,7 @@ rebar3 ocibuild --push ghcr.io/myorg --uid 0
 **Behavior:**
 - **Default (undefined):** UID 65534 (nobody) - containers run as non-root
 - **Custom UID:** `--uid 1000` - run as specified user
-- **Root (UID 0):** `--uid 0` - explicitly run as root (no User field set)
+- **Root (UID 0):** `--uid 0` - explicitly run as root (`User` set to `0`)
 
 **Kubernetes/OpenShift Compatibility:**
 - Works with any Kubernetes distribution including OpenShift

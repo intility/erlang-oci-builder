@@ -215,7 +215,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
     {labels, #{                            % Image labels
         ~"org.opencontainers.image.source" => ~"https://github.com/..."
     }},
-    {uid, 65534},                          % User ID (default: 65534 for non-root)
+    {uid, 65534},                          % User ID (optional, defaults to 65534)
     {description, "My application"}        % OCI manifest annotation
 ]}.
 ```
@@ -238,7 +238,7 @@ def project do
       labels: %{                           # Image labels
         "org.opencontainers.image.source" => "https://github.com/..."
       },
-      uid: 65534,                          # User ID (default: 65534 for non-root)
+      uid: 65534,                          # User ID (optional, defaults to 65534)
       description: "My application"        # OCI manifest annotation
     ]
   ]
