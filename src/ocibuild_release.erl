@@ -256,7 +256,10 @@ build_platform_images(~"scratch", Files, Platforms, Opts) ->
             ImgWithPlatform = BaseImg#{platform => Platform},
             %% Build auto-annotations for this image
             AutoAnnotations = build_auto_annotations(ImgWithPlatform, ReleasePath, Opts),
-            OptsWithAnnotations = Opts#{annotations => AutoAnnotations},
+            %% Merge with user annotations (user takes precedence)
+            UserAnnotations = maps:get(annotations, Opts, #{}),
+            MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
+            OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
             add_description(
                 configure_release_image(ImgWithPlatform, Files, OptsWithAnnotations), Description
             )
@@ -277,7 +280,10 @@ build_platform_images(BaseImage, Files, Platforms, Opts) ->
                 begin
                     %% Build auto-annotations for this image (includes base image info)
                     AutoAnnotations = build_auto_annotations(BaseImg, ReleasePath, Opts),
-                    OptsWithAnnotations = Opts#{annotations => AutoAnnotations},
+                    %% Merge with user annotations (user takes precedence)
+                    UserAnnotations = maps:get(annotations, Opts, #{}),
+                    MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
+                    OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
                     add_description(
                         configure_release_image(BaseImg, Files, OptsWithAnnotations), Description
                     )
@@ -288,7 +294,10 @@ build_platform_images(BaseImage, Files, Platforms, Opts) ->
         {ok, SingleImage} ->
             %% Fallback: got single image, configure it
             AutoAnnotations = build_auto_annotations(SingleImage, ReleasePath, Opts),
-            OptsWithAnnotations = Opts#{annotations => AutoAnnotations},
+            %% Merge with user annotations (user takes precedence)
+            UserAnnotations = maps:get(annotations, Opts, #{}),
+            MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
+            OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
             Image = add_description(
                 configure_release_image(SingleImage, Files, OptsWithAnnotations), Description
             ),

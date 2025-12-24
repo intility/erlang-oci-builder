@@ -171,8 +171,6 @@ find_git_root(Path) ->
     end.
 
 -spec find_git_root_recursive(file:filename()) -> {ok, file:filename()} | not_found.
-find_git_root_recursive("/") ->
-    not_found;
 find_git_root_recursive(Path) ->
     GitDir = filename:join(Path, ".git"),
     case filelib:is_dir(GitDir) orelse filelib:is_regular(GitDir) of
@@ -180,6 +178,7 @@ find_git_root_recursive(Path) ->
             {ok, Path};
         false ->
             Parent = filename:dirname(Path),
+            %% Platform-independent root check: at root, dirname returns same path
             case Parent =:= Path of
                 true -> not_found;
                 false -> find_git_root_recursive(Parent)

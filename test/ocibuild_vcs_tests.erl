@@ -162,6 +162,73 @@ url_sanitization_query_params_test() ->
     end.
 
 %%%===================================================================
+%%% SSH to HTTPS URL Conversion Tests
+%%%===================================================================
+
+%% Test git@host:path SSH format is converted to HTTPS
+ssh_git_at_format_test() ->
+    OldUrl = os:getenv("CI_PROJECT_URL"),
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+
+    %% Set SSH URL in git@host:path format
+    os:putenv("CI_PROJECT_URL", "git@github.com:myorg/myrepo.git"),
+
+    try
+        {ok, Url} = ocibuild_vcs_git:get_source_url("/nonexistent/path"),
+        ?assertEqual(~"https://github.com/myorg/myrepo", Url)
+    after
+        restore_env("CI_PROJECT_URL", OldUrl),
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo)
+    end.
+
+%% Test ssh://git@host/path SSH format is converted to HTTPS
+ssh_protocol_format_test() ->
+    OldUrl = os:getenv("CI_PROJECT_URL"),
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+
+    %% Set SSH URL in ssh:// format
+    os:putenv("CI_PROJECT_URL", "ssh://git@github.com/myorg/myrepo.git"),
+
+    try
+        {ok, Url} = ocibuild_vcs_git:get_source_url("/nonexistent/path"),
+        ?assertEqual(~"https://github.com/myorg/myrepo", Url)
+    after
+        restore_env("CI_PROJECT_URL", OldUrl),
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo)
+    end.
+
+%% Test ssh://git@host:port/path SSH format with port is converted to HTTPS
+ssh_protocol_with_port_test() ->
+    OldUrl = os:getenv("CI_PROJECT_URL"),
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+
+    %% Set SSH URL with custom port
+    os:putenv("CI_PROJECT_URL", "ssh://git@github.com:22/myorg/myrepo.git"),
+
+    try
+        {ok, Url} = ocibuild_vcs_git:get_source_url("/nonexistent/path"),
+        ?assertEqual(~"https://github.com/myorg/myrepo", Url)
+    after
+        restore_env("CI_PROJECT_URL", OldUrl),
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo)
+    end.
+
+%%%===================================================================
 %%% VCS Detection Tests
 %%%===================================================================
 
