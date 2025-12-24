@@ -112,6 +112,56 @@ azure_devops_env_vars_test() ->
     end.
 
 %%%===================================================================
+%%% URL Sanitization Tests (security)
+%%%===================================================================
+
+%% Test that credentials are stripped from HTTPS URLs via CI env vars
+url_sanitization_credentials_test() ->
+    %% Save and clear env
+    OldUrl = os:getenv("CI_PROJECT_URL"),
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+
+    %% Clear GitHub vars so GitLab CI var is used
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+
+    %% Set a URL with embedded credentials (security risk)
+    os:putenv("CI_PROJECT_URL", "https://token:secret@gitlab.com/group/project.git"),
+
+    try
+        {ok, Url} = ocibuild_vcs_git:get_source_url("/nonexistent/path"),
+        %% Credentials should be stripped, .git extension removed
+        ?assertEqual(~"https://gitlab.com/group/project", Url)
+    after
+        restore_env("CI_PROJECT_URL", OldUrl),
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo)
+    end.
+
+%% Test that query params and fragments are also stripped
+url_sanitization_query_params_test() ->
+    OldUrl = os:getenv("CI_PROJECT_URL"),
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+
+    %% Set a URL with query params (could leak tokens)
+    os:putenv("CI_PROJECT_URL", "https://github.com/org/repo?token=secret#ref"),
+
+    try
+        {ok, Url} = ocibuild_vcs_git:get_source_url("/nonexistent/path"),
+        %% Query params and fragment should be stripped
+        ?assertEqual(~"https://github.com/org/repo", Url)
+    after
+        restore_env("CI_PROJECT_URL", OldUrl),
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo)
+    end.
+
+%%%===================================================================
 %%% VCS Detection Tests
 %%%===================================================================
 

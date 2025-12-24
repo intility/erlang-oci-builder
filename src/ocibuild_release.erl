@@ -358,7 +358,8 @@ build_auto_annotations(Image, ReleasePath, Config) ->
 add_vcs_annotations(ReleasePath, Annotations) ->
     case ocibuild_vcs:detect(ReleasePath) of
         {ok, VcsModule} ->
-            ocibuild_vcs:get_annotations(VcsModule, ReleasePath);
+            VcsAnnotations = ocibuild_vcs:get_annotations(VcsModule, ReleasePath),
+            maps:merge(Annotations, VcsAnnotations);
         not_found ->
             Annotations
     end.

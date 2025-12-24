@@ -62,7 +62,8 @@ get_source_url(Path) ->
     %% Try CI environment variables first
     case get_source_url_from_env() of
         {ok, Url} ->
-            {ok, Url};
+            %% Sanitize CI URL (remove credentials, .git extension)
+            {ok, convert_ssh_to_https(Url)};
         not_found ->
             %% Fall back to git command
             maybe
@@ -268,8 +269,8 @@ convert_ssh_to_https_str("ssh://git@" ++ Rest) ->
             "ssh://git@" ++ Rest
     end;
 convert_ssh_to_https_str(Url) ->
-    %% Already HTTPS or other format, strip .git extension if present
-    strip_git_extension(Url).
+    %% Already HTTPS or other format, sanitize and strip .git extension
+    sanitize_url(strip_git_extension(Url)).
 
 %% @private Strip .git extension from URL
 -spec strip_git_extension(string()) -> string().
@@ -287,4 +288,23 @@ strip_port(HostMaybePort) ->
     case string:split(HostMaybePort, ":") of
         [Host, _Port] -> Host;
         [Host] -> Host
+    end.
+
+%% @private Sanitize URL by removing credentials and sensitive components
+%% Prevents credential leakage via image annotations for URLs like:
+%% https://token:pass@example.com/org/repo.git
+-spec sanitize_url(string()) -> string().
+sanitize_url(Url) ->
+    try uri_string:parse(Url) of
+        #{scheme := Scheme} = UriMap when Scheme =:= "http"; Scheme =:= "https" ->
+            %% Remove userinfo (credentials), query params, and fragments
+            CleanMap = maps:without([userinfo, query, fragment], UriMap),
+            uri_string:recompose(CleanMap);
+        _ ->
+            %% Non-HTTP(S) URL or no scheme, return as-is
+            Url
+    catch
+        _:_ ->
+            %% Parsing failed, return original
+            Url
     end.
