@@ -325,7 +325,7 @@ normalize_version(Vsn) when is_list(Vsn) ->
 normalize_version(Vsn) when is_binary(Vsn) ->
     Vsn;
 normalize_version(Vsn) when is_atom(Vsn) ->
-    %% Handle atoms like semver or git
+    %% Handle relx version atoms like 'semver' or 'git' (symbolic refs)
     atom_to_binary(Vsn);
 normalize_version(_) ->
     undefined.

@@ -265,7 +265,7 @@ auto_annotations_version_test() ->
     %% Create a minimal image for testing
     {ok, Image} = ocibuild:scratch(),
     Config = #{
-        % Disable VCS to avoid git dependency
+        %% Disable VCS annotations to avoid git dependency in tests
         vcs_annotations => false,
         app_version => ~"1.2.3"
     },
@@ -298,7 +298,7 @@ auto_annotations_timestamp_format_test() ->
     Created = maps:get(~"org.opencontainers.image.created", Annotations),
     %% Should be ISO 8601 format like "2024-01-01T12:00:00Z"
     ?assert(is_binary(Created)),
-    % Minimum ISO 8601 length
+    %% Minimum ISO 8601 length: YYYY-MM-DDTHH:MM:SSZ = 20 characters
     ?assert(byte_size(Created) >= 20),
     % Contains 'T' separator
     ?assert(binary:match(Created, ~"T") =/= nomatch).
