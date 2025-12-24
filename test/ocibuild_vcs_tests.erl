@@ -232,19 +232,56 @@ ssh_protocol_with_port_test() ->
 %%% VCS Detection Tests
 %%%===================================================================
 
-%% Test that detect returns not_found for a non-existent directory
+%% Test that detect returns not_found for a non-existent directory (without CI env vars)
 detect_nonexistent_test() ->
-    ?assertEqual(not_found, ocibuild_vcs:detect("/this/path/does/not/exist")).
+    %% Clear CI env vars that would cause detection to succeed
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+    OldGLUrl = os:getenv("CI_PROJECT_URL"),
+    OldAzureUri = os:getenv("BUILD_REPOSITORY_URI"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+    os:unsetenv("CI_PROJECT_URL"),
+    os:unsetenv("BUILD_REPOSITORY_URI"),
+
+    try
+        ?assertEqual(not_found, ocibuild_vcs:detect("/this/path/does/not/exist"))
+    after
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo),
+        restore_env("CI_PROJECT_URL", OldGLUrl),
+        restore_env("BUILD_REPOSITORY_URI", OldAzureUri)
+    end.
 
 %% Test that detection returns not_found for /tmp (unlikely to be a git repo)
 detect_tmp_test() ->
     %% /tmp is unlikely to have a .git directory
+    %% In CI, env vars may cause detection to succeed, which is also valid
     Result = ocibuild_vcs:detect("/tmp"),
     ?assert(Result =:= not_found orelse element(1, Result) =:= ok).
 
-%% Test git detection returns false for non-git directories
+%% Test git detection returns false for non-git directories (without CI env vars)
 git_detect_nonrepo_test() ->
-    ?assertEqual(false, ocibuild_vcs_git:detect("/tmp")).
+    %% Clear CI env vars that would cause detection to succeed
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+    OldGLUrl = os:getenv("CI_PROJECT_URL"),
+    OldAzureUri = os:getenv("BUILD_REPOSITORY_URI"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+    os:unsetenv("CI_PROJECT_URL"),
+    os:unsetenv("BUILD_REPOSITORY_URI"),
+
+    try
+        ?assertEqual(false, ocibuild_vcs_git:detect("/tmp"))
+    after
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo),
+        restore_env("CI_PROJECT_URL", OldGLUrl),
+        restore_env("BUILD_REPOSITORY_URI", OldAzureUri)
+    end.
 
 %% Test git detection returns true when CI env vars are present (even without .git)
 git_detect_with_ci_env_vars_test() ->
