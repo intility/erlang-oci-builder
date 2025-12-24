@@ -173,7 +173,8 @@ find_git_root(Path) ->
 -spec find_git_root_recursive(file:filename()) -> {ok, file:filename()} | not_found.
 find_git_root_recursive(Path) ->
     GitDir = filename:join(Path, ".git"),
-    case filelib:is_dir(GitDir) orelse filelib:is_regular(GitDir) of
+    %% .git can be a directory, a regular file (worktrees), or a symlink
+    case filelib:is_dir(GitDir) orelse filelib:is_regular(GitDir) orelse filelib:is_link(GitDir) of
         true ->
             {ok, Path};
         false ->
@@ -238,7 +239,8 @@ receive_port_output(Port, Acc) ->
 %% @private Convert SSH URLs to HTTPS for public visibility
 -spec convert_ssh_to_https(binary()) -> binary().
 convert_ssh_to_https(Url) ->
-    UrlStr = binary_to_list(string:trim(Url, trailing)),
+    %% Trim both leading and trailing whitespace
+    UrlStr = binary_to_list(string:trim(Url)),
     ConvertedStr = convert_ssh_to_https_str(UrlStr),
     list_to_binary(ConvertedStr).
 
@@ -262,8 +264,15 @@ convert_ssh_to_https_str("ssh://git@" ++ Rest) ->
             "https://" ++ Host ++ "/" ++ Path;
         [HostMaybePort | PathParts] ->
             Host = strip_port(HostMaybePort),
-            Path = strip_git_extension(string:join(PathParts, "/")),
-            "https://" ++ Host ++ "/" ++ Path;
+            %% Filter empty path components to avoid malformed URLs
+            case [P || P <- PathParts, P =/= ""] of
+                [] ->
+                    %% No usable path, fall back to original
+                    "ssh://git@" ++ Rest;
+                FilteredParts ->
+                    Path = strip_git_extension(string:join(FilteredParts, "/")),
+                    "https://" ++ Host ++ "/" ++ Path
+            end;
         _ ->
             "ssh://git@" ++ Rest
     end;
