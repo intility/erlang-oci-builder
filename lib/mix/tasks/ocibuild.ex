@@ -23,6 +23,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
     * `--chunk-size` - Chunk size in MB for uploads (default: 5)
+    * `--uid` - User ID to run as (default: 65534 for nobody)
     * `--no-vcs-annotations` - Disable automatic VCS annotations
 
   ## Configuration

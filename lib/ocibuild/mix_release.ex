@@ -42,9 +42,13 @@ defmodule Ocibuild.MixRelease do
     * `:env` - Environment variables map
     * `:expose` - Ports to expose
     * `:labels` - Image labels map
+    * `:cmd` - Release start command (default: "start")
     * `:description` - Image description (OCI manifest annotation)
+    * `:chunk_size` - Chunk size in MB for uploads (default: 5)
     * `:platform` - Target platforms. Single string like "linux/amd64" or
       comma-separated string like "linux/amd64,linux/arm64" for multi-platform builds.
+    * `:uid` - User ID to run as (default: 65534 for nobody)
+    * `:vcs_annotations` - Enable automatic VCS annotations (default: true)
   """
 
   @doc """
@@ -93,6 +97,7 @@ defmodule Ocibuild.MixRelease do
       chunk_size: get_chunk_size(ocibuild_config),
       platform: get_platform(ocibuild_config),
       app_version: to_binary(release.version),
+      uid: Keyword.get(ocibuild_config, :uid),
       vcs_annotations: Keyword.get(ocibuild_config, :vcs_annotations, true)
     }
   end

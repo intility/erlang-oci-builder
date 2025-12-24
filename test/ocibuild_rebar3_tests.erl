@@ -320,6 +320,40 @@ build_image_with_custom_cmd_test() ->
     ).
 
 %%%===================================================================
+%%% chunk_size validation tests
+%%%===================================================================
+
+%% Test chunk_size adapter constants
+chunk_size_constants_test() ->
+    %% Verify the adapter exposes the expected chunk size constants
+    ?assertEqual(1, ocibuild_adapter:min_chunk_size_mb()),
+    ?assertEqual(100, ocibuild_adapter:max_chunk_size_mb()),
+    ?assertEqual(5, ocibuild_adapter:default_chunk_size_mb()),
+    %% Verify byte conversions
+    ?assertEqual(1 * 1024 * 1024, ocibuild_adapter:min_chunk_size()),
+    ?assertEqual(100 * 1024 * 1024, ocibuild_adapter:max_chunk_size()),
+    ?assertEqual(5 * 1024 * 1024, ocibuild_adapter:default_chunk_size()).
+
+%% Test that valid chunk_size values are accepted (integration test via build_image)
+chunk_size_valid_in_config_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    %% 10MB is within valid range (1-100)
+    {ok, _Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        chunk_size => 10 * 1024 * 1024
+    }),
+    ok.
+
+%% Test that undefined chunk_size uses default
+chunk_size_undefined_uses_default_test() ->
+    Files = [{~"/app/bin/app", ~"#!/bin/sh\necho hello", 8#755}],
+    {ok, _Image} = ocibuild_release:build_image(~"scratch", Files, #{
+        release_name => ~"app",
+        chunk_size => undefined
+    }),
+    ok.
+
+%%%===================================================================
 %%% Auth partial tests
 %%%===================================================================
 

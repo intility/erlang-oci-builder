@@ -119,6 +119,137 @@ defmodule OcibuildMixTest do
 
       assert :maps.get("org.opencontainers.image.version", image_labels) == "1.0.0"
     end
+
+    test "builds image with custom uid" do
+      files = [{"/app/test", "data", 0o644}]
+
+      {:ok, image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          uid: 1000
+        })
+
+      config = :maps.get(:config, image)
+      inner_config = :maps.get("config", config)
+      assert :maps.get("User", inner_config) == "1000"
+    end
+
+    test "builds image with uid 0 (root)" do
+      files = [{"/app/test", "data", 0o644}]
+
+      {:ok, image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          uid: 0
+        })
+
+      config = :maps.get(:config, image)
+      inner_config = :maps.get("config", config)
+      assert :maps.get("User", inner_config) == "0"
+    end
+
+    test "builds image with default uid (65534) when not specified" do
+      files = [{"/app/test", "data", 0o644}]
+
+      {:ok, image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app"
+        })
+
+      config = :maps.get(:config, image)
+      inner_config = :maps.get("config", config)
+      assert :maps.get("User", inner_config) == "65534"
+    end
+
+    test "builds image with nil uid defaults to 65534 (Elixir compatibility)" do
+      files = [{"/app/test", "data", 0o644}]
+
+      {:ok, image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          uid: nil
+        })
+
+      config = :maps.get(:config, image)
+      inner_config = :maps.get("config", config)
+      assert :maps.get("User", inner_config) == "65534"
+    end
+
+    test "builds image with custom cmd" do
+      files = [
+        {"/app/bin/myapp", "#!/bin/sh\necho hello", 0o755}
+      ]
+
+      {:ok, image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          cmd: "daemon"
+        })
+
+      config = :maps.get(:config, image)
+      inner_config = :maps.get("config", config)
+      # Entrypoint should include the custom cmd
+      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp", "daemon"]
+    end
+
+    test "builds image with start cmd (Elixir default)" do
+      files = [
+        {"/app/bin/myapp", "#!/bin/sh\necho hello", 0o755}
+      ]
+
+      {:ok, image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          cmd: "start"
+        })
+
+      config = :maps.get(:config, image)
+      inner_config = :maps.get("config", config)
+      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp", "start"]
+    end
+
+    test "builds image with valid chunk_size" do
+      files = [{"/app/test", "data", 0o644}]
+
+      # 10MB is within valid range (1-100)
+      {:ok, _image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          chunk_size: 10 * 1024 * 1024
+        })
+    end
+
+    test "builds image with undefined chunk_size uses default" do
+      files = [{"/app/test", "data", 0o644}]
+
+      {:ok, _image} =
+        :ocibuild_release.build_image("scratch", files, %{
+          release_name: ~c"myapp",
+          workdir: "/app",
+          chunk_size: nil
+        })
+    end
+  end
+
+  describe "chunk_size constants" do
+    test "adapter exposes chunk_size constants" do
+      assert :ocibuild_adapter.min_chunk_size_mb() == 1
+      assert :ocibuild_adapter.max_chunk_size_mb() == 100
+      assert :ocibuild_adapter.default_chunk_size_mb() == 5
+    end
+
+    test "adapter exposes chunk_size in bytes" do
+      assert :ocibuild_adapter.min_chunk_size() == 1 * 1024 * 1024
+      assert :ocibuild_adapter.max_chunk_size() == 100 * 1024 * 1024
+      assert :ocibuild_adapter.default_chunk_size() == 5 * 1024 * 1024
+    end
   end
 
   describe "push authentication" do
