@@ -27,8 +27,8 @@ Create a layer from a list of files.
 Files are specified as `{Path, Content, Mode}` tuples:
 ```
 Layer = ocibuild_layer:create([
-    {<<"/app/myapp">>, AppBinary, 8#755},
-    {<<"/app/config.json">>, ConfigJson, 8#644}
+    {~"/app/myapp", AppBinary, 8#755},
+    {~"/app/config.json", ConfigJson, 8#644}
 ]).
 ```
 

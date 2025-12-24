@@ -9,18 +9,18 @@ container images without requiring Docker or any container runtime.
 
 ```
 %% Build from a base image
-{ok, Image0} = ocibuild:from(<<"docker.io/library/alpine:3.19">>),
+{ok, Image0} = ocibuild:from(~"docker.io/library/alpine:3.19"),
 
 %% Add your application
-Image1 = ocibuild:copy(Image0, [{<<"myapp">>, AppBinary}], <<"/app">>),
+Image1 = ocibuild:copy(Image0, [{~"myapp", AppBinary}], ~"/app"),
 
 %% Configure the container
-Image2 = ocibuild:entrypoint(Image1, [<<"/app/myapp">>, <<"start">>]),
-Image3 = ocibuild:env(Image2, #{<<"MIX_ENV">> => <<"prod">>}),
+Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"start"]),
+Image3 = ocibuild:env(Image2, #{~"MIX_ENV" => ~"prod"}),
 
 %% Push to a registry (GHCR uses username + token as password)
-Auth = #{username => <<"github-username">>, password => <<"github-token">>},
-ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth).
+Auth = #{username => ~"github-username", password => ~"github-token"},
+ok = ocibuild:push(Image3, ~"ghcr.io", ~"myorg/myapp:v1", Auth).
 ```
 
 # Memory Requirements
@@ -88,10 +88,10 @@ Start building an image from a base image reference.
 The reference can be either a binary string or a tuple:
 ```
 %% As a string (will be parsed)
-{ok, Image} = ocibuild:from(<<"docker.io/library/alpine:3.19">>).
+{ok, Image} = ocibuild:from(~"docker.io/library/alpine:3.19").
 
 %% As a tuple
-{ok, Image} = ocibuild:from({<<"ghcr.io">>, <<"hexpm/elixir">>, <<"1.16">>}).
+{ok, Image} = ocibuild:from({~"ghcr.io", ~"hexpm/elixir", ~"1.16"}).
 ```
 """.
 -spec from(binary() | base_ref()) -> {ok, image()} | {error, term()}.
@@ -139,7 +139,7 @@ Start building an image from a base image with authentication and options.
 Options:
 - `progress`: A callback function `fun(ProgressInfo) -> ok` that receives progress updates.
   ProgressInfo is a map with keys: `phase` (manifest|config|layer), `bytes_received`, `total_bytes`.
-- `platform`: A specific platform to pull (e.g., `#{os => <<"linux">>, architecture => <<"amd64">>}`).
+- `platform`: A specific platform to pull (e.g., `#{os => ~"linux", architecture => ~"amd64"}`).
 - `platforms`: A list of platforms for multi-platform builds. Returns a list of images.
 
 Example with progress callback:
@@ -147,14 +147,14 @@ Example with progress callback:
 Progress = fun(#{phase := Phase, bytes_received := Recv, total_bytes := Total}) ->
     io:format("~p: ~p/~p bytes~n", [Phase, Recv, Total])
 end,
-{ok, Image} = ocibuild:from(<<"alpine:3.19">>, #{}, #{progress => Progress}).
+{ok, Image} = ocibuild:from(~"alpine:3.19", #{}, #{progress => Progress}).
 ```
 
 Example with multiple platforms (returns list of images):
 ```
-{ok, Images} = ocibuild:from(<<"alpine:3.19">>, #{}, #{
-    platforms => [#{os => <<"linux">>, architecture => <<"amd64">>},
-                  #{os => <<"linux">>, architecture => <<"arm64">>}]
+{ok, Images} = ocibuild:from(~"alpine:3.19", #{}, #{
+    platforms => [#{os => ~"linux", architecture => ~"amd64"},
+                  #{os => ~"linux", architecture => ~"arm64"}]
 }).
 ```
 """.
@@ -235,8 +235,8 @@ Use this when you want complete control over the image contents,
 typically for statically compiled binaries.
 ```
 {ok, Image} = ocibuild:scratch(),
-Image1 = ocibuild:copy(Image, [{<<"myapp">>, Binary}], <<"/">>),
-Image2 = ocibuild:entrypoint(Image1, [<<"/myapp">>]).
+Image1 = ocibuild:copy(Image, [{~"myapp", Binary}], ~"/"),
+Image2 = ocibuild:entrypoint(Image1, [~"/myapp"]).
 ```
 """.
 -spec scratch() -> {ok, image()}.
@@ -264,8 +264,8 @@ Add a layer to the image from a list of files.
 Files are specified as `{Path, Content, Mode}` tuples:
 ```
 Image1 = ocibuild:add_layer(Image, [
-    {<<"/app/myapp">>, AppBinary, 8#755},
-    {<<"/app/config.json">>, ConfigJson, 8#644}
+    {~"/app/myapp", AppBinary, 8#755},
+    {~"/app/config.json", ConfigJson, 8#644}
 ]).
 ```
 """.
@@ -285,9 +285,9 @@ This is a convenience function that creates a layer with files
 placed under the specified destination path:
 ```
 Image1 = ocibuild:copy(Image, [
-    {<<"myapp">>, AppBinary},
-    {<<"config.json">>, ConfigJson}
-], <<"/app">>).
+    {~"myapp", AppBinary},
+    {~"config.json", ConfigJson}
+], ~"/app").
 ```
 Files will be created as `/app/myapp` and `/app/config.json`.
 """.
@@ -312,7 +312,7 @@ copy(Image, Files, Dest) ->
 Set the entrypoint for the container.
 The entrypoint is the command that will be executed when the container starts.
 ```
-Image1 = ocibuild:entrypoint(Image, [<<"/app/myapp">>, <<"start">>]).
+Image1 = ocibuild:entrypoint(Image, [~"/app/myapp", ~"start"]).
 ```
 """.
 -spec entrypoint(image(), [binary()]) -> image().
@@ -323,7 +323,7 @@ entrypoint(#{config := Config} = Image, Entrypoint) when is_list(Entrypoint) ->
 Set the default command arguments.
 CMD provides default arguments to the entrypoint:
 ```
-Image1 = ocibuild:cmd(Image, [<<"--port">>, <<"8080">>]).
+Image1 = ocibuild:cmd(Image, [~"--port", ~"8080"]).
 ```
 """.
 -spec cmd(image(), [binary()]) -> image().
@@ -335,8 +335,8 @@ Set environment variables.
 Environment variables are specified as a map:
 ```
 Image1 = ocibuild:env(Image, #{
-    <<"MIX_ENV">> => <<"prod">>,
-    <<"PORT">> => <<"4000">>
+    ~"MIX_ENV" => ~"prod",
+    ~"PORT" => ~"4000"
 }).
 ```
 """.
@@ -401,7 +401,7 @@ user(#{config := Config} = Image, User) when is_binary(User) ->
 Push the image to a container registry.
 
 ```
-ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>).
+ok = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1.0.0").
 ```
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary()) -> ok | {error, term()}.
@@ -413,8 +413,8 @@ Push the image to a container registry with authentication.
 
 ```
 %% GHCR uses username + token as password
-Auth = #{username => <<"github-user">>, password => <<"github-token">>},
-ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>, Auth).
+Auth = #{username => ~"github-user", password => ~"github-token"},
+ok = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1.0.0", Auth).
 ```
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth()) ->
@@ -432,9 +432,9 @@ Options:
 
 Example:
 ```
-Auth = #{username => <<"user">>, password => <<"pass">>},
+Auth = #{username => ~"user", password => ~"pass"},
 Opts = #{chunk_size => 10 * 1024 * 1024},  % 10MB chunks
-ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth, Opts).
+ok = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1", Auth, Opts).
 ```
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth(), map()) ->
@@ -454,15 +454,15 @@ Each image in the list must have a `platform` field set.
 Example:
 ```
 %% Build for multiple platforms
-{ok, Images} = ocibuild:from(<<"alpine:3.19">>, #{}, #{
-    platforms => [#{os => <<"linux">>, architecture => <<"amd64">>},
-                  #{os => <<"linux">>, architecture => <<"arm64">>}]
+{ok, Images} = ocibuild:from(~"alpine:3.19", #{}, #{
+    platforms => [#{os => ~"linux", architecture => ~"amd64"},
+                  #{os => ~"linux", architecture => ~"arm64"}]
 }),
 %% Add layers to each image
-Images2 = [ocibuild:copy(I, Files, <<"/app">>) || I <- Images],
+Images2 = [ocibuild:copy(I, Files, ~"/app") || I <- Images],
 %% Push as multi-platform image
-Auth = #{username => <<"user">>, password => <<"pass">>},
-ok = ocibuild:push_multi(Images2, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth).
+Auth = #{username => ~"user", password => ~"pass"},
+ok = ocibuild:push_multi(Images2, ~"ghcr.io", ~"myorg/myapp:v1", Auth).
 ```
 """.
 -spec push_multi([image()], Registry :: binary(), RepoTag :: binary(), auth()) ->
@@ -483,7 +483,7 @@ Save the image as a tarball.
 The resulting tarball can be loaded with `docker load` or `podman load`:
 ```
 ok = ocibuild:save(Image, "myimage.tar.gz").
-ok = ocibuild:save(Image, "myimage.tar.gz", #{tag => <<"myapp:1.0">>}).
+ok = ocibuild:save(Image, "myimage.tar.gz", #{tag => ~"myapp:1.0"}).
 ```
 
 Options:
@@ -527,13 +527,13 @@ Accepts formats like:
 - "linux/arm64/v8" (with variant)
 
 ```
-{ok, #{os := <<"linux">>, architecture := <<"amd64">>}} =
-    ocibuild:parse_platform(<<"linux/amd64">>).
+{ok, #{os := ~"linux", architecture := ~"amd64"}} =
+    ocibuild:parse_platform(~"linux/amd64").
 ```
 """.
 -spec parse_platform(binary()) -> {ok, platform()} | {error, term()}.
 parse_platform(PlatformStr) when is_binary(PlatformStr) ->
-    case binary:split(PlatformStr, <<"/">>, [global]) of
+    case binary:split(PlatformStr, ~"/", [global]) of
         [Os, Arch] when byte_size(Os) > 0, byte_size(Arch) > 0 ->
             {ok, #{os => Os, architecture => Arch}};
         [Os, Arch, Variant] when byte_size(Os) > 0, byte_size(Arch) > 0, byte_size(Variant) > 0 ->
@@ -548,14 +548,14 @@ parse_platform(PlatformStr) when is_list(PlatformStr) ->
 Parse a comma-separated list of platforms.
 
 ```
-{ok, [#{os := <<"linux">>, architecture := <<"amd64">>},
-      #{os := <<"linux">>, architecture := <<"arm64">>}]} =
-    ocibuild:parse_platforms(<<"linux/amd64,linux/arm64">>).
+{ok, [#{os := ~"linux", architecture := ~"amd64"},
+      #{os := ~"linux", architecture := ~"arm64"}]} =
+    ocibuild:parse_platforms(~"linux/amd64,linux/arm64").
 ```
 """.
 -spec parse_platforms(binary()) -> {ok, [platform()]} | {error, term()}.
 parse_platforms(PlatformsStr) when is_binary(PlatformsStr) ->
-    Parts = binary:split(PlatformsStr, <<",">>, [global, trim_all]),
+    Parts = binary:split(PlatformsStr, ~",", [global, trim_all]),
     parse_platforms_list(Parts, []);
 parse_platforms(PlatformsStr) when is_list(PlatformsStr) ->
     parse_platforms(list_to_binary(PlatformsStr)).
@@ -578,7 +578,7 @@ parse_platforms_list([P | Rest], Acc) ->
 -spec parse_image_ref(binary()) -> {ok, base_ref()} | {error, invalid_ref}.
 parse_image_ref(Ref) ->
     %% Parse references like:
-    %% - "alpine:3.19" -> {<<"docker.io">>, <<"library/alpine">>, <<"3.19">>}
+    %% - "alpine:3.19" -> {~"docker.io", ~"library/alpine", ~"3.19"}
     %% - "docker.io/library/alpine:3.19"
     %% - "ghcr.io/myorg/myapp:v1"
     %% - "myregistry.com:5000/myapp:latest"

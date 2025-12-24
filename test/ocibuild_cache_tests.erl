@@ -58,7 +58,7 @@ cache_dir_without_env_test_() ->
 
 put_get_test() ->
     %% Create test data
-    Data = <<"hello world this is test data for caching">>,
+    Data = ~"hello world this is test data for caching",
     Digest = ocibuild_digest:sha256(Data),
 
     %% Put and get
@@ -67,12 +67,12 @@ put_get_test() ->
 
 get_not_found_test() ->
     %% Try to get a blob that doesn't exist
-    FakeDigest = ocibuild_digest:sha256(<<"nonexistent">>),
+    FakeDigest = ocibuild_digest:sha256(~"nonexistent"),
     ?assertEqual({error, not_found}, ocibuild_cache:get(FakeDigest)).
 
 get_corrupted_test() ->
     %% Create test data
-    Data = <<"original data">>,
+    Data = ~"original data",
     Digest = ocibuild_digest:sha256(Data),
 
     %% Put the data
@@ -82,7 +82,7 @@ get_corrupted_test() ->
     CacheDir = ocibuild_cache:cache_dir(),
     Encoded = ocibuild_digest:encoded(Digest),
     Path = filename:join([CacheDir, "blobs", "sha256", binary_to_list(Encoded)]),
-    ok = file:write_file(Path, <<"corrupted data">>),
+    ok = file:write_file(Path, ~"corrupted data"),
 
     %% Get should detect corruption and return error
     ?assertEqual({error, corrupted}, ocibuild_cache:get(Digest)),
@@ -92,7 +92,7 @@ get_corrupted_test() ->
 
 put_overwrites_test() ->
     %% This tests that putting the same digest twice doesn't error
-    Data = <<"some data">>,
+    Data = ~"some data",
     Digest = ocibuild_digest:sha256(Data),
 
     ?assertEqual(ok, ocibuild_cache:put(Digest, Data)),
@@ -101,8 +101,8 @@ put_overwrites_test() ->
 
 clear_test() ->
     %% Put some data
-    Data1 = <<"data one">>,
-    Data2 = <<"data two">>,
+    Data1 = ~"data one",
+    Data2 = ~"data two",
     Digest1 = ocibuild_digest:sha256(Data1),
     Digest2 = ocibuild_digest:sha256(Data2),
 
@@ -154,7 +154,7 @@ find_rebar_project_root_test() ->
         SubDir = filename:join([TempDir, "src", "subdir"]),
         %% ensure_dir creates parent dirs but not the final component
         ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
-        ok = file:write_file(RebarFile, <<"{deps, []}.">>),
+        ok = file:write_file(RebarFile, ~"{deps, []}."),
 
         %% Find project root from subdir
         ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir))
@@ -169,7 +169,7 @@ find_mix_project_root_test() ->
         MixFile = filename:join(TempDir, "mix.exs"),
         SubDir = filename:join([TempDir, "lib", "myapp"]),
         ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
-        ok = file:write_file(MixFile, <<"defmodule Mix do end">>),
+        ok = file:write_file(MixFile, ~"defmodule Mix do end"),
 
         %% Find project root from subdir
         ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir))

@@ -24,11 +24,11 @@ is provided by `ocibuild_release`.
 
 get_config(State) ->
     %% Extract and normalize config from your build system
-    #{base_image => <<"debian:stable-slim">>, ...}.
+    #{base_image => ~"debian:stable-slim", ...}.
 
 find_release(State, Opts) ->
     %% Find the release directory
-    {ok, <<"myapp">>, "/path/to/release"}.
+    {ok, ~"myapp", "/path/to/release"}.
 
 info(Format, Args) ->
     %% Log info message
@@ -71,7 +71,7 @@ error(Format, Args) ->
 %%%===================================================================
 
 -type config() :: #{
-    %% Base image to use (e.g., <<"debian:stable-slim">>)
+    %% Base image to use (e.g., ~"debian:stable-slim")
     base_image => binary(),
     %% Working directory in container (default: /app)
     workdir => binary(),
@@ -81,15 +81,15 @@ error(Format, Args) ->
     expose => [non_neg_integer()],
     %% Labels to add to image config
     labels => #{binary() => binary()},
-    %% Release start command (e.g., <<"foreground">> for Erlang, <<"start">> for Elixir)
+    %% Release start command (e.g., ~"foreground" for Erlang, ~"start" for Elixir)
     cmd => binary(),
     %% Image description (OCI annotation)
     description => binary() | undefined,
-    %% Image tag (e.g., <<"myapp:1.0.0">>)
+    %% Image tag (e.g., ~"myapp:1.0.0")
     tag => binary() | undefined,
     %% Output tarball path
     output => binary() | undefined,
-    %% Registry to push to (e.g., <<"ghcr.io/myorg">>)
+    %% Registry to push to (e.g., ~"ghcr.io/myorg")
     push => binary() | undefined,
     %% Chunk size for uploads in bytes
     chunk_size => pos_integer() | undefined,

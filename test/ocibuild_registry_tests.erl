@@ -129,7 +129,7 @@ pull_manifest_generic_test() ->
 %%%===================================================================
 
 pull_blob_test() ->
-    BlobData = <<"binary blob data here">>,
+    BlobData = ~"binary blob data here",
     BlobDigest = ocibuild_digest:sha256(BlobData),
     BlobUrl = "https://registry.example.io/v2/myorg/myapp/blobs/" ++ binary_to_list(BlobDigest),
 
@@ -148,8 +148,8 @@ pull_blob_test() ->
 
 %% Test that tampered content is rejected (security fix for digest verification)
 pull_blob_digest_mismatch_test() ->
-    OriginalData = <<"original content">>,
-    TamperedData = <<"tampered content">>,
+    OriginalData = ~"original content",
+    TamperedData = ~"tampered content",
     OriginalDigest = ocibuild_digest:sha256(OriginalData),
     BlobUrl = "https://registry.example.io/v2/myorg/myapp/blobs/" ++ binary_to_list(OriginalDigest),
 

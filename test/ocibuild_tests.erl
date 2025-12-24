@@ -997,7 +997,7 @@ cleanup_layout_meck(_) ->
 
 save_tarball_base_image_test() ->
     %% Mock pull_blob to return compressed layer data
-    LayerData = zlib:gzip(<<"layer content">>),
+    LayerData = zlib:gzip(~"layer content"),
     meck:expect(
         ocibuild_registry,
         pull_blob,

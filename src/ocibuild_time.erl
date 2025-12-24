@@ -59,10 +59,10 @@ Convert Unix timestamp to ISO8601 format.
 Example:
 ```
 ocibuild_time:unix_to_iso8601(0).
-%% => <<"1970-01-01T00:00:00Z">>
+%% => ~"1970-01-01T00:00:00Z"
 
 ocibuild_time:unix_to_iso8601(1700000000).
-%% => <<"2023-11-14T22:13:20Z">>
+%% => ~"2023-11-14T22:13:20Z"
 ```
 """.
 -spec unix_to_iso8601(non_neg_integer()) -> binary().

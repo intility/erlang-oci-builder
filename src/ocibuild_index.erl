@@ -52,8 +52,8 @@ Each descriptor is a tuple of `{Platform, ManifestDigest, ManifestSize}`.
 
 ```
 Index = ocibuild_index:create([
-    {#{os => <<"linux">>, architecture => <<"amd64">>}, <<"sha256:abc...">>, 1234},
-    {#{os => <<"linux">>, architecture => <<"arm64">>}, <<"sha256:def...">>, 1235}
+    {#{os => ~"linux", architecture => ~"amd64"}, ~"sha256:abc...", 1234},
+    {#{os => ~"linux", architecture => ~"arm64"}, ~"sha256:def...", 1235}
 ]).
 ```
 """.
@@ -138,7 +138,7 @@ If the platform specifies a variant, that is also matched.
 
 ```
 {ok, Descriptor} = ocibuild_index:select_manifest(Index,
-    #{os => <<"linux">>, architecture => <<"arm64">>}).
+    #{os => ~"linux", architecture => ~"arm64"}).
 ```
 """.
 -spec select_manifest(index(), platform()) -> {ok, manifest_descriptor()} | {error, not_found}.
@@ -244,8 +244,8 @@ that must also match.
 Example:
 ```
 true = ocibuild_index:matches_platform(
-    #{os => <<"linux">>, architecture => <<"amd64">>},
-    #{os => <<"linux">>, architecture => <<"amd64">>}
+    #{os => ~"linux", architecture => ~"amd64"},
+    #{os => ~"linux", architecture => ~"amd64"}
 ).
 ```
 """.

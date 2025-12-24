@@ -9,7 +9,7 @@ content-addressable blobs.
 
 -export([sha256/1, sha256_hex/1, from_hex/1, to_hex/1, algorithm/1, encoded/1]).
 
-%% <<"sha256:abc123...">>
+%% ~"sha256:abc123..."
 -type digest() :: binary().
 
 -export_type([digest/0]).
@@ -19,8 +19,8 @@ Calculate SHA256 digest of data in OCI format.
 
 Returns the digest in the standard OCI format: `sha256:<hex>`.
 ```
-<<"sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824">> =
-    ocibuild_digest:sha256(<<"hello">>).
+~"sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" =
+    ocibuild_digest:sha256(~"hello").
 ```
 """.
 -spec sha256(binary()) -> digest().
@@ -51,7 +51,7 @@ to_hex(Bin) when is_binary(Bin) ->
 Extract the algorithm from a digest.
 
 ```
-<<"sha256">> = ocibuild_digest:algorithm(<<"sha256:abc123">>).
+~"sha256" = ocibuild_digest:algorithm(~"sha256:abc123").
 ```
 """.
 -spec algorithm(digest()) -> binary().
@@ -67,7 +67,7 @@ algorithm(Digest) when is_binary(Digest) ->
 Extract the encoded hash from a digest.
 
 ```
-<<"abc123">> = ocibuild_digest:encoded(<<"sha256:abc123">>).
+~"abc123" = ocibuild_digest:encoded(~"sha256:abc123").
 ```
 """.
 -spec encoded(digest()) -> binary().

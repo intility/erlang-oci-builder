@@ -67,8 +67,8 @@ Directories are created automatically for paths containing `/`.
 
 ```
 TarData = ocibuild_tar:create([
-    {<<"/app/myapp">>, AppBinary, 8#755},
-    {<<"/app/config.json">>, ConfigJson, 8#644}
+    {~"/app/myapp", AppBinary, 8#755},
+    {~"/app/config.json", ConfigJson, 8#644}
 ]).
 ```
 """.

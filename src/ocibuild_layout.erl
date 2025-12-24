@@ -122,11 +122,11 @@ Save image as an OCI layout tarball.
 Creates a tar.gz file that can be loaded with `podman load` or other OCI-compliant tools.
 ```
 ok = ocibuild_layout:save_tarball(Image, "./myimage.tar.gz").
-ok = ocibuild_layout:save_tarball(Image, "./myimage.tar.gz", #{tag => <<"myapp:1.0">>}).
+ok = ocibuild_layout:save_tarball(Image, "./myimage.tar.gz", #{tag => ~"myapp:1.0"}).
 ```
 
 Options:
-- `tag`: Image tag annotation (e.g., `<<"myapp:1.0">>`)
+- `tag`: Image tag annotation (e.g., `~"myapp:1.0"`)
 
 Note: OCI layout works with podman, skopeo, crane, buildah, and other OCI tools.
 """.

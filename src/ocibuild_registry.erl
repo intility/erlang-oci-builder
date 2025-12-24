@@ -768,7 +768,7 @@ get_auth_token(Registry, Repo, #{}) ->
 %% Single-component names like "alpine" need "library/" prefix
 -spec normalize_docker_hub_repo(binary()) -> binary().
 normalize_docker_hub_repo(Repo) ->
-    case binary:match(Repo, <<"/">>) of
+    case binary:match(Repo, ~"/") of
         nomatch ->
             %% Official image - add library/ prefix
             <<"library/", Repo/binary>>;
@@ -906,7 +906,7 @@ get_www_authenticate([{Key, Value} | Rest]) ->
     end.
 
 %% Parse WWW-Authenticate header
-%% Returns {bearer, #{<<"realm">> => ..., <<"service">> => ...}} | basic | unknown
+%% Returns {bearer, #{~"realm" => ..., ~"service" => ...}} | basic | unknown
 -spec parse_www_authenticate(string()) ->
     {bearer, #{binary() := string()}} | basic | unknown.
 parse_www_authenticate(Header) ->
@@ -1279,7 +1279,7 @@ make_base_layer_label(Index, Total, Platform) ->
 get_platform_arch(#{~"architecture" := Arch}) -> Arch;
 get_platform_arch(#{architecture := Arch}) when is_binary(Arch) -> Arch;
 get_platform_arch(#{architecture := Arch}) when is_list(Arch) -> list_to_binary(Arch);
-get_platform_arch(_) -> <<"unknown">>.
+get_platform_arch(_) -> ~"unknown".
 
 %% Push config and return its digest and size
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->

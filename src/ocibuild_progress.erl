@@ -13,7 +13,7 @@ ocibuild_progress:start_manager(),
 
 %% In each worker process, register a progress bar
 Ref = ocibuild_progress:register_bar(#{
-    label => <<"Layer 1/2 (amd64)">>,
+    label => ~"Layer 1/2 (amd64)",
     total => 28400000
 }),
 
@@ -100,7 +100,7 @@ stop_manager() ->
 -spec register_bar(map()) -> reference().
 register_bar(Opts) ->
     Ref = make_ref(),
-    Label = maps:get(label, Opts, <<"Progress">>),
+    Label = maps:get(label, Opts, ~"Progress"),
     Total = maps:get(total, Opts, 0),
     case whereis(ocibuild_progress_manager) of
         undefined ->
@@ -157,7 +157,7 @@ The callback will register a bar on first call and update it on subsequent calls
 -spec make_callback(map()) -> fun((map()) -> ok).
 make_callback(Opts) ->
     %% Use process dictionary to track the ref for this callback
-    Label = maps:get(label, Opts, <<"Downloading">>),
+    Label = maps:get(label, Opts, ~"Downloading"),
     fun(Info) ->
         #{total_bytes := Total} = Info,
         Bytes = maps:get(bytes_received, Info, maps:get(bytes_sent, Info, 0)),

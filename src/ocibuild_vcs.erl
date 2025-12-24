@@ -24,11 +24,11 @@ detect(Path) ->
 
 get_source_url(Path) ->
     %% Get default remote URL
-    {ok, <<"https://example.com/repo">>}.
+    {ok, ~"https://example.com/repo"}.
 
 get_revision(Path) ->
     %% Get current revision
-    {ok, <<"abc123">>}.
+    {ok, ~"abc123"}.
 ```
 
 ## Usage
@@ -107,8 +107,8 @@ detect(Path) ->
 Get VCS annotations for the given path using the specified adapter.
 
 Returns a map with available annotations:
-- `<<"org.opencontainers.image.source">>` - Repository URL (if available)
-- `<<"org.opencontainers.image.revision">>` - Commit/revision (if available)
+- `~"org.opencontainers.image.source"` - Repository URL (if available)
+- `~"org.opencontainers.image.revision"` - Commit/revision (if available)
 
 Missing or failed values are simply omitted from the map.
 
@@ -116,8 +116,8 @@ Example:
 ```erlang
 {ok, VcsModule} = ocibuild_vcs:detect(Path),
 Annotations = ocibuild_vcs:get_annotations(VcsModule, Path).
-%% #{<<"org.opencontainers.image.source">> => <<"https://github.com/org/repo">>,
-%%   <<"org.opencontainers.image.revision">> => <<"abc123...">>}
+%% #{~"org.opencontainers.image.source" => ~"https://github.com/org/repo",
+%%   ~"org.opencontainers.image.revision" => ~"abc123..."}
 ```
 """.
 -spec get_annotations(module(), file:filename()) -> #{binary() => binary()}.

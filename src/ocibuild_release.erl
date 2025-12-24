@@ -249,7 +249,7 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
 build_platform_images(~"scratch", Files, Platforms, Opts) ->
     %% Scratch base image - create empty images for each platform
     Description = maps:get(description, Opts, undefined),
-    ReleasePath = maps:get(release_path, Opts, <<".">>),
+    ReleasePath = maps:get(release_path, Opts, ~"."),
     Images = [
         begin
             {ok, BaseImg} = ocibuild:scratch(),
@@ -270,7 +270,7 @@ build_platform_images(~"scratch", Files, Platforms, Opts) ->
 build_platform_images(BaseImage, Files, Platforms, Opts) ->
     PullAuth = maps:get(auth, Opts, #{}),
     Description = maps:get(description, Opts, undefined),
-    ReleasePath = maps:get(release_path, Opts, <<".">>),
+    ReleasePath = maps:get(release_path, Opts, ~"."),
 
     %% Always use the platforms list - ocibuild:from/3 handles both single and multi
     case ocibuild:from(BaseImage, PullAuth, #{platforms => Platforms}) of
@@ -405,12 +405,12 @@ add_base_image_annotations(Image, Annotations) ->
 %% the programmatic API (build_image/3) and CLI adapters (run/3).
 %%
 %% Opts:
-%%   - release_name: Release name for entrypoint (default: <<"app">>)
-%%   - workdir: Working directory in container (default: <<"/app">>)
+%%   - release_name: Release name for entrypoint (default: ~"app")
+%%   - workdir: Working directory in container (default: ~"/app")
 %%   - env: Environment variables map (default: #{})
 %%   - expose: Ports to expose (default: [])
 %%   - labels: Image labels map (default: #{})
-%%   - cmd: Release start command (default: <<"foreground">>)
+%%   - cmd: Release start command (default: ~"foreground")
 %%   - uid: User ID to run as (default: 65534 for nobody)
 %%   - annotations: Manifest annotations map (default: #{})
 %%   - description: Image description annotation (default: undefined)
@@ -420,12 +420,12 @@ add_base_image_annotations(Image, Annotations) ->
     Opts :: map()
 ) -> ocibuild:image().
 configure_release_image(Image0, Files, Opts) ->
-    ReleaseName = maps:get(release_name, Opts, <<"app">>),
-    Workdir = to_binary(maps:get(workdir, Opts, <<"/app">>)),
+    ReleaseName = maps:get(release_name, Opts, ~"app"),
+    Workdir = to_binary(maps:get(workdir, Opts, ~"/app")),
     EnvMap = maps:get(env, Opts, #{}),
     ExposePorts = maps:get(expose, Opts, []),
     Labels = maps:get(labels, Opts, #{}),
-    Cmd = to_binary(maps:get(cmd, Opts, <<"foreground">>)),
+    Cmd = to_binary(maps:get(cmd, Opts, ~"foreground")),
     Description = maps:get(description, Opts, undefined),
     Uid = maps:get(uid, Opts, undefined),
     Annotations = maps:get(annotations, Opts, #{}),
@@ -483,9 +483,9 @@ configure_release_image(Image0, Files, Opts) ->
     Image8 =
         case Uid of
             undefined ->
-                ocibuild:user(Image7, <<"65534">>);
+                ocibuild:user(Image7, ~"65534");
             nil ->
-                ocibuild:user(Image7, <<"65534">>);
+                ocibuild:user(Image7, ~"65534");
             U when is_integer(U), U >= 0 ->
                 ocibuild:user(Image7, integer_to_binary(U));
             U when is_integer(U), U < 0 ->
@@ -574,7 +574,7 @@ format_platform_list(Platforms) ->
 %% @private Save multi-platform image
 -spec save_multi_image([ocibuild:image()], string(), map()) -> ok | {error, term()}.
 save_multi_image(Images, OutputPath, Opts) ->
-    Tag = maps:get(tag, Opts, <<"latest">>),
+    Tag = maps:get(tag, Opts, ~"latest"),
     ProgressFn = maps:get(progress, Opts, undefined),
     SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Images, list_to_binary(OutputPath), SaveOpts).
@@ -702,8 +702,8 @@ Shorthand for `build_image(BaseImage, Files, #{})`.
 
 Example:
 ```
-Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
-{ok, Image} = build_image(<<"scratch">>, Files).
+Files = [{~"/app/bin/myapp", Binary, 8#755}],
+{ok, Image} = build_image(~"scratch", Files).
 ```
 """.
 -spec build_image(BaseImage :: binary(), Files :: [{binary(), binary(), non_neg_integer()}]) ->
@@ -716,11 +716,11 @@ Build an OCI image from release files with options.
 
 Options:
 - `release_name` - Release name (atom, string, or binary) - required for setting entrypoint
-- `workdir` - Working directory in container (default: `<<"/app">>`)
+- `workdir` - Working directory in container (default: `~"/app"`)
 - `env` - Environment variables map (default: `#{}`)
 - `expose` - Ports to expose (default: `[]`)
 - `labels` - Image labels map (default: `#{}`)
-- `cmd` - Release start command (default: `<<"foreground">>`)
+- `cmd` - Release start command (default: `~"foreground"`)
 - `uid` - User ID to run as (default: 65534 for nobody; use 0 for root)
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
@@ -728,13 +728,13 @@ Options:
 
 Example:
 ```
-Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
-{ok, Image} = build_image(<<"debian:stable-slim">>, Files, #{
-    release_name => <<"myapp">>,
-    workdir => <<"/app">>,
-    env => #{<<"LANG">> => <<"C.UTF-8">>},
+Files = [{~"/app/bin/myapp", Binary, 8#755}],
+{ok, Image} = build_image(~"debian:stable-slim", Files, #{
+    release_name => ~"myapp",
+    workdir => ~"/app",
+    env => #{~"LANG" => ~"C.UTF-8"},
     expose => [8080],
-    cmd => <<"foreground">>
+    cmd => ~"foreground"
 }).
 ```
 """.
@@ -745,12 +745,12 @@ Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
 ) -> {ok, ocibuild:image()} | {error, term()}.
 build_image(BaseImage, Files, Opts) when is_map(Opts) ->
     %% Extract options with defaults
-    ReleaseName = maps:get(release_name, Opts, <<"app">>),
-    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    ReleaseName = maps:get(release_name, Opts, ~"app"),
+    Workdir = maps:get(workdir, Opts, ~"/app"),
     EnvMap = maps:get(env, Opts, #{}),
     ExposePorts = maps:get(expose, Opts, []),
     Labels = maps:get(labels, Opts, #{}),
-    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    Cmd = maps:get(cmd, Opts, ~"foreground"),
     do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts).
 
 %%%===================================================================
@@ -1046,7 +1046,7 @@ The image is saved in OCI layout format compatible with `podman load`.
 """.
 -spec save_image(ocibuild:image(), file:filename(), map()) -> ok | {error, term()}.
 save_image(Image, OutputPath, Opts) ->
-    Tag = maps:get(tag, Opts, <<"latest">>),
+    Tag = maps:get(tag, Opts, ~"latest"),
     ProgressFn = maps:get(progress, Opts, undefined),
     SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Image, OutputPath, SaveOpts).
@@ -1069,9 +1069,9 @@ push_image(Image, Registry, RepoTag, Auth, Opts) ->
 Parse a tag into repository and tag parts.
 
 Examples:
-- `<<"myapp:1.0.0">>` -> `{<<"myapp">>, <<"1.0.0">>}`
-- `<<"myapp">>` -> `{<<"myapp">>, <<"latest">>}`
-- `<<"ghcr.io/org/app:v1">>` -> `{<<"ghcr.io/org/app">>, <<"v1">>}`
+- `~"myapp:1.0.0"` -> `{~"myapp", ~"1.0.0"}`
+- `~"myapp"` -> `{~"myapp", ~"latest"}`
+- `~"ghcr.io/org/app:v1"` -> `{~"ghcr.io/org/app", ~"v1"}`
 """.
 -spec parse_tag(binary()) -> {Repo :: binary(), Tag :: binary()}.
 parse_tag(Tag) ->
@@ -1098,10 +1098,10 @@ parse_tag(Tag) ->
 Parse a push destination into registry host and namespace.
 
 Examples:
-- `<<"ghcr.io/intility">>` -> `{<<"ghcr.io">>, <<"intility">>}`
-- `<<"ghcr.io">>` -> `{<<"ghcr.io">>, <<>>}`
-- `<<"docker.io/myorg">>` -> `{<<"docker.io">>, <<"myorg">>}`
-- `<<"localhost:5000/myorg">>` -> `{<<"localhost:5000">>, <<"myorg">>}`
+- `~"ghcr.io/intility"` -> `{~"ghcr.io", ~"intility"}`
+- `~"ghcr.io"` -> `{~"ghcr.io", <<>>}`
+- `~"docker.io/myorg"` -> `{~"docker.io", ~"myorg"}`
+- `~"localhost:5000/myorg"` -> `{~"localhost:5000", ~"myorg"}`
 """.
 -spec parse_push_destination(binary()) -> {Registry :: binary(), Namespace :: binary()}.
 parse_push_destination(Dest) ->
@@ -1493,7 +1493,7 @@ Returns `{ok, []}` if no native code found, or
 
 ```
 {ok, []} = ocibuild_release:check_for_native_code("/path/to/release").
-{warning, [#{app := <<"crypto">>, file := <<"crypto_nif.so">>}]} =
+{warning, [#{app := ~"crypto", file := ~"crypto_nif.so"}]} =
     ocibuild_release:check_for_native_code("/path/to/release_with_nifs").
 ```
 """.

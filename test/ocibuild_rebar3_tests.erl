@@ -367,13 +367,13 @@ get_file_mode_test() ->
     try
         %% Create a file with specific permissions
         FilePath = filename:join(TmpDir, "test.txt"),
-        ok = file:write_file(FilePath, <<"test">>),
+        ok = file:write_file(FilePath, ~"test"),
         ok = file:change_mode(FilePath, 8#644),
         ?assertEqual(8#644, ocibuild_release:get_file_mode(FilePath)),
 
         %% Create executable
         ExePath = filename:join(TmpDir, "test.sh"),
-        ok = file:write_file(ExePath, <<"#!/bin/sh">>),
+        ok = file:write_file(ExePath, ~"#!/bin/sh"),
         ok = file:change_mode(ExePath, 8#755),
         ?assertEqual(8#755, ocibuild_release:get_file_mode(ExePath))
     after
@@ -563,7 +563,7 @@ collect_symlink_inside_release_test() ->
         ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
 
         TargetPath = filename:join(BinDir, "real_file"),
-        ok = file:write_file(TargetPath, <<"real content">>),
+        ok = file:write_file(TargetPath, ~"real content"),
 
         SymlinkPath = filename:join(BinDir, "link_to_file"),
         ok = file:make_symlink("real_file", SymlinkPath),
@@ -576,7 +576,7 @@ collect_symlink_inside_release_test() ->
         LinkFile = lists:keyfind(~"/app/bin/link_to_file", 1, Files),
         ?assertNotEqual(false, LinkFile),
         {_, Content, _} = LinkFile,
-        ?assertEqual(<<"real content">>, Content)
+        ?assertEqual(~"real content", Content)
     after
         cleanup_temp_dir(TmpDir)
     end.
@@ -590,7 +590,7 @@ collect_symlink_outside_release_test() ->
 
         %% Create a regular file
         RegularPath = filename:join(BinDir, "regular"),
-        ok = file:write_file(RegularPath, <<"regular content">>),
+        ok = file:write_file(RegularPath, ~"regular content"),
 
         %% Create a symlink pointing to /etc/passwd (outside release)
         SymlinkPath = filename:join(BinDir, "evil_link"),
@@ -616,7 +616,7 @@ collect_symlink_relative_escape_test() ->
 
         %% Create a regular file
         RegularPath = filename:join(BinDir, "regular"),
-        ok = file:write_file(RegularPath, <<"regular content">>),
+        ok = file:write_file(RegularPath, ~"regular content"),
 
         %% Create a symlink using ../../.. to escape
         SymlinkPath = filename:join(BinDir, "escape_link"),
@@ -642,7 +642,7 @@ collect_broken_symlink_test() ->
 
         %% Create a regular file
         RegularPath = filename:join(BinDir, "regular"),
-        ok = file:write_file(RegularPath, <<"regular content">>),
+        ok = file:write_file(RegularPath, ~"regular content"),
 
         %% Create a broken symlink
         SymlinkPath = filename:join(BinDir, "broken_link"),
@@ -663,7 +663,7 @@ collect_symlink_to_dir_inside_test() ->
         ok = filelib:ensure_dir(filename:join(RealDir, "placeholder")),
 
         FilePath = filename:join(RealDir, "file.txt"),
-        ok = file:write_file(FilePath, <<"file in real dir">>),
+        ok = file:write_file(FilePath, ~"file in real dir"),
 
         %% Create symlink to directory (within release)
         SymlinkPath = filename:join(TmpDir, "link_dir"),
@@ -694,7 +694,7 @@ has_bundled_erts_true_test() ->
         %% Add erts directory
         ErtsDir = filename:join(TmpDir, "erts-27.0"),
         ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
-        ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), <<"beam">>),
+        ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), ~"beam"),
 
         ?assertEqual(true, ocibuild_release:has_bundled_erts(TmpDir))
     after
@@ -718,7 +718,7 @@ check_for_native_code_found_so_test() ->
         %% Add a .so file in lib/crypto-1.0.0/priv/
         PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
         ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-        ok = file:write_file(filename:join(PrivDir, "crypto_nif.so"), <<"fake so">>),
+        ok = file:write_file(filename:join(PrivDir, "crypto_nif.so"), ~"fake so"),
 
         {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
         ?assertEqual(1, length(NifFiles)),
@@ -736,7 +736,7 @@ check_for_native_code_found_dll_test() ->
         %% Add a .dll file
         PrivDir = filename:join([TmpDir, "lib", "nif_app-2.0.0", "priv"]),
         ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-        ok = file:write_file(filename:join(PrivDir, "nif_app.dll"), <<"fake dll">>),
+        ok = file:write_file(filename:join(PrivDir, "nif_app.dll"), ~"fake dll"),
 
         {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
         ?assertEqual(1, length(NifFiles)),
@@ -752,7 +752,7 @@ check_for_native_code_found_dylib_test() ->
         %% Add a .dylib file
         PrivDir = filename:join([TmpDir, "lib", "mac_nif-1.0.0", "priv"]),
         ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-        ok = file:write_file(filename:join(PrivDir, "mac_nif.dylib"), <<"fake dylib">>),
+        ok = file:write_file(filename:join(PrivDir, "mac_nif.dylib"), ~"fake dylib"),
 
         {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
         ?assertEqual(1, length(NifFiles)),
@@ -776,7 +776,7 @@ check_for_native_code_nested_priv_test() ->
         %% Add a .so file in a subdirectory of priv
         NestedDir = filename:join([TmpDir, "lib", "nested-1.0.0", "priv", "native"]),
         ok = filelib:ensure_dir(filename:join(NestedDir, "placeholder")),
-        ok = file:write_file(filename:join(NestedDir, "nested_nif.so"), <<"fake so">>),
+        ok = file:write_file(filename:join(NestedDir, "nested_nif.so"), ~"fake so"),
 
         {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
         ?assertEqual(1, length(NifFiles)),
@@ -835,7 +835,7 @@ run_single_platform_test() ->
     TmpDir = create_mock_release(),
     try
         State = create_mock_adapter_state(TmpDir, #{
-            platform => <<"linux/amd64">>
+            platform => ~"linux/amd64"
         }),
         %% Single platform should work even with ERTS
         add_mock_erts(TmpDir),
@@ -852,7 +852,7 @@ run_multiplatform_erts_error_test() ->
     TmpDir = create_mock_release(),
     try
         State = create_mock_adapter_state(TmpDir, #{
-            platform => <<"linux/amd64,linux/arm64">>
+            platform => ~"linux/amd64,linux/arm64"
         }),
         %% Add ERTS to trigger validation error
         add_mock_erts(TmpDir),
@@ -869,8 +869,8 @@ run_multiplatform_no_erts_test() ->
     TmpDir = create_mock_release(),
     try
         Platforms = [
-            #{os => <<"linux">>, architecture => <<"amd64">>},
-            #{os => <<"linux">>, architecture => <<"arm64">>}
+            #{os => ~"linux", architecture => ~"amd64"},
+            #{os => ~"linux", architecture => ~"arm64"}
         ],
         %% No ERTS, validation should succeed
         ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
@@ -926,8 +926,8 @@ run_multiplatform_nif_warning_test() ->
         add_mock_nif(TmpDir),
 
         Platforms = [
-            #{os => <<"linux">>, architecture => <<"amd64">>},
-            #{os => <<"linux">>, architecture => <<"arm64">>}
+            #{os => ~"linux", architecture => ~"amd64"},
+            #{os => ~"linux", architecture => ~"arm64"}
         ],
 
         %% NIFs should be detected by check_for_native_code
@@ -936,8 +936,8 @@ run_multiplatform_nif_warning_test() ->
 
         %% Verify the detected NIF file details
         [NifInfo] = NifFiles,
-        ?assertEqual(<<"crypto">>, maps:get(app, NifInfo)),
-        ?assertEqual(<<"test_nif.so">>, maps:get(file, NifInfo)),
+        ?assertEqual(~"crypto", maps:get(app, NifInfo)),
+        ?assertEqual(~"test_nif.so", maps:get(file, NifInfo)),
 
         %% Validation should succeed - NIFs warn but don't block
         %% (Warning "Native code detected..." is printed to stderr, visible in test output)
@@ -952,14 +952,14 @@ create_mock_adapter_state(ReleasePath, Overrides) ->
     BaseState = #{
         release_path => ReleasePath,
         release_name => myapp,
-        base_image => <<"scratch">>,
-        workdir => <<"/app">>,
+        base_image => ~"scratch",
+        workdir => ~"/app",
         env => #{},
         expose => [],
         labels => #{},
-        cmd => <<"start">>,
+        cmd => ~"start",
         description => undefined,
-        tag => <<"myapp:1.0.0">>,
+        tag => ~"myapp:1.0.0",
         output => list_to_binary(OutputPath),
         push => undefined,
         chunk_size => undefined,
@@ -971,13 +971,13 @@ create_mock_adapter_state(ReleasePath, Overrides) ->
 add_mock_erts(TmpDir) ->
     ErtsDir = filename:join(TmpDir, "erts-27.0"),
     ok = filelib:ensure_dir(filename:join([ErtsDir, "bin", "placeholder"])),
-    ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), <<"beam">>).
+    ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), ~"beam").
 
 %% Helper to add mock NIF to release
 add_mock_nif(TmpDir) ->
     PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
     ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-    ok = file:write_file(filename:join(PrivDir, "test_nif.so"), <<"fake so">>).
+    ok = file:write_file(filename:join(PrivDir, "test_nif.so"), ~"fake so").
 
 %%%===================================================================
 %%% Test fixtures
@@ -1006,16 +1006,16 @@ create_mock_release() ->
 
     %% Create bin script (executable)
     BinPath = filename:join(BinDir, "myapp"),
-    ok = file:write_file(BinPath, <<"#!/bin/sh\nexec erl -boot release">>),
+    ok = file:write_file(BinPath, ~"#!/bin/sh\nexec erl -boot release"),
     ok = file:change_mode(BinPath, 8#755),
 
     %% Create beam file
     BeamPath = filename:join(LibDir, "myapp.beam"),
-    ok = file:write_file(BeamPath, <<"FOR1...(beam data)">>),
+    ok = file:write_file(BeamPath, ~"FOR1...(beam data)"),
     ok = file:change_mode(BeamPath, 8#644),
 
     %% Create release file
     RelPath = filename:join(RelDir, "myapp.rel"),
-    ok = file:write_file(RelPath, <<"{release, {\"myapp\", \"1.0.0\"}, ...}.">>),
+    ok = file:write_file(RelPath, ~"{release, {\"myapp\", \"1.0.0\"}, ...}."),
 
     TmpDir.
