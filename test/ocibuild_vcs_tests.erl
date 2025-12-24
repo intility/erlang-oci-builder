@@ -246,6 +246,36 @@ detect_tmp_test() ->
 git_detect_nonrepo_test() ->
     ?assertEqual(false, ocibuild_vcs_git:detect("/tmp")).
 
+%% Test git detection returns true when CI env vars are present (even without .git)
+git_detect_with_ci_env_vars_test() ->
+    %% Save and clear all CI env vars
+    OldGHServer = os:getenv("GITHUB_SERVER_URL"),
+    OldGHRepo = os:getenv("GITHUB_REPOSITORY"),
+    OldGLUrl = os:getenv("CI_PROJECT_URL"),
+    OldAzureUri = os:getenv("BUILD_REPOSITORY_URI"),
+
+    os:unsetenv("GITHUB_SERVER_URL"),
+    os:unsetenv("GITHUB_REPOSITORY"),
+    os:unsetenv("CI_PROJECT_URL"),
+    os:unsetenv("BUILD_REPOSITORY_URI"),
+
+    try
+        %% Without CI env vars, detection should fail for /tmp
+        ?assertEqual(false, ocibuild_vcs_git:detect("/tmp")),
+
+        %% Set GitHub Actions env vars
+        os:putenv("GITHUB_SERVER_URL", "https://github.com"),
+        os:putenv("GITHUB_REPOSITORY", "org/repo"),
+
+        %% Now detection should succeed (even though /tmp has no .git)
+        ?assertEqual(true, ocibuild_vcs_git:detect("/tmp"))
+    after
+        restore_env("GITHUB_SERVER_URL", OldGHServer),
+        restore_env("GITHUB_REPOSITORY", OldGHRepo),
+        restore_env("CI_PROJECT_URL", OldGLUrl),
+        restore_env("BUILD_REPOSITORY_URI", OldAzureUri)
+    end.
+
 %%%===================================================================
 %%% VCS Behaviour Tests
 %%%===================================================================

@@ -43,13 +43,18 @@ SSH URLs are automatically converted to HTTPS for public visibility:
 %%%===================================================================
 
 -doc """
-Detect if the path is within a Git repository.
+Detect if Git VCS information is available.
 
-Walks up the directory tree looking for a `.git` directory.
+Returns true if either:
+1. The path is within a Git repository (`.git` directory found), or
+2. CI environment variables are present (GITHUB_*, CI_PROJECT_URL, BUILD_REPOSITORY_URI)
+
+This allows VCS annotations to work in CI environments where the build
+runs in a different directory than the repository checkout.
 """.
 -spec detect(file:filename()) -> boolean().
 detect(Path) ->
-    find_git_root(Path) =/= not_found.
+    find_git_root(Path) =/= not_found orelse has_ci_env_vars().
 
 -doc """
 Get the source repository URL.
@@ -148,6 +153,18 @@ get_revision_from_env() ->
                 not_found -> try_env_var("BUILD_SOURCEVERSION")
             end
     end.
+
+%% @private Check if any CI environment variables are present
+%% This allows detection to succeed in CI even when .git is in a different directory
+-spec has_ci_env_vars() -> boolean().
+has_ci_env_vars() ->
+    %% Check for GitHub Actions
+    (is_list(os:getenv("GITHUB_SERVER_URL")) andalso
+        is_list(os:getenv("GITHUB_REPOSITORY"))) orelse
+        %% Check for GitLab CI
+        is_list(os:getenv("CI_PROJECT_URL")) orelse
+        %% Check for Azure DevOps
+        is_list(os:getenv("BUILD_REPOSITORY_URI")).
 
 %%%===================================================================
 %%% Internal Functions - Git Detection
