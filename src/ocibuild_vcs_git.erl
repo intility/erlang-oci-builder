@@ -158,10 +158,16 @@ get_revision_from_env() ->
 find_git_root(Path) ->
     try
         AbsPath = filename:absname(Path),
+        %% Normalize: if path is a file, start from its parent directory
+        StartPath =
+            case filelib:is_regular(AbsPath) of
+                true -> filename:dirname(AbsPath);
+                false -> AbsPath
+            end,
         %% Verify the path exists before trying to walk up
-        case filelib:is_dir(AbsPath) orelse filelib:is_regular(AbsPath) of
+        case filelib:is_dir(StartPath) of
             true ->
-                find_git_root_recursive(AbsPath);
+                find_git_root_recursive(StartPath);
             false ->
                 not_found
         end
