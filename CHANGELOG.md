@@ -16,7 +16,7 @@
   - GitLab CI: `CI_PROJECT_URL`, `CI_COMMIT_SHA`
   - Azure DevOps: `BUILD_REPOSITORY_URI`, `BUILD_SOURCEVERSION`
 - **New `ocibuild_vcs` behaviour**: Pluggable VCS adapter system for future support of Mercurial, SVN, etc.
-- **New `ocibuild_vcs_git` module**: Git adapter for VCS annotations base on Git repositories.
+- **New `ocibuild_vcs_git` module**: Git adapter for VCS annotations based on Git repositories.
 - **New `--no-vcs-annotations` CLI flag**: Disable automatic VCS annotations when not desired
 - **New `vcs_annotations` config option**: Set to `false` in rebar.config or mix.exs to disable by default
 - **Non-root by default**: Containers now run as UID 65534 (nobody) by default for improved security
