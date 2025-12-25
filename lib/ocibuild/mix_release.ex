@@ -49,6 +49,7 @@ defmodule Ocibuild.MixRelease do
       comma-separated string like "linux/amd64,linux/arm64" for multi-platform builds.
     * `:uid` - User ID to run as (default: 65534 for nobody)
     * `:vcs_annotations` - Enable automatic VCS annotations (default: true)
+    * `:sbom` - Export SBOM to file path (SBOM is always embedded in image)
   """
 
   @doc """
@@ -108,8 +109,16 @@ defmodule Ocibuild.MixRelease do
       app_version: to_binary(release.version),
       uid: Keyword.get(ocibuild_config, :uid),
       vcs_annotations: Keyword.get(ocibuild_config, :vcs_annotations, true),
+      sbom: get_sbom_path(ocibuild_config),
       dependencies: Ocibuild.Lock.get_dependencies()
     }
+  end
+
+  defp get_sbom_path(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :sbom) do
+      nil -> nil
+      path -> to_binary(path)
+    end
   end
 
   defp get_chunk_size(ocibuild_config) do

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0 - 2025-12-25
+
+### Features
+
+- **SBOM generation**: Automatic SPDX 2.2 Software Bill of Materials generation for supply chain security
+  - Embedded in every image at `/sbom.spdx.json`
+  - Attached as OCI referrer artifact when pushing to registries that support the referrers API
+  - Includes application dependencies, ERTS version, OTP version, and base image reference
+  - Package URLs (PURLs) generated for all dependencies (hex, github, gitlab, bitbucket, generic)
+- **New `--sbom` CLI flag**: Export SBOM to a local file path (e.g., `--sbom myapp.spdx.json`)
+- **New `ocibuild_sbom` module**: Public API for SBOM generation
+  - `generate/2` - Generate SPDX 2.2 JSON from dependencies and options
+  - `media_type/0` - Returns `application/spdx+json`
+  - `to_purl/1` - Convert dependency to Package URL
+  - `build_referrer_manifest/4` - Build OCI referrer manifest for artifact attachment
+- **OCI Referrers API support**: New `ocibuild_registry:push_referrer/7,8` for attaching artifacts to images
+
+### Improvements
+
+- **VCS-agnostic URL handling**: SBOM source URLs support multiple VCS suffixes (`.git`, `.hg`, `.svn`)
+- **SPDX ID sanitization**: Package names are sanitized to comply with SPDX ID format (`[a-zA-Z0-9.-]+`)
+- **URI encoding for namespaces**: Document namespace URLs are properly percent-encoded per RFC 3986
+- **Graceful SBOM failures**: SBOM generation errors are logged as warnings without failing the build
+- **Silent referrer skip**: Registries without referrer support are handled gracefully (no errors)
+- **Reusable manifest utilities**: `ocibuild_layout` now exports `build_config_blob/1` and `build_layer_descriptors/1`
+
+### Documentation
+
+- Updated README with SBOM feature description
+- Updated CLAUDE.md with `--sbom` CLI option and `ocibuild_sbom` module
+- Updated AGENTS.md to mark SBOM generation as implemented
+
 ## 0.4.0 - 2025-12-25
 
 ### Features

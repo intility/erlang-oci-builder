@@ -15,6 +15,7 @@ See: https://github.com/opencontainers/distribution-spec
     pull_blob/3, pull_blob/4, pull_blob/5,
     push/5, push/6,
     push_multi/6,
+    push_referrer/7, push_referrer/8,
     check_blob_exists/4,
     stop_httpc/0
 ]).
@@ -563,6 +564,146 @@ push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
         {error, _} = Err ->
             Err
     end.
+
+%%%===================================================================
+%%% OCI Referrer Push (for SBOM and other artifacts)
+%%%===================================================================
+
+-doc """
+Push an artifact as a referrer to an image manifest.
+
+This implements the OCI Referrers API, attaching artifacts (like SBOMs)
+to an existing image manifest. The artifact manifest includes a `subject`
+field that references the target image.
+
+ArtifactData is the raw artifact content (e.g., SPDX JSON).
+ArtifactType is the media type (e.g., "application/spdx+json").
+SubjectDigest is the digest of the image manifest this artifact refers to.
+SubjectSize is the size of the subject manifest.
+
+Returns ok on success, or {error, {referrer_not_supported, _}} if the
+registry doesn't support the referrers API.
+""".
+-spec push_referrer(
+    ArtifactData :: binary(),
+    ArtifactType :: binary(),
+    Registry :: binary(),
+    Repo :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer(),
+    Auth :: map()
+) -> ok | {error, term()}.
+push_referrer(ArtifactData, ArtifactType, Registry, Repo, SubjectDigest, SubjectSize, Auth) ->
+    push_referrer(
+        ArtifactData, ArtifactType, Registry, Repo, SubjectDigest, SubjectSize, Auth, #{}
+    ).
+
+-doc "Push a referrer artifact with options.".
+-spec push_referrer(
+    ArtifactData :: binary(),
+    ArtifactType :: binary(),
+    Registry :: binary(),
+    Repo :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer(),
+    Auth :: map(),
+    Opts :: push_opts()
+) -> ok | {error, term()}.
+push_referrer(ArtifactData, _ArtifactType, Registry, Repo, SubjectDigest, SubjectSize, Auth, _Opts) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
+        {ok, Token} ->
+            %% Push the artifact blob
+            ArtifactDigest = ocibuild_digest:sha256(ArtifactData),
+            ArtifactSize = byte_size(ArtifactData),
+
+            case push_blob(BaseUrl, NormalizedRepo, ArtifactDigest, ArtifactData, Token) of
+                ok ->
+                    %% Build and push the referrer manifest
+                    push_referrer_manifest(
+                        BaseUrl,
+                        NormalizedRepo,
+                        Token,
+                        ArtifactDigest,
+                        ArtifactSize,
+                        SubjectDigest,
+                        SubjectSize
+                    );
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Build and push a referrer manifest
+%% Uses ocibuild_sbom:build_referrer_manifest/4 for manifest generation
+-spec push_referrer_manifest(
+    BaseUrl :: string(),
+    Repo :: binary(),
+    Token :: term(),
+    ArtifactDigest :: binary(),
+    ArtifactSize :: non_neg_integer(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer()
+) -> ok | {error, term()}.
+push_referrer_manifest(
+    BaseUrl, Repo, Token, ArtifactDigest, ArtifactSize, SubjectDigest, SubjectSize
+) ->
+    %% Push the empty config blob (required by OCI spec for artifact manifests)
+    EmptyConfigBlob = ~"{}",
+    EmptyConfigDigest = ocibuild_digest:sha256(EmptyConfigBlob),
+
+    case push_blob(BaseUrl, Repo, EmptyConfigDigest, EmptyConfigBlob, Token) of
+        ok ->
+            %% Build manifest using ocibuild_sbom
+            Manifest = ocibuild_sbom:build_referrer_manifest(
+                ArtifactDigest, ArtifactSize, SubjectDigest, SubjectSize
+            ),
+            ManifestJson = ocibuild_json:encode(Manifest),
+            ManifestDigest = ocibuild_digest:sha256(ManifestJson),
+
+            %% Push the manifest (using digest as tag - required for referrers)
+            Url = io_lib:format(
+                "~s/v2/~s/manifests/~s",
+                [BaseUrl, binary_to_list(Repo), binary_to_list(ManifestDigest)]
+            ),
+            Headers =
+                auth_headers(Token) ++
+                    [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+
+            case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
+                {ok, _} ->
+                    ok;
+                {error, {http_error, 404, _}} ->
+                    {error, {referrer_not_supported, SubjectDigest}};
+                {error, {http_error, 405, _}} ->
+                    {error, {referrer_not_supported, SubjectDigest}};
+                {error, {http_error, 400, Body}} ->
+                    case is_unsupported_manifest_error(Body) of
+                        true -> {error, {referrer_not_supported, SubjectDigest}};
+                        false -> {error, {push_referrer_manifest, Body}}
+                    end;
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Check if error body indicates unsupported manifest type
+-spec is_unsupported_manifest_error(binary() | string()) -> boolean().
+is_unsupported_manifest_error(Body) when is_binary(Body) ->
+    is_unsupported_manifest_error(binary_to_list(Body));
+is_unsupported_manifest_error(Body) when is_list(Body) ->
+    LowerBody = string:lowercase(Body),
+    %% Check for specific error messages indicating referrer/artifact support is missing
+    %% Note: "artifact" alone is too broad and may cause false positives
+    string:find(LowerBody, "unsupported") =/= nomatch orelse
+        string:find(LowerBody, "not supported") =/= nomatch orelse
+        string:find(LowerBody, "unknown manifest") =/= nomatch.
 
 %%%===================================================================
 %%% Internal functions

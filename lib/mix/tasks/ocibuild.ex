@@ -25,6 +25,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `--chunk-size` - Chunk size in MB for uploads (default: 5)
     * `--uid` - User ID to run as (default: 65534 for nobody)
     * `--no-vcs-annotations` - Disable automatic VCS annotations
+    * `--sbom` - Export SBOM to file path (SBOM is always embedded in image)
 
   ## Configuration
 
@@ -78,7 +79,8 @@ defmodule Mix.Tasks.Ocibuild do
           chunk_size: :integer,
           platform: :string,
           uid: :integer,
-          no_vcs_annotations: :boolean
+          no_vcs_annotations: :boolean,
+          sbom: :string
         ]
       )
 
@@ -165,6 +167,7 @@ defmodule Mix.Tasks.Ocibuild do
       uid: opts[:uid] || Keyword.get(ocibuild_config, :uid),
       app_version: get_app_version(config),
       vcs_annotations: get_vcs_annotations(opts, ocibuild_config),
+      sbom: get_opt_binary(opts, :sbom),
       dependencies: Ocibuild.Lock.get_dependencies()
     }
   end
