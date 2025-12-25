@@ -17,22 +17,22 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ## Features 🚀
 
-| Feature                       | Status | Description                                                            |
-|-------------------------------|--------|------------------------------------------------------------------------|
-| **No Docker required**        | ✅     | Builds images directly without container runtime.                      |
-| **Push to any registry**      | ✅     | Docker Hub, GHCR, ECR, GCR, and any OCI-compliant registry.            |
-| **OCI compliant**             | ✅     | Produces standard OCI image layouts.                                   |
-| **Layer caching**             | ✅     | Base image layers cached locally for faster rebuilds.                  |
-| **Tarball export**            | ✅     | Export images for `podman load`, skopeo, crane, buildah.               |
-| **OCI annotations**           | ✅     | Add custom annotations to image manifests.                             |
-| **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                    |
-| **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command. |
-| **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
-| **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.          |
-| **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.         |
-| **Auto OCI annotations**      | ✅     | Automatically populate source URL, revision, version from VCS.         |
-| **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.|
-| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                |
+| Feature                       | Status | Description                                                             |
+|-------------------------------|--------|-------------------------------------------------------------------------|
+| **No Docker required**        | ✅     | Builds images directly without container runtime.                       |
+| **Push to any registry**      | ✅     | Docker Hub, GHCR, ECR, GCR, and any OCI-compliant registry.             |
+| **OCI compliant**             | ✅     | Produces standard OCI image layouts.                                    |
+| **Layer caching**             | ✅     | Base image layers cached locally for faster rebuilds.                   |
+| **Tarball export**            | ✅     | Export images for `podman load`, skopeo, crane, buildah.                |
+| **OCI annotations**           | ✅     | Add custom annotations to image manifests.                              |
+| **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                     |
+| **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command.  |
+| **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.       |
+| **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.           |
+| **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.          |
+| **Auto OCI annotations**      | ✅     | Automatically populate source URL, revision, version from VCS.          |
+| **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers. |
+| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                 |
 
 ## Installation
 
@@ -113,7 +113,7 @@ The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
-{deps, [{ocibuild, "~> 0.4"}]}.
+{deps, [{ocibuild, "~> 0.5"}]}.
 
 {ocibuild, [
     {base_image, "debian:stable-slim"},
@@ -182,18 +182,20 @@ auth = %{username: System.get_env("OCIBUILD_PUSH_USERNAME"),
 
 Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
-| Option         | Short | Description                                       |
-|----------------|-------|---------------------------------------------------|
-| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                    |
-| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
-| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
-| `--desc`       | `-d`  | Image description (OCI manifest annotation)       |
-| `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
-| `--base`       |       | Override base image                               |
-| `--release`    |       | Release name (if multiple configured)             |
-| `--cmd`        | `-c`  | Release start command (Elixir only)               |
-| `--uid`        |       | User ID to run as (default: 65534 for nobody)     |
-| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
+| Option                 | Short | Description                                       |
+|------------------------|-------|---------------------------------------------------|
+| `--tag`                | `-t`  | Image tag, e.g., `myapp:1.0.0`                    |
+| `--output`             | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
+| `--push`               | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
+| `--desc`               | `-d`  | Image description (OCI manifest annotation)       |
+| `--platform`           | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
+| `--base`               |       | Override base image                               |
+| `--release`            |       | Release name (if multiple configured)             |
+| `--cmd`                | `-c`  | Release start command (Elixir only)               |
+| `--uid`                |       | User ID to run as (default: 65534 for nobody)     |
+| `--chunk-size`         |       | Chunk size in MB for uploads (default: 5)         |
+| `--sbom`               |       | Export SBOM to file path (SBOM always in image)   |
+| `--no-vcs-annotations` |       | Disable automatic VCS annotations                 |
 
 **Notes:**
 - Tag defaults to `app:version` in Mix, required in rebar3
@@ -289,14 +291,14 @@ ocibuild:push(Image, ~"docker.io", ~"myuser/myapp:latest", Auth).
 
 `ocibuild` automatically adds standard OCI annotations to your images:
 
-| Annotation | Source | Description |
-|------------|--------|-------------|
-| `org.opencontainers.image.source` | Git remote URL | Repository URL (converted to HTTPS) |
-| `org.opencontainers.image.revision` | Git commit SHA | Current commit hash |
-| `org.opencontainers.image.version` | Release version | Application version from build system |
-| `org.opencontainers.image.created` | Build time | ISO 8601 timestamp |
-| `org.opencontainers.image.base.name` | Base image | Base image reference (e.g., `debian:stable-slim`) |
-| `org.opencontainers.image.base.digest` | Base manifest | SHA256 digest of base image manifest |
+| Annotation                             | Source          | Description                                       |
+|----------------------------------------|-----------------|---------------------------------------------------|
+| `org.opencontainers.image.source`      | Git remote URL  | Repository URL (converted to HTTPS)               |
+| `org.opencontainers.image.revision`    | Git commit SHA  | Current commit hash                               |
+| `org.opencontainers.image.version`     | Release version | Application version from build system             |
+| `org.opencontainers.image.created`     | Build time      | ISO 8601 timestamp                                |
+| `org.opencontainers.image.base.name`   | Base image      | Base image reference (e.g., `debian:stable-slim`) |
+| `org.opencontainers.image.base.digest` | Base manifest   | SHA256 digest of base image manifest              |
 
 ### CI Environment Support
 
@@ -525,14 +527,17 @@ This approach requires no configuration and has zero maintenance overhead — it
 
 ```
 # First build: all layers uploaded
-Layer 1/3 (erts, amd64)         : [##############################] 45 MB
-Layer 2/3 (deps, amd64)         : [##############################] 12 MB
-Layer 3/3 (app, amd64)          : [##############################]  2 MB
+Layer 1/3 (erts, amd64)         : [==============================] 45 MB
+Layer 2/3 (deps, amd64)         : [==============================] 12 MB
+Layer 3/3 (app, amd64)          : [==============================]  2 MB
+Layer 4/4 (sbom, amd64)         : [==============================] 100% 3.4 KB/3.4 KB
+
 
 # After code change: only app layer uploaded
 Layer 1/3 (erts, amd64)         : exists (skipped)
 Layer 2/3 (deps, amd64)         : exists (skipped)
-Layer 3/3 (app, amd64)          : [##############################]  2 MB
+Layer 3/3 (app, amd64)          : [==============================]  2 MB
+Layer 4/4 (sbom, amd64)         : [==============================] 100% 3.4 KB/3.4 KB
 ```
 
 Typical improvements:
