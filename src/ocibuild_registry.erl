@@ -1074,7 +1074,7 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
                 case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
                     {ok, _} ->
                         %% Layer already exists - print through progress manager
-                        StatusMsg = <<Label/binary, ": exists (skipped)">>,
+                        StatusMsg = iolist_to_binary([Label, ~": exists (skipped)"]),
                         ocibuild_progress:print_status(StatusMsg),
                         ok;
                     {error, _} ->
@@ -1115,9 +1115,11 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
 
 %% Create a label for layer upload progress
 %% Pads label to fixed width so progress bars align
--define(LABEL_WIDTH, 24).
+-define(LABEL_WIDTH, 32).
 
--spec make_upload_label(pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined) -> binary().
+-spec make_upload_label(
+    pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined
+) -> binary().
 make_upload_label(Index, Total, undefined, undefined) ->
     pad_label(io_lib:format("Layer ~B/~B", [Index, Total]));
 make_upload_label(Index, Total, undefined, LayerType) ->

@@ -514,14 +514,14 @@ This approach requires no configuration and has zero maintenance overhead — it
 
 ```
 # First build: all layers uploaded
-Uploading layer 1/3 (ERTS)... 45 MB
-Uploading layer 2/3 (deps)... 12 MB
-Uploading layer 3/3 (app)...   2 MB
+Layer 1/3 (erts, amd64)         : [##############################] 45 MB
+Layer 2/3 (deps, amd64)         : [##############################] 12 MB
+Layer 3/3 (app, amd64)          : [##############################]  2 MB
 
 # After code change: only app layer uploaded
-Layer 1/3 (ERTS)... exists (skipped)
-Layer 2/3 (deps)... exists (skipped)
-Uploading layer 3/3 (app)...   2 MB
+Layer 1/3 (erts, amd64)         : exists (skipped)
+Layer 2/3 (deps, amd64)         : exists (skipped)
+Layer 3/3 (app, amd64)          : [##############################]  2 MB
 ```
 
 Typical improvements:

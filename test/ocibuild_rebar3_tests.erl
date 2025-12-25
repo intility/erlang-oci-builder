@@ -1204,6 +1204,32 @@ classify_app_lib_test() ->
         )
     ).
 
+classify_hyphenated_app_name_test() ->
+    %% App names with hyphens (e.g., "my-cool-app-1.0.0" should extract as "my-cool-app")
+    DepNames = sets:from_list([~"cowboy"]),
+    ?assertEqual(
+        app,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/my-cool-app-1.0.0/ebin/my_cool_app.app",
+            DepNames,
+            ~"my-cool-app",
+            ~"/app",
+            true
+        )
+    ),
+    %% Hyphenated dep should also work
+    HyphenatedDeps = sets:from_list([~"plug-crypto"]),
+    ?assertEqual(
+        dep,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/plug-crypto-2.0.0/ebin/plug_crypto.app",
+            HyphenatedDeps,
+            ~"myapp",
+            ~"/app",
+            true
+        )
+    ).
+
 classify_bin_directory_test() ->
     DepNames = sets:from_list([~"cowboy"]),
     %% bin/ directory -> app layer

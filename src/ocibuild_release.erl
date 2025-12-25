@@ -1579,7 +1579,7 @@ Files are classified based on their container paths and the lock file:
 - **Deps layer**: `lib/<name>-*` where `name` is in the lock file
 - **ERTS layer** (if bundled): `erts-*` and `lib/<name>-*` NOT in lock file (OTP libs)
 
-If ERTS is not bundled, OTP libs go to the app layer instead.
+If ERTS is not bundled, OTP libs go to the deps layer instead.
 
 The lock file is the source of truth for dependencies - anything in `lib/`
 that's not in the lock file and not the app itself must be an OTP library.
@@ -1713,8 +1713,10 @@ build_release_layers(Image0, Files, _ReleasePath, _Deps, _Opts) ->
 %% @private Add layer only if file list is non-empty
 -spec add_layer_if_nonempty(ocibuild:image(), [{binary(), binary(), non_neg_integer()}], atom()) ->
     ocibuild:image().
-add_layer_if_nonempty(Image, [], _Type) -> Image;
-add_layer_if_nonempty(Image, Files, Type) -> ocibuild:add_layer(Image, Files, #{layer_type => Type}).
+add_layer_if_nonempty(Image, [], _Type) ->
+    Image;
+add_layer_if_nonempty(Image, Files, Type) ->
+    ocibuild:add_layer(Image, Files, #{layer_type => Type}).
 
 %% @private Strip workdir prefix from path
 -spec strip_workdir_prefix(binary(), binary()) -> binary().
@@ -1776,6 +1778,8 @@ extract_app_name_from_dir(DirName) ->
                     %% Join all but last part
                     iolist_to_binary(lists:join(~"-", lists:droplast(Parts)));
                 false ->
+                    %% Non-standard version (e.g., "myapp-main", "cowboy-latest")
+                    %% Return full dir name as we can't reliably extract app name
                     DirName
             end
     end.

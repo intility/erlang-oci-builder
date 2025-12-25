@@ -262,10 +262,15 @@ manager_loop(State) ->
                 true ->
                     %% Clear the progress bar area by moving up and clearing each line
                     BarCount = length(State#manager_state.bar_order),
-                    io:format("\r\033[~wA", [BarCount]),  %% Move up to top of bars
-                    lists:foreach(fun(_) ->
-                        io:format("\033[K\n")  %% Clear line and move down
-                    end, lists:seq(1, BarCount)),
+                    %% Move up to top of bars
+                    io:format("\r\033[~wA", [BarCount]),
+                    lists:foreach(
+                        fun(_) ->
+                            %% Clear line and move down
+                            io:format("\033[K\n")
+                        end,
+                        lists:seq(1, BarCount)
+                    ),
                     %% Now at bottom of cleared area, move up again
                     io:format("\033[~wA", [BarCount]),
                     %% Print message at top (where first bar was)

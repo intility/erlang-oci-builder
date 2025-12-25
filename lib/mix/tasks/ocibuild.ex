@@ -137,7 +137,11 @@ defmodule Mix.Tasks.Ocibuild do
   defp build_state(release_name, release_path, opts, ocibuild_config, config) do
     # App name from config (used for layer classification)
     # This may differ from release_name (e.g., app: :indicator_sync, release: :server)
-    app_name = config[:app] |> to_string()
+    app_name =
+      case config[:app] do
+        nil -> nil
+        app -> to_string(app)
+      end
 
     %{
       # Release info
@@ -199,12 +203,16 @@ defmodule Mix.Tasks.Ocibuild do
   defp get_vcs_annotations(opts, ocibuild_config) do
     cond do
       # CLI --no-vcs-annotations disables VCS annotations
-      opts[:no_vcs_annotations] -> false
+      opts[:no_vcs_annotations] ->
+        false
+
       # Check config for explicit setting
       Keyword.has_key?(ocibuild_config, :vcs_annotations) ->
         Keyword.get(ocibuild_config, :vcs_annotations)
+
       # Default to enabled
-      true -> true
+      true ->
+        true
     end
   end
 
@@ -229,10 +237,20 @@ defmodule Mix.Tasks.Ocibuild do
               %{name: Atom.to_string(name), version: "unknown", source: "unknown"}
           end)
         rescue
-          _ -> []
+          exception ->
+            Mix.shell().error(
+              "ocibuild: failed to parse mix.lock, falling back to single-layer mode: " <>
+                Exception.message(exception)
+            )
+
+            []
         end
 
-      {:error, _} ->
+      {:error, reason} ->
+        Mix.shell().error(
+          "ocibuild: unable to read mix.lock (#{inspect(reason)}), falling back to single-layer mode"
+        )
+
         []
     end
   end

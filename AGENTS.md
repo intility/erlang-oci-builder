@@ -1107,6 +1107,14 @@ cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
 
 ### Future Considerations
 
+**Refactoring `ocibuild_release.erl`:**
+- Module has grown to ~2000 lines and handles too many concerns
+- Consider extracting into separate modules for better navigation:
+  - Smart layering logic (`partition_files_by_layer`, `classify_file_layer`, `build_release_layers`) → `ocibuild_layers.erl` or extend `ocibuild_layer.erl`
+  - File collection (`collect_release_files`, symlink handling) → `ocibuild_files.erl`
+  - Platform validation (ERTS detection, NIF warnings) → `ocibuild_platform.erl`
+- Core orchestration (`run/3`, `build_platform_images`, `do_output`) should remain
+
 **Resumable Uploads:**
 - Chunked uploads are implemented but resume capability is not
 - If upload fails mid-way, must restart from beginning
