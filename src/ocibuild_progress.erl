@@ -35,7 +35,8 @@ ocibuild_progress:stop_manager().
     update/2,
     complete/1,
     clear/0,
-    make_callback/1
+    make_callback/1,
+    print_status/1
 ]).
 
 %% Internal exports
@@ -150,6 +151,32 @@ clear() ->
     end.
 
 -doc """
+Print a status line through the progress manager.
+
+Use this instead of io:format when progress bars are active to avoid
+output conflicts. The message is printed synchronously to ensure ordering.
+""".
+-spec print_status(binary() | string()) -> ok.
+print_status(Message) ->
+    case whereis(ocibuild_progress_manager) of
+        undefined ->
+            %% No manager, print directly
+            io:format("  ~s~n", [Message]),
+            ok;
+        Pid ->
+            %% Send to manager and wait for acknowledgment
+            Ref = make_ref(),
+            Pid ! {print_status, self(), Ref, Message},
+            receive
+                {printed, Ref} -> ok
+            after 5000 ->
+                %% Timeout, print directly as fallback
+                io:format("  ~s~n", [Message]),
+                ok
+            end
+    end.
+
+-doc """
 Create a progress callback function compatible with ocibuild_registry.
 
 The callback will register a bar on first call and update it on subsequent calls.
@@ -226,6 +253,38 @@ manager_loop(State) ->
                     FinalState = redraw_all(NewState),
                     manager_loop(FinalState);
                 error ->
+                    manager_loop(State)
+            end;
+        {print_status, From, Ref, Message} ->
+            %% Print a status line above the progress bars
+            %% Strategy: clear progress area, print message, then redraw bars below it
+            case State#manager_state.is_tty andalso State#manager_state.lines_printed > 0 of
+                true ->
+                    %% Clear the progress bar area by moving up and clearing each line
+                    BarCount = length(State#manager_state.bar_order),
+                    %% Move up to top of bars
+                    io:format("\r\033[~wA", [BarCount]),
+                    lists:foreach(
+                        fun(_) ->
+                            %% Clear line and move down
+                            io:format("\033[K\n")
+                        end,
+                        lists:seq(1, BarCount)
+                    ),
+                    %% Now at bottom of cleared area, move up again
+                    io:format("\033[~wA", [BarCount]),
+                    %% Print message at top (where first bar was)
+                    io:format("  ~s~n", [Message]),
+                    %% Reset lines_printed since we need to print fresh bars
+                    NewState = State#manager_state{lines_printed = 0},
+                    %% Force redraw of all bars below the message
+                    FinalState = redraw_all(NewState),
+                    From ! {printed, Ref},
+                    manager_loop(FinalState);
+                _ ->
+                    %% No TTY or no bars yet, just print
+                    io:format("  ~s~n", [Message]),
+                    From ! {printed, Ref},
                     manager_loop(State)
             end;
         clear ->

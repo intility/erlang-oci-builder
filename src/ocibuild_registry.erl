@@ -1059,34 +1059,52 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
             %% Create indexed list: [{1, Layer1}, {2, Layer2}, ...]
             IndexedLayers = lists:zip(lists:seq(1, TotalLayers), ReversedLayers),
 
-            PushFn = fun({Index, #{digest := Digest, data := Data, size := Size}}) ->
-                %% Register progress bar for this upload
-                Label = make_upload_label(Index, TotalLayers, Platform),
-                ProgressRef = ocibuild_progress:register_bar(#{
-                    label => Label,
-                    total => Size
-                }),
+            %% Check and upload all layers in parallel
+            PushFn = fun({Index, #{digest := Digest, data := Data, size := Size} = Layer}) ->
+                LayerType = maps:get(layer_type, Layer, undefined),
+                Label = make_upload_label(Index, TotalLayers, Platform, LayerType),
 
-                %% Create a progress callback for this layer
-                ProgressCallback = fun(Info) ->
-                    BytesSent = maps:get(bytes_sent, Info, 0),
-                    ocibuild_progress:update(ProgressRef, BytesSent)
-                end,
+                %% Check if blob already exists
+                CheckUrl = io_lib:format(
+                    "~s/v2/~s/blobs/~s",
+                    [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+                ),
+                Headers = auth_headers(Token),
 
-                LayerOpts = Opts#{
-                    layer_index => Index,
-                    total_layers => TotalLayers,
-                    progress => ProgressCallback
-                },
-                Result = push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts),
-                ocibuild_progress:complete(ProgressRef),
-                case Result of
-                    ok -> ok;
-                    {error, Reason} -> error({upload_failed, Digest, Reason})
+                case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
+                    {ok, _} ->
+                        %% Layer already exists - print through progress manager
+                        StatusMsg = iolist_to_binary([Label, ~": exists (skipped)"]),
+                        ocibuild_progress:print_status(StatusMsg),
+                        ok;
+                    {error, _} ->
+                        %% Need to upload - register progress bar
+                        ProgressRef = ocibuild_progress:register_bar(#{
+                            label => Label,
+                            total => Size
+                        }),
+
+                        ProgressCallback = fun(Info) ->
+                            BytesSent = maps:get(bytes_sent, Info, 0),
+                            ocibuild_progress:update(ProgressRef, BytesSent)
+                        end,
+
+                        LayerOpts = Opts#{
+                            layer_index => Index,
+                            total_layers => TotalLayers,
+                            progress => ProgressCallback
+                        },
+                        Result = do_push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts),
+                        ocibuild_progress:complete(ProgressRef),
+                        case Result of
+                            ok -> ok;
+                            {error, Reason} -> error({upload_failed, Digest, Reason})
+                        end
                 end
             end,
 
             try
+                %% All layers in parallel
                 ocibuild_layout:pmap_bounded(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
                 ok
             catch
@@ -1096,12 +1114,33 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
     end.
 
 %% Create a label for layer upload progress
--spec make_upload_label(pos_integer(), pos_integer(), ocibuild:platform() | undefined) -> binary().
-make_upload_label(Index, Total, undefined) ->
-    iolist_to_binary(io_lib:format("Upload ~B/~B", [Index, Total]));
-make_upload_label(Index, Total, Platform) ->
+%% Pads label to fixed width so progress bars align
+%% Width of 40 accommodates labels like "Layer 10/10 (deps, linux/arm64/v8)"
+-define(LABEL_WIDTH, 40).
+
+-spec make_upload_label(
+    pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined
+) -> binary().
+make_upload_label(Index, Total, undefined, undefined) ->
+    pad_label(io_lib:format("Layer ~B/~B", [Index, Total]));
+make_upload_label(Index, Total, undefined, LayerType) ->
+    pad_label(io_lib:format("Layer ~B/~B (~s)", [Index, Total, LayerType]));
+make_upload_label(Index, Total, Platform, undefined) ->
     Arch = get_platform_arch(Platform),
-    iolist_to_binary(io_lib:format("Upload ~B/~B (~s)", [Index, Total, Arch])).
+    pad_label(io_lib:format("Layer ~B/~B (~s)", [Index, Total, Arch]));
+make_upload_label(Index, Total, Platform, LayerType) ->
+    Arch = get_platform_arch(Platform),
+    pad_label(io_lib:format("Layer ~B/~B (~s, ~s)", [Index, Total, LayerType, Arch])).
+
+%% Pad label to fixed width for alignment
+-spec pad_label(iolist()) -> binary().
+pad_label(Label) ->
+    Bin = iolist_to_binary(Label),
+    Len = byte_size(Bin),
+    case Len < ?LABEL_WIDTH of
+        true -> <<Bin/binary, (binary:copy(~" ", ?LABEL_WIDTH - Len))/binary>>;
+        false -> Bin
+    end.
 
 %% Push base image layers to target registry in parallel
 -spec push_base_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
@@ -1750,22 +1789,23 @@ stop_httpc() ->
     case persistent_term:get(?HTTPC_KEY, undefined) of
         undefined ->
             ok;
-        Pid ->
+        HttpcPid ->
             %% Clear the persistent_term first so no new requests use this pid
             _ = persistent_term:erase(?HTTPC_KEY),
-            %% Stop httpc in a separate process to avoid EXIT signal propagation
-            %% The spawn will unregister the name and stop the httpc process
+            %% Spawn an UNLINKED process to do cleanup, with trap_exit to contain
+            %% shutdown signals from inets:stop. This prevents EXIT messages from
+            %% propagating to the caller/shell.
             CleanupPid = spawn(fun() ->
+                process_flag(trap_exit, true),
                 _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
-                _ = inets:stop(stand_alone, Pid)
+                _ = (catch inets:stop(stand_alone, HttpcPid))
             end),
-            %% Wait synchronously for cleanup process to finish, with a timeout
             Ref = erlang:monitor(process, CleanupPid),
             receive
-                {'DOWN', Ref, process, CleanupPid, _Reason} ->
-                    ok
+                {'DOWN', Ref, process, CleanupPid, _} -> ok
             after ?DEFAULT_TIMEOUT ->
-                %% Cleanup took too long; stop waiting but keep going
+                %% Explicitly kill to prevent orphaned processes
+                exit(CleanupPid, kill),
                 erlang:demonitor(Ref, [flush]),
                 ok
             end

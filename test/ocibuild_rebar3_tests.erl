@@ -1053,3 +1053,365 @@ create_mock_release() ->
     ok = file:write_file(RelPath, ~"{release, {\"myapp\", \"1.0.0\"}, ...}."),
 
     TmpDir.
+
+%%%===================================================================
+%%% Smart Layer Partitioning tests
+%%%===================================================================
+
+%% rebar.lock parsing tests
+
+parse_rebar_lock_new_format_test() ->
+    %% New format with version tuple: {"1.2.0", [{...}]}
+    LockContent = <<
+        "{\"1.2.0\",\n"
+        "[{<<\"cowboy\">>,{pkg,<<\"cowboy\">>,<<\"2.10.0\">>},0},\n"
+        " {<<\"cowlib\">>,{pkg,<<\"cowlib\">>,<<\"2.12.1\">>},1}]}.\n"
+    >>,
+    TmpFile = make_temp_lock_file("rebar_new", LockContent),
+    try
+        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+        ?assertEqual(2, length(Deps)),
+        [Cowboy, Cowlib] = lists:sort(
+            fun(A, B) ->
+                maps:get(name, A) < maps:get(name, B)
+            end,
+            Deps
+        ),
+        ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
+        ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
+        ?assertEqual(~"hex", maps:get(source, Cowboy)),
+        ?assertEqual(~"cowlib", maps:get(name, Cowlib)),
+        ?assertEqual(~"2.12.1", maps:get(version, Cowlib))
+    after
+        file:delete(TmpFile)
+    end.
+
+parse_rebar_lock_old_format_test() ->
+    %% Old format: just a list without version tuple
+    LockContent = <<
+        "[{<<\"cowboy\">>,{pkg,<<\"cowboy\">>,<<\"2.10.0\">>},0}].\n"
+    >>,
+    TmpFile = make_temp_lock_file("rebar_old", LockContent),
+    try
+        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+        ?assertEqual(1, length(Deps)),
+        [Cowboy] = Deps,
+        ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
+        ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
+        ?assertEqual(~"hex", maps:get(source, Cowboy))
+    after
+        file:delete(TmpFile)
+    end.
+
+parse_rebar_lock_git_dep_test() ->
+    LockContent = <<
+        "[{<<\"mylib\">>,{git,\"https://github.com/org/mylib.git\",{ref,\"abc123\"}},0}].\n"
+    >>,
+    TmpFile = make_temp_lock_file("rebar_git", LockContent),
+    try
+        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+        ?assertEqual(1, length(Deps)),
+        [Mylib] = Deps,
+        ?assertEqual(~"mylib", maps:get(name, Mylib)),
+        ?assertEqual(~"abc123", maps:get(version, Mylib)),
+        ?assertEqual(~"https://github.com/org/mylib.git", maps:get(source, Mylib))
+    after
+        file:delete(TmpFile)
+    end.
+
+parse_rebar_lock_empty_test() ->
+    LockContent = ~"[].\n",
+    TmpFile = make_temp_lock_file("rebar_empty", LockContent),
+    try
+        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+        ?assertEqual([], Deps)
+    after
+        file:delete(TmpFile)
+    end.
+
+parse_rebar_lock_missing_test() ->
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock("/nonexistent/path/rebar.lock"),
+    ?assertEqual([], Deps).
+
+%% Layer classification tests
+%% New signature: classify_file_layer(Path, DepNames, AppName, Workdir, HasErts)
+
+classify_erts_directory_test() ->
+    DepNames = sets:from_list([~"cowboy"]),
+    %% erts-* directory always goes to erts layer
+    ?assertEqual(
+        erts,
+        ocibuild_release:classify_file_layer(
+            ~"/app/erts-14.2.1/bin/erl", DepNames, ~"myapp", ~"/app", true
+        )
+    ).
+
+classify_otp_lib_with_erts_test() ->
+    DepNames = sets:from_list([~"cowboy"]),
+    %% OTP libs (not in lock file, not app) -> erts layer when ERTS bundled
+    ?assertEqual(
+        erts,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/stdlib-5.0/ebin/lists.beam", DepNames, ~"myapp", ~"/app", true
+        )
+    ),
+    ?assertEqual(
+        erts,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/kernel-9.0/ebin/kernel.app", DepNames, ~"myapp", ~"/app", true
+        )
+    ).
+
+classify_otp_lib_without_erts_test() ->
+    DepNames = sets:from_list([~"cowboy"]),
+    %% OTP libs -> dep layer when ERTS NOT bundled (stable like deps)
+    ?assertEqual(
+        dep,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/stdlib-5.0/ebin/lists.beam", DepNames, ~"myapp", ~"/app", false
+        )
+    ),
+    ?assertEqual(
+        dep,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/kernel-9.0/ebin/kernel.app", DepNames, ~"myapp", ~"/app", false
+        )
+    ).
+
+classify_dependency_lib_test() ->
+    DepNames = sets:from_list([~"cowboy", ~"cowlib"]),
+    %% Deps from lock file -> dep layer
+    ?assertEqual(
+        dep,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", DepNames, ~"myapp", ~"/app", true
+        )
+    ),
+    ?assertEqual(
+        dep,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/cowlib-2.12.1/src/cow_http.erl", DepNames, ~"myapp", ~"/app", true
+        )
+    ).
+
+classify_app_lib_test() ->
+    DepNames = sets:from_list([~"cowboy"]),
+    %% App name matches -> app layer
+    ?assertEqual(
+        app,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/myapp-1.0.0/ebin/myapp.app", DepNames, ~"myapp", ~"/app", true
+        )
+    ).
+
+classify_hyphenated_app_name_test() ->
+    %% App names with hyphens (e.g., "my-cool-app-1.0.0" should extract as "my-cool-app")
+    DepNames = sets:from_list([~"cowboy"]),
+    ?assertEqual(
+        app,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/my-cool-app-1.0.0/ebin/my_cool_app.app",
+            DepNames,
+            ~"my-cool-app",
+            ~"/app",
+            true
+        )
+    ),
+    %% Hyphenated dep should also work
+    HyphenatedDeps = sets:from_list([~"plug-crypto"]),
+    ?assertEqual(
+        dep,
+        ocibuild_release:classify_file_layer(
+            ~"/app/lib/plug-crypto-2.0.0/ebin/plug_crypto.app",
+            HyphenatedDeps,
+            ~"myapp",
+            ~"/app",
+            true
+        )
+    ).
+
+classify_bin_directory_test() ->
+    DepNames = sets:from_list([~"cowboy"]),
+    %% bin/ directory -> app layer
+    ?assertEqual(
+        app,
+        ocibuild_release:classify_file_layer(
+            ~"/app/bin/myapp", DepNames, ~"myapp", ~"/app", true
+        )
+    ).
+
+classify_releases_directory_test() ->
+    DepNames = sets:from_list([~"cowboy"]),
+    %% releases/ directory -> app layer
+    ?assertEqual(
+        app,
+        ocibuild_release:classify_file_layer(
+            ~"/app/releases/1.0.0/myapp.rel", DepNames, ~"myapp", ~"/app", true
+        )
+    ).
+
+%% Partition tests
+
+partition_files_with_erts_test() ->
+    Files = [
+        {~"/app/erts-14.2.1/bin/erl", ~"erl", 8#755},
+        {~"/app/lib/stdlib-5.0/ebin/lists.beam", ~"beam", 8#644},
+        {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644},
+        {~"/app/bin/myapp", ~"script", 8#755}
+    ],
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+
+    {ErtsFiles, DepFiles, AppFiles} =
+        ocibuild_release:partition_files_by_layer(Files, Deps, ~"myapp", ~"/app", true),
+
+    %% ERTS layer: erts dir + stdlib (OTP lib)
+    ?assertEqual(2, length(ErtsFiles)),
+    %% Deps layer: cowboy
+    ?assertEqual(1, length(DepFiles)),
+    %% App layer: myapp lib + bin
+    ?assertEqual(2, length(AppFiles)).
+
+partition_files_without_erts_test() ->
+    %% When ERTS not bundled, OTP libs go to deps layer
+    Files = [
+        {~"/app/lib/stdlib-5.0/ebin/lists.beam", ~"beam", 8#644},
+        {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644},
+        {~"/app/bin/myapp", ~"script", 8#755}
+    ],
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+
+    {ErtsFiles, DepFiles, AppFiles} =
+        ocibuild_release:partition_files_by_layer(Files, Deps, ~"myapp", ~"/app", false),
+
+    %% ERTS layer: empty (no ERTS bundled)
+    ?assertEqual(0, length(ErtsFiles)),
+    %% Deps layer: cowboy + stdlib (OTP lib treated like dep)
+    ?assertEqual(2, length(DepFiles)),
+    %% App layer: myapp lib + bin
+    ?assertEqual(2, length(AppFiles)).
+
+partition_files_no_deps_with_erts_test() ->
+    Files = [
+        {~"/app/lib/stdlib-5.0/ebin/lists.beam", ~"beam", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644},
+        {~"/app/bin/myapp", ~"script", 8#755}
+    ],
+
+    {ErtsFiles, DepFiles, AppFiles} =
+        ocibuild_release:partition_files_by_layer(Files, [], ~"myapp", ~"/app", true),
+
+    %% stdlib goes to ERTS layer (OTP lib with ERTS bundled)
+    ?assertEqual(1, length(ErtsFiles)),
+    ?assertEqual(0, length(DepFiles)),
+    ?assertEqual(2, length(AppFiles)).
+
+partition_files_no_deps_without_erts_test() ->
+    Files = [
+        {~"/app/lib/stdlib-5.0/ebin/lists.beam", ~"beam", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644},
+        {~"/app/bin/myapp", ~"script", 8#755}
+    ],
+
+    {ErtsFiles, DepFiles, AppFiles} =
+        ocibuild_release:partition_files_by_layer(Files, [], ~"myapp", ~"/app", false),
+
+    %% stdlib goes to deps layer (OTP lib without ERTS)
+    ?assertEqual(0, length(ErtsFiles)),
+    ?assertEqual(1, length(DepFiles)),
+    ?assertEqual(2, length(AppFiles)).
+
+%% Layer building tests
+
+build_layers_with_deps_and_erts_test() ->
+    Files = [
+        {~"/app/erts-14.2.1/bin/erl", ~"erl", 8#755},
+        {~"/app/lib/stdlib-5.0/ebin/lists.beam", ~"beam", 8#644},
+        {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
+    ],
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    TmpDir = make_temp_release_dir_with_erts(),
+    try
+        {ok, Image0} = ocibuild:scratch(),
+        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
+        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
+        Layers = maps:get(layers, Image1),
+        %% Should have 3 layers: ERTS, deps, app
+        ?assertEqual(3, length(Layers))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+build_layers_with_deps_no_erts_test() ->
+    Files = [
+        {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
+    ],
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    TmpDir = make_temp_release_dir_no_erts(),
+    try
+        {ok, Image0} = ocibuild:scratch(),
+        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
+        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
+        Layers = maps:get(layers, Image1),
+        %% Should have 2 layers: deps, app
+        ?assertEqual(2, length(Layers))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+build_layers_fallback_no_deps_test() ->
+    Files = [
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644},
+        {~"/app/bin/myapp", ~"script", 8#755}
+    ],
+    TmpDir = make_temp_release_dir_no_erts(),
+    try
+        {ok, Image0} = ocibuild:scratch(),
+        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
+        %% Empty deps should fall back to single layer
+        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, [], Opts),
+        Layers = maps:get(layers, Image1),
+        ?assertEqual(1, length(Layers))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+build_layers_fallback_no_app_name_test() ->
+    %% When app_name is missing, should fall back to single layer
+    %% even if deps are present (can't do smart layering without knowing the app)
+    Files = [
+        {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
+    ],
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    TmpDir = make_temp_release_dir_no_erts(),
+    try
+        {ok, Image0} = ocibuild:scratch(),
+        %% No app_name in opts - should fall back to single layer
+        Opts = #{release_name => ~"myapp", workdir => ~"/app"},
+        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
+        Layers = maps:get(layers, Image1),
+        ?assertEqual(1, length(Layers))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%% Helper functions for layer tests
+
+make_temp_lock_file(Prefix, Content) ->
+    TmpDir = make_temp_dir("lock_test"),
+    LockFile = filename:join(TmpDir, Prefix ++ ".lock"),
+    ok = file:write_file(LockFile, Content),
+    LockFile.
+
+make_temp_release_dir_with_erts() ->
+    TmpDir = make_temp_dir("erts_test"),
+    %% Create erts directory to simulate bundled ERTS
+    ok = file:make_dir(filename:join(TmpDir, "erts-14.2.1")),
+    TmpDir.
+
+make_temp_release_dir_no_erts() ->
+    make_temp_dir("no_erts_test").

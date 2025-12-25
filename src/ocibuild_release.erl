@@ -68,6 +68,13 @@ Security features:
     validate_multiplatform/2
 ]).
 
+%% Public API - Smart Layer Partitioning
+-export([
+    partition_files_by_layer/5,
+    classify_file_layer/5,
+    build_release_layers/5
+]).
+
 %% Utility exports (used by build tools)
 -export([
     to_binary/1,
@@ -156,8 +163,13 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Get auto-annotation config (vcs_annotations defaults to true)
         VcsAnnotations = maps:get(vcs_annotations, Config, true),
         AppVersion = maps:get(app_version, Config, undefined),
+        %% Get app_name for layer classification (may differ from release_name)
+        AppName = maps:get(app_name, Config, undefined),
+        %% Get dependencies for smart layer classification
+        Dependencies = ocibuild_adapter:get_dependencies(AdapterModule, AdapterState),
         BuildOpts = #{
             release_name => ReleaseName,
+            app_name => AppName,
             release_path => ReleasePath,
             workdir => Workdir,
             env => EnvMap,
@@ -168,7 +180,8 @@ run(AdapterModule, AdapterState, Opts) ->
             auth => PullAuth,
             uid => Uid,
             vcs_annotations => VcsAnnotations,
-            app_version => AppVersion
+            app_version => AppVersion,
+            dependencies => Dependencies
         },
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
         %% Output the image(s) - this is where layer downloads happen for save
@@ -363,13 +376,22 @@ build_auto_annotations(Image, ReleasePath, Config) ->
     add_base_image_annotations(Image, Annotations3).
 
 %% @private Add VCS annotations (source URL, revision) from detected VCS
+%% Wrapped in try-catch to prevent VCS failures from breaking the build
 -spec add_vcs_annotations(file:filename(), map()) -> map().
 add_vcs_annotations(ReleasePath, Annotations) ->
-    case ocibuild_vcs:detect(ReleasePath) of
-        {ok, VcsModule} ->
-            VcsAnnotations = ocibuild_vcs:get_annotations(VcsModule, ReleasePath),
-            maps:merge(Annotations, VcsAnnotations);
-        not_found ->
+    try
+        case ocibuild_vcs:detect(ReleasePath) of
+            {ok, VcsModule} ->
+                VcsAnnotations = ocibuild_vcs:get_annotations(VcsModule, ReleasePath),
+                maps:merge(Annotations, VcsAnnotations);
+            not_found ->
+                Annotations
+        end
+    catch
+        _Class:_Reason ->
+            %% VCS detection/annotation failed - silently continue without VCS annotations
+            %% This prevents issues like git binary not found or permissions errors
+            %% from breaking the image build
             Annotations
     end.
 
@@ -430,8 +452,11 @@ configure_release_image(Image0, Files, Opts) ->
     Uid = maps:get(uid, Opts, undefined),
     Annotations = maps:get(annotations, Opts, #{}),
 
-    %% Add release layer
-    Image1 = ocibuild:add_layer(Image0, Files),
+    %% Smart layer building: uses dependency info to split into 2-3 layers
+    %% Falls back to single layer if no dependencies provided
+    ReleasePath = maps:get(release_path, Opts, undefined),
+    Dependencies = maps:get(dependencies, Opts, []),
+    Image1 = build_release_layers(Image0, Files, ReleasePath, Dependencies, Opts),
 
     %% Set working directory
     Image2 = ocibuild:workdir(Image1, Workdir),
@@ -1031,7 +1056,7 @@ to_binary(Value) when is_binary(Value) ->
 to_binary(Value) when is_list(Value) ->
     list_to_binary(Value);
 to_binary(Value) when is_atom(Value) ->
-    atom_to_binary(Value);
+    atom_to_binary(Value, utf8);
 to_binary(Value) when is_integer(Value) ->
     integer_to_binary(Value).
 
@@ -1550,6 +1575,228 @@ validate_multiplatform(ReleasePath, _Platforms) ->
                     ok
             end
     end.
+
+%%%===================================================================
+%%% Smart Layer Partitioning
+%%%===================================================================
+
+-doc """
+Partition collected files into ERTS, dependency, and application layers.
+
+Files are classified based on their container paths and the lock file:
+- **App layer**: `lib/<app_name>-*`, `bin/`, `releases/`
+- **Deps layer**: `lib/<name>-*` where `name` is in the lock file
+- **ERTS layer** (if bundled): `erts-*` and `lib/<name>-*` NOT in lock file (OTP libs)
+
+If ERTS is not bundled, OTP libs go to the deps layer instead.
+
+The lock file is the source of truth for dependencies - anything in `lib/`
+that's not in the lock file and not the app itself must be an OTP library.
+
+Returns `{ErtsFiles, DepFiles, AppFiles}` where each is a list of
+`{Path, Content, Mode}` tuples.
+""".
+-spec partition_files_by_layer(
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    Deps :: [#{name := binary(), version := binary(), source := binary()}],
+    AppName :: binary(),
+    Workdir :: binary(),
+    HasErts :: boolean()
+) ->
+    {
+        ErtsFiles :: [{binary(), binary(), non_neg_integer()}],
+        DepFiles :: [{binary(), binary(), non_neg_integer()}],
+        AppFiles :: [{binary(), binary(), non_neg_integer()}]
+    }.
+partition_files_by_layer(Files, Deps, AppName, Workdir, HasErts) ->
+    DepNames = sets:from_list([maps:get(name, D) || D <- Deps]),
+
+    lists:foldl(
+        fun({Path, _Content, _Mode} = File, {Erts, DepAcc, App}) ->
+            case classify_file_layer(Path, DepNames, AppName, Workdir, HasErts) of
+                erts -> {[File | Erts], DepAcc, App};
+                dep -> {Erts, [File | DepAcc], App};
+                app -> {Erts, DepAcc, [File | App]}
+            end
+        end,
+        {[], [], []},
+        Files
+    ).
+
+-doc """
+Classify a single file path into erts, dep, or app layer.
+
+Classification rules (lock file is source of truth):
+1. `lib/<app_name>-*` -> app layer (your application)
+2. `lib/<name>-*` where name is in lock file -> dep layer
+3. `lib/<name>-*` where name is NOT in lock file -> OTP lib:
+   - If ERTS bundled: erts layer
+   - If ERTS not bundled: dep layer (OTP libs are stable like deps)
+4. `erts-*` directory -> erts layer
+5. `bin/`, `releases/`, etc. -> app layer
+""".
+-spec classify_file_layer(
+    Path :: binary(),
+    DepNames :: sets:set(binary()),
+    AppName :: binary(),
+    Workdir :: binary(),
+    HasErts :: boolean()
+) -> erts | dep | app.
+classify_file_layer(Path, DepNames, AppName, Workdir, HasErts) ->
+    %% Remove workdir prefix to get relative path
+    RelPath = strip_workdir_prefix(Path, Workdir),
+
+    case extract_path_component(RelPath) of
+        {erts, _ErtsVersion} ->
+            %% erts-* directory always goes to erts layer
+            erts;
+        {lib, LibName} ->
+            %% Check in order: app name, then deps, then OTP (everything else)
+            case LibName =:= AppName of
+                true ->
+                    app;
+                false ->
+                    case sets:is_element(LibName, DepNames) of
+                        true ->
+                            dep;
+                        false ->
+                            %% Not app, not dep -> must be OTP lib
+                            %% With ERTS: group with ERTS layer
+                            %% Without ERTS: treat like deps (stable, cached)
+                            case HasErts of
+                                true -> erts;
+                                false -> dep
+                            end
+                    end
+            end;
+        _Other ->
+            %% bin/, releases/, etc. go to app layer
+            app
+    end.
+
+-doc """
+Build release layers with smart dependency layering when available.
+
+If dependency information is provided, creates 2-3 layers:
+- **With ERTS** (bundled): ERTS layer, Deps layer, App layer
+- **Without ERTS** (multi-platform): Deps layer, App layer
+
+Falls back to single layer if no dependencies provided (backward compatible).
+""".
+-spec build_release_layers(
+    Image :: ocibuild:image(),
+    Files :: [{binary(), binary(), non_neg_integer()}],
+    ReleasePath :: file:filename() | undefined,
+    Deps :: [#{name := binary(), version := binary(), source := binary()}],
+    Opts :: map()
+) -> ocibuild:image().
+build_release_layers(Image0, Files, _ReleasePath, [], _Opts) ->
+    %% No dependency info - single layer fallback
+    ocibuild:add_layer(Image0, Files);
+build_release_layers(Image0, Files, _ReleasePath, _Deps, #{app_name := undefined}) ->
+    %% No app_name - can't do smart layering, single layer fallback
+    ocibuild:add_layer(Image0, Files);
+build_release_layers(Image0, Files, ReleasePath, Deps, #{app_name := AppName} = Opts) ->
+    %% Smart layering with known app_name
+    Workdir = to_binary(maps:get(workdir, Opts, ?DEFAULT_WORKDIR)),
+    HasErts = has_bundled_erts(ReleasePath),
+
+    {ErtsFiles, DepFiles, AppFiles} =
+        partition_files_by_layer(Files, Deps, to_binary(AppName), Workdir, HasErts),
+
+    case HasErts of
+        true ->
+            %% 3 layers: ERTS + OTP libs -> Deps -> App
+            I1 = add_layer_if_nonempty(Image0, ErtsFiles, erts),
+            I2 = add_layer_if_nonempty(I1, DepFiles, deps),
+            add_layer_if_nonempty(I2, AppFiles, app);
+        false ->
+            %% 2 layers: Deps + OTP libs -> App
+            I1 = add_layer_if_nonempty(Image0, DepFiles, deps),
+            add_layer_if_nonempty(I1, AppFiles, app)
+    end;
+build_release_layers(Image0, Files, _ReleasePath, _Deps, _Opts) ->
+    %% No app_name in opts - single layer fallback
+    ocibuild:add_layer(Image0, Files).
+
+%% @private Add layer only if file list is non-empty
+-spec add_layer_if_nonempty(ocibuild:image(), [{binary(), binary(), non_neg_integer()}], atom()) ->
+    ocibuild:image().
+add_layer_if_nonempty(Image, [], _Type) ->
+    Image;
+add_layer_if_nonempty(Image, Files, Type) ->
+    ocibuild:add_layer(Image, Files, #{layer_type => Type}).
+
+%% @private Strip workdir prefix from path
+-spec strip_workdir_prefix(binary(), binary()) -> binary().
+strip_workdir_prefix(Path, Workdir) ->
+    WorkdirWithSlash = <<Workdir/binary, "/">>,
+    WorkdirLen = byte_size(WorkdirWithSlash),
+    case Path of
+        <<WorkdirWithSlash:WorkdirLen/binary, Rest/binary>> ->
+            Rest;
+        _ ->
+            %% Try without trailing slash
+            WorkdirLen2 = byte_size(Workdir),
+            case Path of
+                <<Workdir:WorkdirLen2/binary, "/", Rest/binary>> -> Rest;
+                _ -> Path
+            end
+    end.
+
+%% @private Extract component type and name from relative path
+%% Returns {erts, Version}, {lib, AppName}, or {other, FirstComponent}
+-spec extract_path_component(binary()) ->
+    {erts, binary()} | {lib, binary()} | {other, binary()}.
+extract_path_component(Path) ->
+    case binary:split(Path, ~"/") of
+        [First | _] ->
+            case First of
+                <<"erts-", Version/binary>> ->
+                    {erts, Version};
+                ~"lib" ->
+                    %% Extract app name from lib/appname-version/...
+                    case binary:split(Path, ~"/", [global]) of
+                        [~"lib", AppDir | _] ->
+                            AppName = extract_app_name_from_dir(AppDir),
+                            {lib, AppName};
+                        _ ->
+                            {other, First}
+                    end;
+                _ ->
+                    {other, First}
+            end;
+        _ ->
+            {other, Path}
+    end.
+
+%% @private Extract app name from versioned directory name
+%% "cowboy-2.10.0" -> "cowboy"
+%% "my_app-1.0.0" -> "my_app"
+-spec extract_app_name_from_dir(binary()) -> binary().
+extract_app_name_from_dir(DirName) ->
+    %% Find the last hyphen followed by a version-like string
+    case binary:split(DirName, ~"-", [global]) of
+        [Name] ->
+            Name;
+        Parts ->
+            %% Check if last part looks like a version (starts with digit)
+            LastPart = lists:last(Parts),
+            case looks_like_version(LastPart) of
+                true ->
+                    %% Join all but last part
+                    iolist_to_binary(lists:join(~"-", lists:droplast(Parts)));
+                false ->
+                    %% Non-standard version (e.g., "myapp-main", "cowboy-latest")
+                    %% Return full dir name as we can't reliably extract app name
+                    DirName
+            end
+    end.
+
+%% @private Check if a binary looks like a version number (starts with digit)
+-spec looks_like_version(binary()) -> boolean().
+looks_like_version(<<C, _/binary>>) when C >= $0, C =< $9 -> true;
+looks_like_version(_) -> false.
 
 %% @private Find native files in an app's priv directory
 -spec find_native_files_in_app(file:filename(), string()) ->

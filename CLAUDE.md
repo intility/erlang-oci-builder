@@ -27,6 +27,11 @@ mix test test/ocibuild_mix_test.exs:42  # Single test by line
 rebar3 fmt -w
 ```
 
+## Code Style
+
+- Always use the `~` sigil for binary literals.
+- Always prefer markdown style docs for docstrings.
+
 ## Architecture
 
 ```

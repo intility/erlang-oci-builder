@@ -36,7 +36,7 @@ memory limits.
 %% API - Building images
 -export([from/1, from/2, from/3, scratch/0]).
 %% API - Adding content
--export([add_layer/2, copy/3]).
+-export([add_layer/2, add_layer/3, copy/3]).
 %% API - Configuration
 -export([entrypoint/2, cmd/2, env/2, workdir/2, expose/2, label/3, user/2, annotation/3]).
 %% API - Output
@@ -271,10 +271,26 @@ Image1 = ocibuild:add_layer(Image, [
 """.
 -spec add_layer(image(), [{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
     image().
-add_layer(#{layers := Layers, config := Config} = Image, Files) ->
+add_layer(Image, Files) ->
+    add_layer(Image, Files, #{}).
+
+-doc """
+Add a layer to the image from a list of files with options.
+
+Options:
+- `layer_type`: Type of layer content (erts, deps, app) for progress display
+
+```
+Image1 = ocibuild:add_layer(Image, Files, #{layer_type => app}).
+```
+""".
+-spec add_layer(image(), [{Path :: binary(), Content :: binary(), Mode :: integer()}], map()) ->
+    image().
+add_layer(#{layers := Layers, config := Config} = Image, Files, Opts) ->
     %% Get reproducible timestamp for layer mtime
     MTime = ocibuild_time:get_timestamp(),
-    Layer = ocibuild_layer:create(Files, #{mtime => MTime}),
+    LayerOpts = Opts#{mtime => MTime},
+    Layer = ocibuild_layer:create(Files, LayerOpts),
     NewConfig = add_layer_to_config(Config, Layer),
     %% Prepend for O(1) - layers are stored in reverse order, reversed on export
     Image#{layers := [Layer | Layers], config := NewConfig}.
