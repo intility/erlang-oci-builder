@@ -2,18 +2,19 @@ defmodule Ocibuild.LockTest do
   use ExUnit.Case, async: true
 
   alias Ocibuild.Lock
+  alias Ocibuild.TestHelpers
 
   describe "get_dependencies/0" do
     test "returns empty list when mix.lock doesn't exist" do
       # Run from a temp directory without mix.lock
-      tmp_dir = make_temp_dir("no_lock")
+      tmp_dir = TestHelpers.make_temp_dir("no_lock")
 
       try do
         File.cd!(tmp_dir, fn ->
           assert Lock.get_dependencies() == []
         end)
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
   end
@@ -27,7 +28,7 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = make_temp_dir("hex_lock")
+      tmp_dir = TestHelpers.make_temp_dir("hex_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -44,7 +45,7 @@ defmodule Ocibuild.LockTest do
         assert plug.version == "1.14.0"
         assert plug.source == "hex"
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -56,7 +57,7 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = make_temp_dir("hex_lock_v7")
+      tmp_dir = TestHelpers.make_temp_dir("hex_lock_v7")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -69,7 +70,7 @@ defmodule Ocibuild.LockTest do
         assert cowboy.version == "2.10.0"
         assert cowboy.source == "hex"
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -80,7 +81,7 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = make_temp_dir("git_lock")
+      tmp_dir = TestHelpers.make_temp_dir("git_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -93,7 +94,7 @@ defmodule Ocibuild.LockTest do
         assert my_dep.version == "abc123def456"
         assert my_dep.source == "https://github.com/example/my_dep.git"
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -104,7 +105,7 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = make_temp_dir("unknown_lock")
+      tmp_dir = TestHelpers.make_temp_dir("unknown_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -117,7 +118,7 @@ defmodule Ocibuild.LockTest do
         assert unknown.version == "unknown"
         assert unknown.source == "unknown"
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -130,7 +131,7 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = make_temp_dir("mixed_lock")
+      tmp_dir = TestHelpers.make_temp_dir("mixed_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -148,7 +149,7 @@ defmodule Ocibuild.LockTest do
         local = Enum.find(deps, &(&1.name == "local_dep"))
         assert local.source == "unknown"
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -158,7 +159,7 @@ defmodule Ocibuild.LockTest do
     end
 
     test "returns empty list for empty lock file" do
-      tmp_dir = make_temp_dir("empty_lock")
+      tmp_dir = TestHelpers.make_temp_dir("empty_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -166,7 +167,7 @@ defmodule Ocibuild.LockTest do
         deps = Lock.get_dependencies(lock_path)
         assert deps == []
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -180,7 +181,7 @@ defmodule Ocibuild.LockTest do
 
       lock_content = "%{\n  #{deps_list}\n}"
 
-      tmp_dir = make_temp_dir("many_deps_lock")
+      tmp_dir = TestHelpers.make_temp_dir("many_deps_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -190,7 +191,7 @@ defmodule Ocibuild.LockTest do
         assert length(deps) == 50
         assert Enum.all?(deps, &(&1.source == "hex"))
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
 
@@ -202,7 +203,7 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = make_temp_dir("quoted_lock")
+      tmp_dir = TestHelpers.make_temp_dir("quoted_lock")
       lock_path = Path.join(tmp_dir, "mix.lock")
 
       try do
@@ -214,32 +215,8 @@ defmodule Ocibuild.LockTest do
         assert plug_crypto.name == "plug_crypto"
         assert plug_crypto.version == "2.0.0"
       after
-        cleanup_temp_dir(tmp_dir)
+        TestHelpers.cleanup_temp_dir(tmp_dir)
       end
     end
-  end
-
-  # Test helpers
-
-  defp temp_dir do
-    case :os.type() do
-      {:win32, _} ->
-        System.get_env("TEMP") || System.get_env("TMP") || "C:\\Temp"
-
-      _ ->
-        "/tmp"
-    end
-  end
-
-  defp make_temp_dir(prefix) do
-    unique = :erlang.unique_integer([:positive])
-    dir_name = "ocibuild_lock_test_#{prefix}_#{unique}"
-    tmp_dir = Path.join(temp_dir(), dir_name)
-    File.mkdir_p!(tmp_dir)
-    tmp_dir
-  end
-
-  defp cleanup_temp_dir(dir) do
-    File.rm_rf!(dir)
   end
 end

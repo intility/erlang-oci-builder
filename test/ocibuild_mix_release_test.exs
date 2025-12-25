@@ -1,98 +1,8 @@
 defmodule Ocibuild.MixReleaseTest do
   use ExUnit.Case, async: true
 
-  # Test helper module that replicates private function logic for testing
-  defmodule TestHelpers do
-    @moduledoc false
-
-    def format_error({:release_not_found, reason}),
-      do: "Failed to find release: #{inspect(reason)}"
-
-    def format_error({:collect_failed, reason}),
-      do: "Failed to collect release files: #{inspect(reason)}"
-
-    def format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
-    def format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
-    def format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"
-
-    def format_error({:bundled_erts, message}),
-      do: "Multi-platform build failed: #{message}"
-
-    def format_error({:nif_warning, files}),
-      do: "Warning: Native code detected that may not be portable: #{inspect(files)}"
-
-    def format_error(reason), do: "OCI build error: #{inspect(reason)}"
-
-    def to_erlang_map(map) when is_map(map) do
-      Map.new(map, fn {k, v} -> {to_binary(k), to_binary(v)} end)
-    end
-
-    def to_binary(value) when is_binary(value), do: value
-    def to_binary(value) when is_atom(value), do: Atom.to_string(value)
-    def to_binary(value) when is_list(value), do: to_string(value)
-    def to_binary(value), do: to_string(value)
-
-    def get_tag(ocibuild_config, release_name, version) do
-      case Keyword.get(ocibuild_config, :tag) do
-        nil -> "#{release_name}:#{version}"
-        tag -> tag
-      end
-    end
-
-    def get_description(ocibuild_config) do
-      case Keyword.get(ocibuild_config, :description) do
-        nil -> :undefined
-        desc -> to_binary(desc)
-      end
-    end
-
-    def get_push(ocibuild_config) do
-      case Keyword.get(ocibuild_config, :push) do
-        nil -> nil
-        registry -> to_binary(registry)
-      end
-    end
-
-    def get_platform(ocibuild_config) do
-      case Keyword.get(ocibuild_config, :platform) do
-        nil -> nil
-        platform when is_binary(platform) -> platform
-        platform when is_list(platform) -> to_binary(platform)
-      end
-    end
-
-    def get_chunk_size(ocibuild_config) do
-      case Keyword.get(ocibuild_config, :chunk_size) do
-        nil -> nil
-        size when is_integer(size) and size >= 1 and size <= 100 -> size * 1024 * 1024
-        _size -> nil
-      end
-    end
-
-    # Simulate building state from a release struct and config
-    def build_state(release_name, release_version, release_path, app_name, ocibuild_config) do
-      %{
-        release_name: release_name,
-        app_name: app_name,
-        release_path: to_charlist(release_path),
-        base_image: Keyword.get(ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),
-        workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
-        env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
-        expose: Keyword.get(ocibuild_config, :expose, []),
-        labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
-        cmd: Keyword.get(ocibuild_config, :cmd, "start") |> to_binary(),
-        description: get_description(ocibuild_config),
-        tag: get_tag(ocibuild_config, release_name, release_version) |> to_binary(),
-        output: nil,
-        push: get_push(ocibuild_config),
-        chunk_size: get_chunk_size(ocibuild_config),
-        platform: get_platform(ocibuild_config),
-        app_version: to_binary(release_version),
-        uid: Keyword.get(ocibuild_config, :uid),
-        vcs_annotations: Keyword.get(ocibuild_config, :vcs_annotations, true)
-      }
-    end
-  end
+  # Use shared test helpers
+  alias Ocibuild.TestHelpers
 
   describe "format_error/1" do
     test "formats release_not_found" do
@@ -136,34 +46,34 @@ defmodule Ocibuild.MixReleaseTest do
     end
   end
 
-  describe "get_tag/3" do
+  describe "get_tag_from_config/3" do
     test "uses config tag when provided" do
       config = [tag: "custom:tag"]
-      assert TestHelpers.get_tag(config, :myapp, "1.0.0") == "custom:tag"
+      assert TestHelpers.get_tag_from_config(config, :myapp, "1.0.0") == "custom:tag"
     end
 
     test "generates default tag from release name and version" do
-      assert TestHelpers.get_tag([], :myapp, "1.0.0") == "myapp:1.0.0"
+      assert TestHelpers.get_tag_from_config([], :myapp, "1.0.0") == "myapp:1.0.0"
     end
 
     test "handles string release name" do
-      assert TestHelpers.get_tag([], "myapp", "2.0.0") == "myapp:2.0.0"
+      assert TestHelpers.get_tag_from_config([], "myapp", "2.0.0") == "myapp:2.0.0"
     end
   end
 
-  describe "get_description/1" do
+  describe "get_description_from_config/1" do
     test "returns description from config" do
       config = [description: "My awesome app"]
-      assert TestHelpers.get_description(config) == "My awesome app"
+      assert TestHelpers.get_description_from_config(config) == "My awesome app"
     end
 
     test "returns :undefined when not set" do
-      assert TestHelpers.get_description([]) == :undefined
+      assert TestHelpers.get_description_from_config([]) == :undefined
     end
 
     test "converts atom description to binary" do
       config = [description: :my_description]
-      assert TestHelpers.get_description(config) == "my_description"
+      assert TestHelpers.get_description_from_config(config) == "my_description"
     end
   end
 
@@ -178,40 +88,40 @@ defmodule Ocibuild.MixReleaseTest do
     end
   end
 
-  describe "get_platform/1" do
+  describe "get_platform_from_config/1" do
     test "returns platform string from config" do
       config = [platform: "linux/amd64"]
-      assert TestHelpers.get_platform(config) == "linux/amd64"
+      assert TestHelpers.get_platform_from_config(config) == "linux/amd64"
     end
 
     test "converts charlist platform to binary" do
       config = [platform: ~c"linux/arm64"]
-      assert TestHelpers.get_platform(config) == "linux/arm64"
+      assert TestHelpers.get_platform_from_config(config) == "linux/arm64"
     end
 
     test "returns nil when not set" do
-      assert TestHelpers.get_platform([]) == nil
+      assert TestHelpers.get_platform_from_config([]) == nil
     end
   end
 
-  describe "get_chunk_size/1" do
+  describe "get_chunk_size_from_config/1" do
     test "returns nil when not set" do
-      assert TestHelpers.get_chunk_size([]) == nil
+      assert TestHelpers.get_chunk_size_from_config([]) == nil
     end
 
     test "converts MB to bytes" do
       config = [chunk_size: 5]
-      assert TestHelpers.get_chunk_size(config) == 5 * 1024 * 1024
+      assert TestHelpers.get_chunk_size_from_config(config) == 5 * 1024 * 1024
     end
 
     test "accepts boundary values" do
-      assert TestHelpers.get_chunk_size([chunk_size: 1]) == 1 * 1024 * 1024
-      assert TestHelpers.get_chunk_size([chunk_size: 100]) == 100 * 1024 * 1024
+      assert TestHelpers.get_chunk_size_from_config(chunk_size: 1) == 1 * 1024 * 1024
+      assert TestHelpers.get_chunk_size_from_config(chunk_size: 100) == 100 * 1024 * 1024
     end
 
     test "returns nil for invalid values" do
-      assert TestHelpers.get_chunk_size([chunk_size: 0]) == nil
-      assert TestHelpers.get_chunk_size([chunk_size: 101]) == nil
+      assert TestHelpers.get_chunk_size_from_config(chunk_size: 0) == nil
+      assert TestHelpers.get_chunk_size_from_config(chunk_size: 101) == nil
     end
   end
 

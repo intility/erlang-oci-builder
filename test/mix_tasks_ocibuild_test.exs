@@ -1,100 +1,8 @@
 defmodule Mix.Tasks.OcibuildTest do
   use ExUnit.Case, async: true
 
-  # We test the module's internal logic by creating a test helper module
-  # that exposes the private functions for testing purposes.
-  # This avoids modifying the production code.
-
-  defmodule TestHelpers do
-    @moduledoc false
-
-    # Re-implement the private functions for testing
-    # This ensures we test the same logic without exposing internals
-
-    def format_error({:release_not_found, name, path}) do
-      """
-      Release '#{name}' not found at #{path}.
-
-      Make sure to build the release first:
-
-          MIX_ENV=prod mix release
-      """
-    end
-
-    def format_error({:release_not_found, reason}),
-      do: "Failed to find release: #{inspect(reason)}"
-
-    def format_error({:collect_failed, reason}),
-      do: "Failed to collect release files: #{inspect(reason)}"
-
-    def format_error({:build_failed, reason}), do: "Failed to build image: #{inspect(reason)}"
-    def format_error({:save_failed, reason}), do: "Failed to save image: #{inspect(reason)}"
-    def format_error({:push_failed, reason}), do: "Failed to push image: #{inspect(reason)}"
-
-    def format_error({:bundled_erts, message}),
-      do: "Multi-platform build failed: #{message}"
-
-    def format_error({:nif_warning, files}),
-      do: "Warning: Native code detected that may not be portable: #{inspect(files)}"
-
-    def format_error(reason), do: "OCI build error: #{inspect(reason)}"
-
-    def to_erlang_map(map) when is_map(map) do
-      Map.new(map, fn {k, v} -> {to_binary(k), to_binary(v)} end)
-    end
-
-    def to_binary(value) when is_binary(value), do: value
-    def to_binary(value) when is_atom(value), do: Atom.to_string(value)
-    def to_binary(value) when is_list(value), do: to_string(value)
-    def to_binary(value), do: to_string(value)
-
-    def get_tag(opts, ocibuild_config, release_name, version) do
-      cond do
-        opts[:tag] -> opts[:tag]
-        Keyword.has_key?(ocibuild_config, :tag) -> Keyword.get(ocibuild_config, :tag)
-        true -> "#{release_name}:#{version}"
-      end
-    end
-
-    def get_description(opts, ocibuild_config) do
-      case opts[:desc] || Keyword.get(ocibuild_config, :description) do
-        nil -> :undefined
-        desc -> to_binary(desc)
-      end
-    end
-
-    def get_vcs_annotations(opts, ocibuild_config) do
-      cond do
-        opts[:no_vcs_annotations] -> false
-        Keyword.has_key?(ocibuild_config, :vcs_annotations) ->
-          Keyword.get(ocibuild_config, :vcs_annotations)
-        true -> true
-      end
-    end
-
-    def get_chunk_size(opts) do
-      case opts[:chunk_size] do
-        nil -> nil
-        size when is_integer(size) and size >= 1 and size <= 100 -> size * 1024 * 1024
-        _size -> nil
-      end
-    end
-
-    def get_platform(opts, ocibuild_config) do
-      case opts[:platform] || Keyword.get(ocibuild_config, :platform) do
-        nil -> nil
-        platform when is_binary(platform) -> platform
-        platform when is_list(platform) -> to_binary(platform)
-      end
-    end
-
-    def get_app_version(config) do
-      case config[:version] do
-        nil -> :undefined
-        version -> to_binary(version)
-      end
-    end
-  end
+  # Use shared test helpers
+  alias Ocibuild.TestHelpers
 
   describe "format_error/1" do
     test "formats release_not_found with name and path" do
@@ -300,7 +208,7 @@ defmodule Mix.Tasks.OcibuildTest do
 
   describe "get_app_version/1" do
     test "returns version as binary" do
-      assert TestHelpers.get_app_version([version: "1.2.3"]) == "1.2.3"
+      assert TestHelpers.get_app_version(version: "1.2.3") == "1.2.3"
     end
 
     test "returns :undefined when no version" do
@@ -309,7 +217,7 @@ defmodule Mix.Tasks.OcibuildTest do
 
     test "converts atom version to binary" do
       # This is unusual but should work
-      assert TestHelpers.get_app_version([version: :"1.0.0"]) == "1.0.0"
+      assert TestHelpers.get_app_version(version: :"1.0.0") == "1.0.0"
     end
   end
 end
