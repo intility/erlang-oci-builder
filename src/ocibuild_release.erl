@@ -209,6 +209,8 @@ run(AdapterModule, AdapterState, Opts) ->
         {error, Reason} when is_atom(Reason) ->
             {error, {release_not_found, Reason}};
         {error, Reason} ->
+            %% Clean up httpc in case build_platform_images started it before failing
+            stop_httpc(),
             {error, Reason}
     end.
 
@@ -587,6 +589,8 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
             %% Push if requested (handle both Erlang undefined and Elixir nil)
             case is_nil_or_undefined(PushRegistry) orelse PushRegistry =:= <<>> of
                 true ->
+                    %% No push - clean up httpc started during base image pull
+                    stop_httpc(),
                     AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, AdapterState};
                 false ->
@@ -596,6 +600,7 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                     do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
+            stop_httpc(),
             {error, {save_failed, SaveError}}
     end.
 
