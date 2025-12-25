@@ -57,7 +57,8 @@ defmodule OcibuildMixTest do
         })
 
       assert is_map(image)
-      assert length(:maps.get(:layers, image)) == 1
+      # 2 layers: app layer + SBOM layer
+      assert length(:maps.get(:layers, image)) == 2
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)

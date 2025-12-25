@@ -31,7 +31,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.          |
 | **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.         |
 | **Auto OCI annotations**      | ✅     | Automatically populate source URL, revision, version from VCS.         |
-| **SBOM generation**           | ⏳     | Generate SPDX Software Bill of Materials embedded in images.           |
+| **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.|
 | **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                |
 
 ## Installation
@@ -40,7 +40,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ```erlang
 {deps, [
-    {ocibuild, "~> 0.4"}
+    {ocibuild, "~> 0.5"}
 ]}.
 ```
 
@@ -49,7 +49,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 ```elixir
 def deps do
   [
-    {:ocibuild, "~> 0.4"}
+    {:ocibuild, "~> 0.5"}
   ]
 end
 ```
@@ -63,7 +63,7 @@ The easiest way to use `ocibuild` with Elixir:
 ```elixir
 # mix.exs
 def deps do
-  [{:ocibuild, "~> 0.4"}]
+  [{:ocibuild, "~> 0.5"}]
 end
 
 def project do

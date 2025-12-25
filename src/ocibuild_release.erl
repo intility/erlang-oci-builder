@@ -185,12 +185,14 @@ run(AdapterModule, AdapterState, Opts) ->
         },
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
         %% Output the image(s) - this is where layer downloads happen for save
+        SbomPath = maps:get(sbom, Config, undefined),
         OutputOpts = #{
             tag => Tag,
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
-            platforms => Platforms
+            platforms => Platforms,
+            sbom => SbomPath
         },
         Result = do_output(AdapterModule, AdapterState, Images, OutputOpts),
         ocibuild_progress:stop_manager(),
@@ -458,8 +460,11 @@ configure_release_image(Image0, Files, Opts) ->
     Dependencies = maps:get(dependencies, Opts, []),
     Image1 = build_release_layers(Image0, Files, ReleasePath, Dependencies, Opts),
 
+    %% Generate SBOM and add as layer
+    Image1a = add_sbom_layer(Image1, ReleaseName, Dependencies, ReleasePath, Opts),
+
     %% Set working directory
-    Image2 = ocibuild:workdir(Image1, Workdir),
+    Image2 = ocibuild:workdir(Image1a, Workdir),
 
     %% Set entrypoint and clear inherited Cmd from base image
     ReleaseNameBin = to_binary(ReleaseName),
@@ -575,6 +580,10 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
         ok ->
             AdapterModule:info("Image saved successfully", []),
 
+            %% Export SBOM to file if path specified
+            SbomPath = maps:get(sbom, Opts, undefined),
+            export_sbom_file(AdapterModule, Images, SbomPath),
+
             %% Push if requested (handle both Erlang undefined and Elixir nil)
             case is_nil_or_undefined(PushRegistry) orelse PushRegistry =:= <<>> of
                 true ->
@@ -674,6 +683,8 @@ do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
     case PushResult of
         ok ->
             AdapterModule:info("Push successful!", []),
+            %% Push SBOM as referrer artifact (if available)
+            push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
             {ok, AdapterState};
         {error, PushError} ->
             {error, {push_failed, PushError}}
@@ -1994,3 +2005,238 @@ warn_about_nifs(NifFiles) ->
         []
     ),
     ok.
+
+%%%===================================================================
+%%% SBOM Generation
+%%%===================================================================
+
+%% @private Push SBOM as OCI referrer artifact (silently skips if unsupported)
+%% For single-platform images, pushes SBOM as referrer to the image manifest.
+%% For multi-platform images, referrer attachment is not yet supported.
+-spec push_sbom_referrer(
+    module(),
+    ocibuild:image() | [ocibuild:image()],
+    binary(),
+    binary(),
+    map(),
+    map()
+) -> ok.
+push_sbom_referrer(AdapterModule, [Image], Registry, Repo, Auth, Opts) when is_map(Image) ->
+    %% Single image in a list - unwrap and process
+    push_sbom_referrer(AdapterModule, Image, Registry, Repo, Auth, Opts);
+push_sbom_referrer(_AdapterModule, Images, _Registry, _Repo, _Auth, _Opts) when is_list(Images) ->
+    %% Multi-platform images - referrer attachment not yet supported
+    %% (would need to attach SBOM to each platform manifest)
+    ok;
+push_sbom_referrer(AdapterModule, Image, Registry, Repo, Auth, Opts) when is_map(Image) ->
+    case maps:get(sbom, Image, undefined) of
+        undefined ->
+            ok;
+        SbomJson when is_binary(SbomJson) ->
+            %% Calculate manifest digest and size from image
+            case calculate_manifest_info(Image) of
+                {ok, ManifestDigest, ManifestSize} ->
+                    PushOpts = maps:with([chunk_size], Opts),
+                    case
+                        ocibuild_registry:push_referrer(
+                            SbomJson,
+                            ocibuild_sbom:media_type(),
+                            Registry,
+                            Repo,
+                            ManifestDigest,
+                            ManifestSize,
+                            Auth,
+                            PushOpts
+                        )
+                    of
+                        ok ->
+                            AdapterModule:info("SBOM attached as artifact", []);
+                        {error, {referrer_not_supported, _}} ->
+                            %% Registry doesn't support referrers - silent skip
+                            ok;
+                        {error, Reason} ->
+                            AdapterModule:info("Warning: SBOM attachment failed: ~p", [Reason])
+                    end;
+                {error, _Reason} ->
+                    %% Could not calculate manifest - skip referrer push
+                    ok
+            end
+    end,
+    ok.
+
+%% @private Calculate manifest digest and size from image
+%% Reuses manifest building logic from ocibuild_layout
+-spec calculate_manifest_info(ocibuild:image()) ->
+    {ok, binary(), non_neg_integer()} | {error, term()}.
+calculate_manifest_info(Image) ->
+    try
+        %% Reuse config blob building from ocibuild_layout
+        {ConfigJson, ConfigDigest} = ocibuild_layout:build_config_blob(Image),
+        ConfigDescriptor = #{
+            ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+            ~"digest" => ConfigDigest,
+            ~"size" => byte_size(ConfigJson)
+        },
+
+        %% Reuse layer descriptor building from ocibuild_layout
+        LayerDescriptors = ocibuild_layout:build_layer_descriptors(Image),
+
+        %% Get annotations
+        Annotations = maps:get(annotations, Image, #{}),
+
+        %% Build manifest
+        {ManifestJson, ManifestDigest} = ocibuild_manifest:build(
+            ConfigDescriptor, LayerDescriptors, Annotations
+        ),
+
+        {ok, ManifestDigest, byte_size(ManifestJson)}
+    catch
+        _:Reason ->
+            {error, Reason}
+    end.
+
+%% @private Export SBOM to file if path is specified
+%% Extracts SBOM from first image in list (multi-platform) or single image
+-spec export_sbom_file(module(), ocibuild:image() | [ocibuild:image()], binary() | undefined) -> ok.
+export_sbom_file(_AdapterModule, _Images, undefined) ->
+    ok;
+export_sbom_file(_AdapterModule, _Images, nil) ->
+    ok;
+export_sbom_file(AdapterModule, Images, SbomPath) when is_binary(SbomPath) ->
+    %% Get SBOM from first image (for multi-platform, first image's SBOM is representative)
+    Image =
+        case Images of
+            [FirstImage | _] -> FirstImage;
+            SingleImage when is_map(SingleImage) -> SingleImage
+        end,
+    case maps:get(sbom, Image, undefined) of
+        undefined ->
+            AdapterModule:info("Warning: SBOM not available for export", []);
+        SbomJson when is_binary(SbomJson) ->
+            Path = binary_to_list(SbomPath),
+            case file:write_file(Path, SbomJson) of
+                ok ->
+                    AdapterModule:info("SBOM exported to ~s", [Path]);
+                {error, Reason} ->
+                    AdapterModule:info("Warning: Failed to export SBOM to ~s: ~p", [Path, Reason])
+            end
+    end,
+    ok.
+
+%% @private Add SBOM layer to image
+%% Generates SPDX 2.2 SBOM and adds as a layer at /sbom.spdx.json
+%% Also stores the SBOM JSON in the image map for later referrer push
+-spec add_sbom_layer(
+    ocibuild:image(), binary() | atom(), [map()], file:filename() | undefined, map()
+) ->
+    ocibuild:image().
+add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
+    try
+        %% Build SBOM options from available data
+        %% app_name may differ from release_name (e.g., app: :indicator_sync, release: :server)
+        ReleaseNameBin = to_binary(ReleaseName),
+        AppName =
+            case maps:get(app_name, Opts, undefined) of
+                undefined -> ReleaseNameBin;
+                nil -> ReleaseNameBin;
+                Name -> to_binary(Name)
+            end,
+        AppVersion = maps:get(app_version, Opts, undefined),
+        SourceUrl = get_source_url_from_opts(Opts),
+        ErtsVersion = detect_erts_version(ReleasePath),
+        OtpVersion = get_otp_version(),
+        {BaseImage, BaseDigest} = get_base_image_info(Image),
+
+        SbomOpts = #{
+            app_name => AppName,
+            release_name => ReleaseNameBin,
+            app_version => AppVersion,
+            source_url => SourceUrl,
+            base_image => BaseImage,
+            base_digest => BaseDigest,
+            erts_version => ErtsVersion,
+            otp_version => OtpVersion
+        },
+
+        %% Generate SBOM
+        {ok, SbomJson} = ocibuild_sbom:generate(Dependencies, SbomOpts),
+
+        %% Create SBOM layer with reproducible mtime
+        SbomLayer = ocibuild_layer:create(
+            [{~"/sbom.spdx.json", SbomJson, 8#644}],
+            #{mtime => ocibuild_time:get_timestamp(), layer_type => sbom}
+        ),
+
+        %% Add layer and store SBOM for later referrer push
+        Layers = maps:get(layers, Image),
+        Image#{
+            layers := [SbomLayer | Layers],
+            sbom => SbomJson
+        }
+    catch
+        _Class:Reason ->
+            %% SBOM generation failed - log warning and continue without SBOM
+            io:format(
+                standard_error,
+                "ocibuild: warning: SBOM generation failed (~p), continuing without SBOM~n",
+                [Reason]
+            ),
+            Image
+    end.
+
+%% @private Get source URL from opts (from VCS annotations if available)
+-spec get_source_url_from_opts(map()) -> binary() | undefined.
+get_source_url_from_opts(Opts) ->
+    Annotations = maps:get(annotations, Opts, #{}),
+    maps:get(~"org.opencontainers.image.source", Annotations, undefined).
+
+%% @private Detect ERTS version from release path
+%% Looks for erts-X.Y.Z directory in the release
+-spec detect_erts_version(file:filename() | undefined) -> binary() | undefined.
+detect_erts_version(undefined) ->
+    undefined;
+detect_erts_version(ReleasePath) ->
+    case file:list_dir(ReleasePath) of
+        {ok, Entries} ->
+            case
+                lists:filtermap(
+                    fun(Entry) ->
+                        case Entry of
+                            "erts-" ++ Version -> {true, list_to_binary(Version)};
+                            _ -> false
+                        end
+                    end,
+                    Entries
+                )
+            of
+                [Version | _] -> Version;
+                [] -> undefined
+            end;
+        {error, _} ->
+            undefined
+    end.
+
+%% @private Get OTP version from runtime
+-spec get_otp_version() -> binary().
+get_otp_version() ->
+    list_to_binary(erlang:system_info(otp_release)).
+
+%% @private Get base image info (reference and digest) from image
+-spec get_base_image_info(ocibuild:image()) ->
+    {{binary(), binary(), binary()}, binary() | undefined} | {none, undefined}.
+get_base_image_info(Image) ->
+    case maps:get(base, Image, none) of
+        none ->
+            {none, undefined};
+        {_Registry, _Repo, _Tag} = BaseRef ->
+            %% Calculate digest from base manifest if available
+            Digest =
+                case maps:get(base_manifest, Image, undefined) of
+                    undefined ->
+                        undefined;
+                    Manifest when is_map(Manifest) ->
+                        ManifestJson = ocibuild_json:encode(Manifest),
+                        ocibuild_digest:sha256(ManifestJson)
+                end,
+            {BaseRef, Digest}
+    end.

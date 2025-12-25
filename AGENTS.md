@@ -927,11 +927,13 @@ ocibuild: [
 - `ocibuild_vcs_svn.erl` - Subversion
 - `ocibuild_vcs_fossil.erl` - Fossil
 
-### Priority 6: SBOM Generation
+### Priority 6: SBOM Generation ✅ IMPLEMENTED
 
 **Impact:** Supply chain security, compliance
 
 Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko all use SPDX format.
+
+**Module:** `ocibuild_sbom.erl`
 
 **Format:** SPDX 2.2 (ISO/IEC 5962:2021) - no CycloneDX, keep it simple.
 
@@ -944,12 +946,12 @@ Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko a
 
 **Default Behavior:**
 
-SBOM is always generated, embedded, and attached. No flags needed.
+SBOM is always generated and embedded. No flags needed.
 
 | Output                 | Behavior                      |
 |------------------------|-------------------------------|
 | Embed in image         | Always (at `/sbom.spdx.json`) |
-| Attach as OCI artifact | Always (via referrers API)    |
+| Attach as OCI artifact | Not yet (requires push returns digest) |
 | Export to file         | Optional: `--sbom <path>`     |
 
 ```bash

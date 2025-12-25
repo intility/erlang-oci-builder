@@ -98,7 +98,9 @@ error(Format, Args) ->
     %% Application version for org.opencontainers.image.version annotation
     app_version => binary() | undefined,
     %% Enable/disable automatic VCS annotations (default: true)
-    vcs_annotations => boolean()
+    vcs_annotations => boolean(),
+    %% SBOM export path (optional, from --sbom CLI flag)
+    sbom => binary() | undefined
 }.
 
 -export_type([config/0]).

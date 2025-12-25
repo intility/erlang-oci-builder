@@ -61,9 +61,9 @@ build_scratch_image_test() ->
         workdir => ~"/app"
     }),
 
-    %% Verify image structure
+    %% Verify image structure (1 app layer + 1 SBOM layer = 2)
     ?assert(is_map(Image)),
-    ?assertEqual(1, length(maps:get(layers, Image))),
+    ?assertEqual(2, length(maps:get(layers, Image))),
 
     %% Verify config
     Config = maps:get(config, Image),

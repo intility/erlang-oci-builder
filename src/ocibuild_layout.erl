@@ -26,6 +26,9 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 %% Parallel utilities (exported for potential reuse)
 -export([pmap_bounded/3]).
 
+%% Manifest building utilities (used by ocibuild_release for referrer push)
+-export([build_config_blob/1, build_layer_descriptors/1]).
+
 %% Exports for testing
 -ifdef(TEST).
 -export([blob_path/1, build_index/3]).
