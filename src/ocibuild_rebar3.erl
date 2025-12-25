@@ -213,8 +213,36 @@ get_config(State) ->
         platform => get_platform(Args, Config),
         uid => get_uid(Args, Config),
         app_version => get_app_version(State),
+        %% app_name for layer classification - if not set, falls back to release_name
+        %% In Erlang, release name usually matches app name, but can be set explicitly
+        app_name => get_app_name(State, Config),
         vcs_annotations => get_vcs_annotations(Args, Config)
     }.
+
+%% @private Get app_name for layer classification
+%% Tries: explicit config -> project apps -> undefined (falls back to release_name)
+get_app_name(State, Config) ->
+    case proplists:get_value(app_name, Config) of
+        undefined ->
+            %% Try to get from rebar_state project_apps
+            get_project_app_name(State);
+        Name when is_atom(Name) ->
+            atom_to_binary(Name);
+        Name when is_list(Name) ->
+            list_to_binary(Name);
+        Name when is_binary(Name) ->
+            Name
+    end.
+
+%% @private Get the primary project application name from rebar_state
+%% Returns the first (typically main) app from project_apps, or undefined
+get_project_app_name(State) ->
+    case rebar_state:project_apps(State) of
+        [] ->
+            undefined;
+        [AppInfo | _] ->
+            rebar_app_info:name(AppInfo)
+    end.
 
 %% @private Get description from args or config
 get_description(Args, Config) ->

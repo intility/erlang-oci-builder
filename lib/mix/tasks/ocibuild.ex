@@ -135,9 +135,14 @@ defmodule Mix.Tasks.Ocibuild do
   end
 
   defp build_state(release_name, release_path, opts, ocibuild_config, config) do
+    # App name from config (used for layer classification)
+    # This may differ from release_name (e.g., app: :indicator_sync, release: :server)
+    app_name = config[:app] |> to_string()
+
     %{
       # Release info
       release_name: release_name,
+      app_name: app_name,
       release_path: to_charlist(release_path),
       # Configuration with CLI overrides
       base_image:

@@ -163,10 +163,13 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Get auto-annotation config (vcs_annotations defaults to true)
         VcsAnnotations = maps:get(vcs_annotations, Config, true),
         AppVersion = maps:get(app_version, Config, undefined),
+        %% Get app_name for layer classification (may differ from release_name)
+        AppName = maps:get(app_name, Config, undefined),
         %% Get dependencies for smart layer classification
         Dependencies = ocibuild_adapter:get_dependencies(AdapterModule, AdapterState),
         BuildOpts = #{
             release_name => ReleaseName,
+            app_name => AppName,
             release_path => ReleasePath,
             workdir => Workdir,
             env => EnvMap,
@@ -1679,15 +1682,18 @@ Falls back to single layer if no dependencies provided (backward compatible).
     Opts :: map()
 ) -> ocibuild:image().
 build_release_layers(Image0, Files, _ReleasePath, [], _Opts) ->
-    %% No dependency info - single layer fallback (backward compatible)
+    %% No dependency info - single layer fallback
     ocibuild:add_layer(Image0, Files);
-build_release_layers(Image0, Files, ReleasePath, Deps, Opts) ->
-    ReleaseName = maps:get(release_name, Opts, ~"app"),
+build_release_layers(Image0, Files, _ReleasePath, _Deps, #{app_name := undefined}) ->
+    %% No app_name - can't do smart layering, single layer fallback
+    ocibuild:add_layer(Image0, Files);
+build_release_layers(Image0, Files, ReleasePath, Deps, #{app_name := AppName} = Opts) ->
+    %% Smart layering with known app_name
     Workdir = to_binary(maps:get(workdir, Opts, ?DEFAULT_WORKDIR)),
     HasErts = has_bundled_erts(ReleasePath),
 
     {ErtsFiles, DepFiles, AppFiles} =
-        partition_files_by_layer(Files, Deps, to_binary(ReleaseName), Workdir, HasErts),
+        partition_files_by_layer(Files, Deps, to_binary(AppName), Workdir, HasErts),
 
     case HasErts of
         true ->
@@ -1699,7 +1705,10 @@ build_release_layers(Image0, Files, ReleasePath, Deps, Opts) ->
             %% 2 layers: Deps + OTP libs -> App
             I1 = add_layer_if_nonempty(Image0, DepFiles, deps),
             add_layer_if_nonempty(I1, AppFiles, app)
-    end.
+    end;
+build_release_layers(Image0, Files, _ReleasePath, _Deps, _Opts) ->
+    %% No app_name in opts - single layer fallback
+    ocibuild:add_layer(Image0, Files).
 
 %% @private Add layer only if file list is non-empty
 -spec add_layer_if_nonempty(ocibuild:image(), [{binary(), binary(), non_neg_integer()}], atom()) ->

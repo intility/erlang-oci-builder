@@ -79,9 +79,14 @@ defmodule Ocibuild.MixRelease do
   end
 
   defp build_state(release, ocibuild_config) do
+    # Get app name from Mix config (used for layer classification)
+    # This may differ from release.name
+    app_name = Mix.Project.config()[:app] |> to_string()
+
     %{
       # Release info
       release_name: release.name,
+      app_name: app_name,
       release_path: to_charlist(release.path),
       # Configuration
       base_image: Keyword.get(ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),

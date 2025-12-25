@@ -529,6 +529,33 @@ Typical improvements:
 - **Faster CI/CD pipelines** due to layer caching
 - **Reduced registry storage** through layer deduplication
 
+### Reproducible Builds Required for Layer Caching
+
+For layer caching to work across builds, you **must** use reproducible builds by setting `SOURCE_DATE_EPOCH`. Without it, each build produces different layer digests (due to varying timestamps), causing all layers to be re-uploaded.
+
+```bash
+# Use the last git commit timestamp (recommended)
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
+```
+
+**CI/CD Examples:**
+
+```yaml
+# GitHub Actions
+- run: |
+    export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+    mix ocibuild --push ghcr.io/myorg
+
+# GitLab CI
+build:
+  script:
+    - export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+    - mix ocibuild --push registry.gitlab.com/myorg
+```
+
+See the [Reproducible Builds](#reproducible-builds) section for more details.
+
 ### Fallback Behavior
 
 Smart layering is automatically enabled when a lock file is present. Without a lock file (or if parsing fails), all files go into a single layer — ensuring backward compatibility.

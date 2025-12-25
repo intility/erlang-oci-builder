@@ -1309,7 +1309,7 @@ build_layers_with_deps_and_erts_test() ->
     TmpDir = make_temp_release_dir_with_erts(),
     try
         {ok, Image0} = ocibuild:scratch(),
-        Opts = #{release_name => ~"myapp", workdir => ~"/app"},
+        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
         Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
         Layers = maps:get(layers, Image1),
         %% Should have 3 layers: ERTS, deps, app
@@ -1327,7 +1327,7 @@ build_layers_with_deps_no_erts_test() ->
     TmpDir = make_temp_release_dir_no_erts(),
     try
         {ok, Image0} = ocibuild:scratch(),
-        Opts = #{release_name => ~"myapp", workdir => ~"/app"},
+        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
         Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
         Layers = maps:get(layers, Image1),
         %% Should have 2 layers: deps, app
@@ -1344,9 +1344,29 @@ build_layers_fallback_no_deps_test() ->
     TmpDir = make_temp_release_dir_no_erts(),
     try
         {ok, Image0} = ocibuild:scratch(),
-        Opts = #{release_name => ~"myapp", workdir => ~"/app"},
+        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
         %% Empty deps should fall back to single layer
         Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, [], Opts),
+        Layers = maps:get(layers, Image1),
+        ?assertEqual(1, length(Layers))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+build_layers_fallback_no_app_name_test() ->
+    %% When app_name is missing, should fall back to single layer
+    %% even if deps are present (can't do smart layering without knowing the app)
+    Files = [
+        {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
+        {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
+    ],
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    TmpDir = make_temp_release_dir_no_erts(),
+    try
+        {ok, Image0} = ocibuild:scratch(),
+        %% No app_name in opts - should fall back to single layer
+        Opts = #{release_name => ~"myapp", workdir => ~"/app"},
+        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
         Layers = maps:get(layers, Image1),
         ?assertEqual(1, length(Layers))
     after

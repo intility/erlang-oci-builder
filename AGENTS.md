@@ -794,6 +794,14 @@ mix.lock:
 %{"cowboy": {:hex, :cowboy, "2.10.0", ...}}
 ```
 
+**Reproducible Builds Required:**
+
+For layer caching to work across builds, `SOURCE_DATE_EPOCH` must be set. Without it, each build produces different layer digests (due to varying file timestamps), causing all layers to be re-uploaded even when content hasn't changed.
+
+```bash
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) mix ocibuild --push ghcr.io/myorg
+```
+
 **Fallback Behavior:**
 
 Smart layering is automatically enabled when a lock file is present. Without a lock file (or if parsing fails), all files go into a single layer — ensuring backward compatibility.

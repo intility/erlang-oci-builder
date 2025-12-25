@@ -83,6 +83,7 @@ get_config(State) when is_map(State) ->
         chunk_size => undefined,
         uid => undefined,
         app_version => undefined,
+        app_name => undefined,
         vcs_annotations => true
     },
     maps:merge(Defaults, State).
