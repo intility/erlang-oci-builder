@@ -33,18 +33,26 @@ SSH URLs are automatically converted to HTTPS for public visibility:
 ## Configuration
 
 The timeout for git commands can be configured via environment variable:
-- `OCIBUILD_GIT_TIMEOUT` - Timeout in milliseconds (default: 5000)
+- `OCIBUILD_GIT_TIMEOUT` - Timeout in milliseconds (default: 5000, max: 300000)
 
 This is particularly useful for network operations like `git remote get-url`
-when working with slow networks or remote repositories.
+when working with slow networks or remote repositories. Values above the
+maximum are clamped to 300000ms (5 minutes).
 """.
 
 -behaviour(ocibuild_vcs).
 
 -export([detect/1, get_source_url/1, get_revision/1]).
 
+%% Export for testing
+-ifdef(TEST).
+-export([get_git_timeout/1]).
+-endif.
+
 %% Default timeout for git commands (milliseconds)
 -define(DEFAULT_GIT_TIMEOUT, 5000).
+%% Maximum allowed timeout (5 minutes) to prevent absurd values
+-define(MAX_GIT_TIMEOUT, 300000).
 
 %%%===================================================================
 %%% Behaviour Implementation
@@ -248,7 +256,8 @@ get_git_timeout(network) ->
             try
                 Timeout = list_to_integer(Value),
                 if
-                    Timeout > 0 -> Timeout;
+                    Timeout > 0, Timeout =< ?MAX_GIT_TIMEOUT -> Timeout;
+                    Timeout > ?MAX_GIT_TIMEOUT -> ?MAX_GIT_TIMEOUT;
                     true -> ?DEFAULT_GIT_TIMEOUT
                 end
             catch

@@ -247,9 +247,9 @@ def project do
 end
 ```
 
-## Authentication
+## Environment Variables
 
-### CLI (Environment Variables)
+### Registry Authentication
 
 ```bash
 # Push credentials (for pushing to registries)
@@ -261,6 +261,17 @@ export OCIBUILD_PUSH_PASSWORD="pass"
 export OCIBUILD_PULL_USERNAME="user"
 export OCIBUILD_PULL_PASSWORD="pass"
 ```
+
+### Git Timeout
+
+When `ocibuild` retrieves VCS information (source URL, revision) for automatic annotations, it executes git commands with a default timeout of 5 seconds. For slow networks or large repositories, you can increase this:
+
+```bash
+# Timeout in milliseconds (default: 5000, max: 300000)
+export OCIBUILD_GIT_TIMEOUT=30000  # 30 seconds
+```
+
+This timeout applies only to network operations like `git remote get-url`. Local operations use the default timeout.
 
 ### Programmatic API
 

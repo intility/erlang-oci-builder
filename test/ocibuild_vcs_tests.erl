@@ -371,6 +371,74 @@ auto_annotations_timestamp_format_test() ->
     ?assert(binary:match(Created, ~"T") =/= nomatch).
 
 %%%===================================================================
+%%% Git Timeout Configuration Tests
+%%%===================================================================
+
+%% Test default timeout for local operations
+git_timeout_local_default_test() ->
+    ?assertEqual(5000, ocibuild_vcs_git:get_git_timeout(local)).
+
+%% Test default timeout for network operations when env var not set
+git_timeout_network_default_test() ->
+    OldTimeout = os:getenv("OCIBUILD_GIT_TIMEOUT"),
+    os:unsetenv("OCIBUILD_GIT_TIMEOUT"),
+    try
+        ?assertEqual(5000, ocibuild_vcs_git:get_git_timeout(network))
+    after
+        restore_env("OCIBUILD_GIT_TIMEOUT", OldTimeout)
+    end.
+
+%% Test custom timeout from env var
+git_timeout_custom_test() ->
+    OldTimeout = os:getenv("OCIBUILD_GIT_TIMEOUT"),
+    os:putenv("OCIBUILD_GIT_TIMEOUT", "30000"),
+    try
+        ?assertEqual(30000, ocibuild_vcs_git:get_git_timeout(network))
+    after
+        restore_env("OCIBUILD_GIT_TIMEOUT", OldTimeout)
+    end.
+
+%% Test timeout is capped at maximum (300000ms = 5 minutes)
+git_timeout_capped_at_max_test() ->
+    OldTimeout = os:getenv("OCIBUILD_GIT_TIMEOUT"),
+    os:putenv("OCIBUILD_GIT_TIMEOUT", "999999"),
+    try
+        ?assertEqual(300000, ocibuild_vcs_git:get_git_timeout(network))
+    after
+        restore_env("OCIBUILD_GIT_TIMEOUT", OldTimeout)
+    end.
+
+%% Test invalid timeout value falls back to default
+git_timeout_invalid_falls_back_test() ->
+    OldTimeout = os:getenv("OCIBUILD_GIT_TIMEOUT"),
+    os:putenv("OCIBUILD_GIT_TIMEOUT", "not_a_number"),
+    try
+        ?assertEqual(5000, ocibuild_vcs_git:get_git_timeout(network))
+    after
+        restore_env("OCIBUILD_GIT_TIMEOUT", OldTimeout)
+    end.
+
+%% Test zero timeout falls back to default
+git_timeout_zero_falls_back_test() ->
+    OldTimeout = os:getenv("OCIBUILD_GIT_TIMEOUT"),
+    os:putenv("OCIBUILD_GIT_TIMEOUT", "0"),
+    try
+        ?assertEqual(5000, ocibuild_vcs_git:get_git_timeout(network))
+    after
+        restore_env("OCIBUILD_GIT_TIMEOUT", OldTimeout)
+    end.
+
+%% Test negative timeout falls back to default
+git_timeout_negative_falls_back_test() ->
+    OldTimeout = os:getenv("OCIBUILD_GIT_TIMEOUT"),
+    os:putenv("OCIBUILD_GIT_TIMEOUT", "-1000"),
+    try
+        ?assertEqual(5000, ocibuild_vcs_git:get_git_timeout(network))
+    after
+        restore_env("OCIBUILD_GIT_TIMEOUT", OldTimeout)
+    end.
+
+%%%===================================================================
 %%% Helper Functions
 %%%===================================================================
 
