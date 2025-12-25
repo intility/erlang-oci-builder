@@ -571,11 +571,11 @@ sanitize_spdx_id(Name) ->
 sanitize_spdx_char(C) when C >= $a, C =< $z -> <<C>>;
 sanitize_spdx_char(C) when C >= $A, C =< $Z -> <<C>>;
 sanitize_spdx_char(C) when C >= $0, C =< $9 -> <<C>>;
-sanitize_spdx_char($.) -> <<".">>;
-sanitize_spdx_char($-) -> <<"-">>;
+sanitize_spdx_char($.) -> ~".";
+sanitize_spdx_char($-) -> ~"-";
 %% Common in Erlang names
-sanitize_spdx_char($_) -> <<"-">>;
-sanitize_spdx_char(_) -> <<"-">>.
+sanitize_spdx_char($_) -> ~"-";
+sanitize_spdx_char(_) -> ~"-".
 
 %% @private URI-encode a binary string for use in URLs.
 %% Encodes characters that are not unreserved per RFC 3986.
@@ -588,14 +588,10 @@ uri_encode(Bin) ->
 uri_encode_char(C) when C >= $a, C =< $z -> <<C>>;
 uri_encode_char(C) when C >= $A, C =< $Z -> <<C>>;
 uri_encode_char(C) when C >= $0, C =< $9 -> <<C>>;
-uri_encode_char($-) ->
-    <<"-">>;
-uri_encode_char($.) ->
-    <<".">>;
-uri_encode_char($_) ->
-    <<"_">>;
-uri_encode_char($~) ->
-    <<"~">>;
+uri_encode_char($-) -> ~"-";
+uri_encode_char($.) -> ~".";
+uri_encode_char($_) -> ~"_";
+uri_encode_char($~) -> ~"~";
 uri_encode_char(C) ->
     %% Percent-encode all other characters
     High = C bsr 4,
