@@ -37,17 +37,6 @@ https://github.com/package-url/purl-spec
 -export([generate/2, media_type/0, to_purl/1]).
 -export([build_referrer_manifest/4]).
 
-%% For testing
--ifdef(TEST).
--export([
-    build_package/3,
-    build_dependency_package/1,
-    build_erts_package/2,
-    build_base_image_package/2,
-    build_relationships/2
-]).
--endif.
-
 %%%===================================================================
 %%% Types
 %%%===================================================================
@@ -110,8 +99,9 @@ Manifest = ocibuild_sbom:build_referrer_manifest(
 ) -> map().
 build_referrer_manifest(ArtifactDigest, ArtifactSize, SubjectDigest, SubjectSize) ->
     %% The empty config blob - required by OCI spec for artifact manifests
-    EmptyConfigDigest = ocibuild_digest:sha256(~"{}"),
-    EmptyConfigSize = 2,
+    EmptyConfigBlob = ~"{}",
+    EmptyConfigDigest = ocibuild_digest:sha256(EmptyConfigBlob),
+    EmptyConfigSize = byte_size(EmptyConfigBlob),
 
     #{
         ~"schemaVersion" => 2,
@@ -241,10 +231,10 @@ Dep = #{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"},
 ```
 """.
 -spec to_purl(dependency()) -> binary().
-to_purl(#{name := Name, version := Version, source := ~"hex"}) ->
-    <<"pkg:hex/", Name/binary, "@", Version/binary>>;
-to_purl(#{name := Name, version := Version, source := ~"hexpm"}) ->
-    %% Mix uses "hexpm" as the source
+to_purl(#{name := Name, version := Version, source := Source}) when
+    Source =:= ~"hex"; Source =:= ~"hexpm"
+->
+    %% Hex packages (rebar3 uses "hex", Mix uses "hexpm")
     <<"pkg:hex/", Name/binary, "@", Version/binary>>;
 to_purl(#{name := Name, version := Version, source := Source}) when is_binary(Source) ->
     case parse_git_url(Source) of
@@ -332,9 +322,8 @@ build_dependency_package(#{name := Name, version := Version} = Dep) ->
 -spec build_download_location(dependency()) -> binary().
 build_download_location(#{name := Name, version := Version, source := Source}) ->
     case Source of
-        ~"hex" ->
-            <<"https://hex.pm/packages/", Name/binary, "/", Version/binary>>;
-        ~"hexpm" ->
+        S when S =:= ~"hex"; S =:= ~"hexpm" ->
+            %% Hex packages (rebar3 uses "hex", Mix uses "hexpm")
             <<"https://hex.pm/packages/", Name/binary, "/", Version/binary>>;
         Url when is_binary(Url) ->
             %% Git URL or other source
@@ -448,16 +437,10 @@ build_relationships(AppName, Packages) ->
 
     %% RUNTIME_DEPENDENCY_OF for ERTS (if present)
     ErtsRels =
-        case
-            lists:keyfind(
-                ~"SPDXRef-Package-erts",
-                1,
-                [{maps:get(~"SPDXID", P), P} || P <- Packages]
-            )
-        of
+        case has_package_id(~"SPDXRef-Package-erts", Packages) of
             false ->
                 [];
-            _ ->
+            true ->
                 [
                     #{
                         ~"spdxElementId" => ~"SPDXRef-Package-erts",
@@ -469,16 +452,10 @@ build_relationships(AppName, Packages) ->
 
     %% BUILD_TOOL_OF for base image (if present)
     BaseRels =
-        case
-            lists:keyfind(
-                ~"SPDXRef-Package-base-image",
-                1,
-                [{maps:get(~"SPDXID", P), P} || P <- Packages]
-            )
-        of
+        case has_package_id(~"SPDXRef-Package-base-image", Packages) of
             false ->
                 [];
-            _ ->
+            true ->
                 [
                     #{
                         ~"spdxElementId" => ~"SPDXRef-Package-base-image",
@@ -489,6 +466,11 @@ build_relationships(AppName, Packages) ->
         end,
 
     [DescribesRel] ++ DependsOnRels ++ ErtsRels ++ BaseRels.
+
+%% @private Check if a package with the given SPDX ID exists in the packages list
+-spec has_package_id(binary(), [map()]) -> boolean().
+has_package_id(Id, Packages) ->
+    lists:any(fun(P) -> maps:get(~"SPDXID", P) =:= Id end, Packages).
 
 %% @private Parse git URL to extract host and repo
 -spec parse_git_url(binary()) -> {ok, {binary(), binary()}} | error.
@@ -588,10 +570,14 @@ uri_encode(Bin) ->
 uri_encode_char(C) when C >= $a, C =< $z -> <<C>>;
 uri_encode_char(C) when C >= $A, C =< $Z -> <<C>>;
 uri_encode_char(C) when C >= $0, C =< $9 -> <<C>>;
-uri_encode_char($-) -> ~"-";
-uri_encode_char($.) -> ~".";
-uri_encode_char($_) -> ~"_";
-uri_encode_char($~) -> ~"~";
+uri_encode_char($-) ->
+    ~"-";
+uri_encode_char($.) ->
+    ~".";
+uri_encode_char($_) ->
+    ~"_";
+uri_encode_char($~) ->
+    ~"~";
 uri_encode_char(C) ->
     %% Percent-encode all other characters
     High = C bsr 4,
