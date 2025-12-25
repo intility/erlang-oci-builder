@@ -1792,22 +1792,12 @@ stop_httpc() ->
         Pid ->
             %% Clear the persistent_term first so no new requests use this pid
             _ = persistent_term:erase(?HTTPC_KEY),
-            %% Stop httpc in a separate process to avoid EXIT signal propagation
-            %% The spawn will unregister the name and stop the httpc process
-            CleanupPid = spawn(fun() ->
-                _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
-                _ = inets:stop(stand_alone, Pid)
-            end),
-            %% Wait synchronously for cleanup process to finish, with a timeout
-            Ref = erlang:monitor(process, CleanupPid),
-            receive
-                {'DOWN', Ref, process, CleanupPid, _Reason} ->
-                    ok
-            after ?DEFAULT_TIMEOUT ->
-                %% Cleanup took too long; stop waiting but keep going
-                erlang:demonitor(Ref, [flush]),
-                ok
-            end
+            %% Unregister the profile name
+            _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
+            %% Stop httpc - use catch to handle any errors gracefully
+            %% We do this synchronously to ensure clean shutdown before VM exit
+            _ = (catch inets:stop(stand_alone, Pid)),
+            ok
     end.
 
 %% Get SSL options for HTTPS requests
