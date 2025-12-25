@@ -48,15 +48,19 @@ Create a layer from a list of files with options.
 
 Options:
 - `mtime`: Unix timestamp for file modification times (for reproducible builds)
+- `layer_type`: Type of layer content (erts, deps, app) for progress display
 
 ```
 %% With fixed mtime for reproducible builds
 Layer = ocibuild_layer:create(Files, #{mtime => 1700000000}).
+
+%% With layer type for labeled progress
+Layer = ocibuild_layer:create(Files, #{layer_type => app}).
 ```
 """.
 -spec create(Files, Opts) -> layer() when
     Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
-    Opts :: #{mtime => non_neg_integer()}.
+    Opts :: #{mtime => non_neg_integer(), layer_type => atom()}.
 create(Files, Opts) ->
     %% Create uncompressed tar (with options for reproducibility)
     Tar = ocibuild_tar:create(Files, Opts),
@@ -70,10 +74,15 @@ create(Files, Opts) ->
     %% Calculate digest from compressed data
     Digest = ocibuild_digest:sha256(Compressed),
 
-    #{
+    Layer = #{
         media_type => ocibuild_manifest:layer_media_type(),
         digest => Digest,
         diff_id => DiffId,
         size => byte_size(Compressed),
         data => Compressed
-    }.
+    },
+    %% Add layer_type if provided
+    case maps:get(layer_type, Opts, undefined) of
+        undefined -> Layer;
+        Type -> Layer#{layer_type => Type}
+    end.

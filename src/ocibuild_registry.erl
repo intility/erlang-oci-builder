@@ -1059,9 +1059,10 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
             %% Create indexed list: [{1, Layer1}, {2, Layer2}, ...]
             IndexedLayers = lists:zip(lists:seq(1, TotalLayers), ReversedLayers),
 
-            PushFn = fun({Index, #{digest := Digest, data := Data, size := Size}}) ->
+            PushFn = fun({Index, #{digest := Digest, data := Data, size := Size} = Layer}) ->
                 %% Register progress bar for this upload
-                Label = make_upload_label(Index, TotalLayers, Platform),
+                LayerType = maps:get(layer_type, Layer, undefined),
+                Label = make_upload_label(Index, TotalLayers, Platform, LayerType),
                 ProgressRef = ocibuild_progress:register_bar(#{
                     label => Label,
                     total => Size
@@ -1096,12 +1097,17 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
     end.
 
 %% Create a label for layer upload progress
--spec make_upload_label(pos_integer(), pos_integer(), ocibuild:platform() | undefined) -> binary().
-make_upload_label(Index, Total, undefined) ->
-    iolist_to_binary(io_lib:format("Upload ~B/~B", [Index, Total]));
-make_upload_label(Index, Total, Platform) ->
+-spec make_upload_label(pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined) -> binary().
+make_upload_label(Index, Total, undefined, undefined) ->
+    iolist_to_binary(io_lib:format("Layer ~B/~B", [Index, Total]));
+make_upload_label(Index, Total, undefined, LayerType) ->
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s)", [Index, Total, LayerType]));
+make_upload_label(Index, Total, Platform, undefined) ->
     Arch = get_platform_arch(Platform),
-    iolist_to_binary(io_lib:format("Upload ~B/~B (~s)", [Index, Total, Arch])).
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s)", [Index, Total, Arch]));
+make_upload_label(Index, Total, Platform, LayerType) ->
+    Arch = get_platform_arch(Platform),
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s, ~s)", [Index, Total, LayerType, Arch])).
 
 %% Push base image layers to target registry in parallel
 -spec push_base_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->

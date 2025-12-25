@@ -160,14 +160,32 @@ For Mix: Return `Mix.Project.config()[:version]`.
 """.
 -callback get_app_version(State :: term()) -> binary() | undefined.
 
-%% Mark get_app_version as optional - adapters don't have to implement it
--optional_callbacks([get_app_version/1]).
+-doc """
+Get dependencies from the build system's lock file.
+
+This is an optional callback. If not implemented, smart dependency layering
+is disabled and all files go into a single layer (backward compatible behavior).
+
+Returns a list of dependency maps with name, version, and source.
+This data is used for:
+1. Smart layer classification (deps layer vs app layer)
+2. Future SBOM generation (P6)
+
+For rebar3: Parse `rebar.lock` file.
+For Mix: Parse `mix.lock` file.
+""".
+-callback get_dependencies(State :: term()) ->
+    {ok, [#{name := binary(), version := binary(), source := binary()}]}
+    | {error, term()}.
+
+%% Mark optional callbacks - adapters don't have to implement these
+-optional_callbacks([get_app_version/1, get_dependencies/1]).
 
 %%%===================================================================
 %%% Helper Functions
 %%%===================================================================
 
--export([get_app_version/2]).
+-export([get_app_version/2, get_dependencies/2]).
 
 -doc """
 Get application version from an adapter, with fallback for optional callback.
@@ -185,6 +203,34 @@ get_app_version(Adapter, State) ->
     case erlang:function_exported(Adapter, get_app_version, 1) of
         true -> Adapter:get_app_version(State);
         false -> undefined
+    end.
+
+-doc """
+Get dependencies from an adapter, with fallback for optional callback.
+
+If the adapter implements `get_dependencies/1`, calls it and returns the result.
+If not implemented or returns error, returns an empty list.
+
+The returned list contains maps with `name`, `version`, and `source` keys,
+which can be used for smart layer classification and SBOM generation.
+
+Example:
+```erlang
+Deps = ocibuild_adapter:get_dependencies(ocibuild_rebar3, State).
+%% Returns: [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}, ...]
+```
+""".
+-spec get_dependencies(module(), term()) ->
+    [#{name := binary(), version := binary(), source := binary()}].
+get_dependencies(Adapter, State) ->
+    case erlang:function_exported(Adapter, get_dependencies, 1) of
+        true ->
+            case Adapter:get_dependencies(State) of
+                {ok, Deps} -> Deps;
+                {error, _} -> []
+            end;
+        false ->
+            []
     end.
 
 %%%===================================================================

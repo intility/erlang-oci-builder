@@ -28,7 +28,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                    |
 | **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command. |
 | **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
-| **Smart dependency layering** | ⏳     | Separate layers for ERTS, dependencies, and application code.          |
+| **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.          |
 | **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.         |
 | **Auto OCI annotations**      | ✅     | Automatically populate source URL, revision, version from VCS.         |
 | **SBOM generation**           | ⏳     | Generate SPDX Software Bill of Materials embedded in images.           |
@@ -484,3 +484,51 @@ sha256sum image1.tar.gz image2.tar.gz  # Should match
 - **Debugging**: Same input always produces same output
 
 See [reproducible-builds.org](https://reproducible-builds.org/docs/source-date-epoch/) for more information.
+
+## Smart Dependency Layering
+
+`ocibuild` automatically separates your release into multiple OCI layers for optimal caching in CI/CD pipelines. When only your application code changes, registries only need to store and transfer the app layer — dependencies remain cached.
+
+### Layer Structure
+
+| Layer    | Contents                                       | When it changes            |
+|----------|------------------------------------------------|----------------------------|
+| **Base** | OS files from base image                       | Base image updated         |
+| **ERTS** | ERTS + OTP libs (stdlib, kernel, crypto, etc.) | Erlang/OTP version updated |
+| **Deps** | Third-party dependencies from lock file        | Dependencies updated       |
+| **App**  | Your application code, `bin/`, `releases/`     | Your code changes          |
+
+**Note:** The ERTS layer is only created when `include_erts: true` (the default). When `include_erts: false`, OTP libs are included in the Deps layer since they come from the base image and are stable like dependencies.
+
+### How It Works
+
+`ocibuild` uses your lock file (`rebar.lock` or `mix.lock`) as the source of truth:
+
+1. **App layer**: Files matching your application name
+2. **Deps layer**: Files matching packages listed in your lock file
+3. **ERTS layer**: Everything else (`erts-*` directory and OTP libraries)
+
+This approach requires no configuration and has zero maintenance overhead — it automatically adapts to your project's dependencies.
+
+### Benefits
+
+```
+# First build: all layers uploaded
+Uploading layer 1/3 (ERTS)... 45 MB
+Uploading layer 2/3 (deps)... 12 MB
+Uploading layer 3/3 (app)...   2 MB
+
+# After code change: only app layer uploaded
+Layer 1/3 (ERTS)... exists (skipped)
+Layer 2/3 (deps)... exists (skipped)
+Uploading layer 3/3 (app)...   2 MB
+```
+
+Typical improvements:
+- **80-90% smaller uploads** when only app code changes
+- **Faster CI/CD pipelines** due to layer caching
+- **Reduced registry storage** through layer deduplication
+
+### Fallback Behavior
+
+Smart layering is automatically enabled when a lock file is present. Without a lock file (or if parsing fails), all files go into a single layer — ensuring backward compatibility.

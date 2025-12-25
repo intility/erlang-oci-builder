@@ -22,7 +22,7 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | Build system integration      | ✅ (rebar3/Mix)    | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
 | **Multi-platform images**     | ✅                 | ✅          | ✅                | ✅              |
 | **Reproducible builds**       | ✅                 | ✅          | ✅                | ✅              |
-| **Smart dependency layering** | ⏳ Planned (P3)    | N/A         | ✅                | ✅              |
+| **Smart dependency layering** | ✅                 | N/A         | ✅                | ✅              |
 | **Non-root by default**       | ✅                 | ✅          | ❌                | ✅              |
 | **Auto OCI annotations**      | ✅                 | ✅          | ✅                | ✅              |
 | **SBOM generation**           | ⏳ Planned (P6)    | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
@@ -703,102 +703,100 @@ No CLI flag - environment variable only (it's the standard).
 | File ordering in TAR | ✅ Sorted alphabetically by path in `ocibuild_tar` |
 | Gzip MTIME header | ✅ Already zero (Erlang's `zlib:gzip/1` sets MTIME=0) |
 
-### Priority 3: Smart Dependency Layering
+### Priority 3: Smart Dependency Layering ✅ IMPLEMENTED
+
+**Status:** Fully implemented and tested
 
 **Impact:** Faster CI/CD, smaller uploads
 
-jib separates Java apps into distinct layers (dependencies vs application code). When only app code changes, registries only store/transfer the app layer.
+Similar to jib for Java, ocibuild separates releases into distinct layers. When only app code changes, registries only store/transfer the app layer — dependencies remain cached.
 
 **Layer Structure:**
 
 With ERTS (`include_erts: true`, single-platform):
 ```
 Base image (e.g., debian:stable-slim)
-  └── Layer 1: ERTS + system libs (erts-*, lib/stdlib-*, lib/kernel-*)
-        └── Layer 2: Dependencies (lib/* from lock file)
+  └── Layer 1: ERTS + OTP libs (erts-*, lib/stdlib-*, lib/kernel-*, etc.)
+        └── Layer 2: Dependencies (packages from lock file)
               └── Layer 3: Application code (lib/myapp-*, bin/, releases/)
 ```
 
 Without ERTS (`include_erts: false`, multi-platform):
 ```
 Base image (e.g., erlang:27-alpine, provides ERTS)
-  └── Layer 1: Dependencies (lib/* from lock file)
+  └── Layer 1: Dependencies + OTP libs (all stable code)
         └── Layer 2: Application code (lib/myapp-*, bin/, releases/)
 ```
 
-This is the default behavior, not an option. Layer count is determined by whether ERTS is present.
+This is automatic behavior, not an option. Layer count is determined by ERTS presence.
 
-**Implementation Steps:**
+**Key Design Decision: Lock File as Source of Truth**
 
-1. **New adapter callback** (`ocibuild_adapter.erl`):
-   ```erlang
-   -callback get_dependencies(State :: term()) ->
-       {ok, [#{name := binary(), version := binary(), source := binary()}]} |
-       {error, term()}.
-   %% Returns full dependency info from lock file
-   %% e.g., [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}, ...]
-   ```
+Instead of maintaining a hardcoded list of OTP libraries, ocibuild uses the lock file to classify files:
 
-   This keeps build system logic in adapters, enabling future Gleam/LFE support.
-   Same callback is reused for SBOM generation (Priority 6).
+1. **App layer**: Files matching your application name
+2. **Deps layer**: Files matching packages listed in the lock file
+3. **ERTS layer**: Everything else (ERTS + OTP libraries)
 
-2. **Classify lib directories** (`ocibuild_release.erl`):
-   ```erlang
-   classify_libs(ReleasePath, Deps) ->
-       LibPath = filename:join(ReleasePath, "lib"),
-       {ok, Dirs} = file:list_dir(LibPath),
-       DepNames = [maps:get(name, D) || D <- Deps],
+This approach:
+- Requires zero configuration
+- Has no maintenance overhead (no list to update)
+- Automatically adapts to project dependencies
+- Works correctly as OTP evolves
 
-       lists:partition(
-           fun(Dir) ->
-               %% "cowboy-2.10.0" -> "cowboy"
-               AppName = extract_app_name(Dir),
-               lists:member(AppName, DepNames)
-           end,
-           Dirs
-       ).
-       %% Returns {DepDirs, AppDirs}
-   ```
+**Implementation Summary:**
 
-3. **Build layers based on ERTS presence** (`ocibuild_release.erl`):
-   ```erlang
-   build_layers(ReleasePath, Deps) ->
-       {DepDirs, AppDirs} = classify_libs(ReleasePath, Deps),
+| Component | File | Description |
+|-----------|------|-------------|
+| Adapter callback | `ocibuild_adapter.erl` | `get_dependencies/1` optional callback + `get_dependencies/2` helper |
+| rebar.lock parsing | `ocibuild_rebar3.erl` | `parse_rebar_lock/1`, supports old/new formats, hex/git deps |
+| mix.lock parsing | `lib/mix/tasks/ocibuild.ex`, `lib/ocibuild/mix_release.ex` | `get_dependencies/0` |
+| Mix adapter | `ocibuild_mix.erl` | `get_dependencies/1` reads from state |
+| File classification | `ocibuild_release.erl` | `classify_file_layer/5`, `partition_files_by_layer/4` |
+| Multi-layer building | `ocibuild_release.erl` | `build_release_layers/5` |
 
-       case has_bundled_erts(ReleasePath) of
-           true ->
-               [
-                   build_erts_layer(ReleasePath),
-                   build_deps_layer(ReleasePath, DepDirs),
-                   build_app_layer(ReleasePath, AppDirs)
-               ];
-           false ->
-               [
-                   build_deps_layer(ReleasePath, DepDirs),
-                   build_app_layer(ReleasePath, AppDirs)
-               ]
-       end.
-   ```
+**Classification Logic:**
 
-4. **Implement adapter callbacks:**
-
-   For rebar3 (`ocibuild_rebar3.erl`):
-   - Parse `rebar.lock` to extract dependency names
-
-   For Mix (`ocibuild_mix.erl`):
-   - Parse `mix.lock` to extract dependency names
-
-**Lock File Parsing:**
-
-rebar.lock format:
 ```erlang
-{~"cowboy", {pkg, ~"cowboy", ~"2.10.0"}, 0}.
+classify_file_layer(Path, DepNames, AppName, Workdir, HasErts) ->
+    case extract_path_component(RelPath) of
+        {erts, _} -> erts;
+        {lib, LibName} ->
+            case LibName =:= AppName of
+                true -> app;
+                false ->
+                    case sets:is_element(LibName, DepNames) of
+                        true -> dep;
+                        false ->
+                            %% Not app, not in lock file -> OTP lib
+                            case HasErts of
+                                true -> erts;   %% Group with ERTS
+                                false -> dep    %% Treat as stable deps
+                            end
+                    end
+            end;
+        _Other -> app  %% bin/, releases/, etc.
+    end.
 ```
 
-mix.lock format:
+**Lock File Formats:**
+
+rebar.lock (both old and new formats supported):
+```erlang
+%% New format
+{"1.2.0", [{~"cowboy", {pkg, ~"cowboy", ~"2.10.0"}, 0}]}.
+%% Old format
+[{~"cowboy", {pkg, ~"cowboy", ~"2.10.0"}, 0}].
+```
+
+mix.lock:
 ```elixir
 %{"cowboy": {:hex, :cowboy, "2.10.0", ...}}
 ```
+
+**Fallback Behavior:**
+
+Smart layering is automatically enabled when a lock file is present. Without a lock file (or if parsing fails), all files go into a single layer — ensuring backward compatibility.
 
 ### Priority 4: Non-Root by Default ✅ IMPLEMENTED
 

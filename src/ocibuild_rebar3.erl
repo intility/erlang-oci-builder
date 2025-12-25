@@ -70,12 +70,12 @@ export OCIBUILD_PULL_PASSWORD="pass"
 
 %% Adapter callbacks (ocibuild_adapter behaviour)
 -export([get_config/1, find_release/2, info/2, console/2, error/2]).
-%% Optional adapter callback
--export([get_app_version/1]).
+%% Optional adapter callbacks
+-export([get_app_version/1, get_dependencies/1]).
 
 %% Exports for testing
 -ifdef(TEST).
--export([find_relx_release/1, get_base_image/2]).
+-export([find_relx_release/1, get_base_image/2, parse_rebar_lock/1]).
 -endif.
 
 -define(PROVIDER, ocibuild).
@@ -329,6 +329,64 @@ normalize_version(Vsn) when is_atom(Vsn) ->
     atom_to_binary(Vsn);
 normalize_version(_) ->
     undefined.
+
+-doc """
+Get dependencies from rebar.lock file.
+
+Parses the rebar.lock file to extract dependency information including
+name, version, and source (hex or git). This data is used for:
+1. Smart layer classification (dependencies vs application code)
+2. Future SBOM generation
+
+Supports both old format (list only) and new format (version tuple + list).
+""".
+-spec get_dependencies(rebar_state:t()) ->
+    {ok, [#{name := binary(), version := binary(), source := binary()}]}
+    | {error, term()}.
+get_dependencies(State) ->
+    ProjectDir = rebar_state:dir(State),
+    LockFile = filename:join(ProjectDir, "rebar.lock"),
+    parse_rebar_lock(LockFile).
+
+%% @private Parse rebar.lock file
+-spec parse_rebar_lock(file:filename()) ->
+    {ok, [#{name := binary(), version := binary(), source := binary()}]}
+    | {error, term()}.
+parse_rebar_lock(LockFile) ->
+    case file:consult(LockFile) of
+        {ok, []} ->
+            {ok, []};
+        {ok, [{_Version, Deps} | _Rest]} when is_list(Deps) ->
+            %% New format: {"1.2.0", [{~"pkg", {pkg, ~"pkg", ~"1.0.0"}, 0}, ...]}
+            {ok, [parse_dep_entry(D) || D <- Deps]};
+        {ok, [Deps | _Rest]} when is_list(Deps) ->
+            %% Old format: [{~"pkg", {pkg, ~"pkg", ~"1.0.0"}, 0}, ...]
+            {ok, [parse_dep_entry(D) || D <- Deps]};
+        {error, enoent} ->
+            %% No lock file - no dependencies
+            {ok, []};
+        {error, Reason} ->
+            {error, {lock_parse_failed, Reason}}
+    end.
+
+%% @private Parse a single dependency entry from rebar.lock
+-spec parse_dep_entry(tuple()) ->
+    #{name := binary(), version := binary(), source := binary()}.
+parse_dep_entry({Name, {pkg, _PkgName, Version}, _Depth}) ->
+    #{name => Name, version => Version, source => ~"hex"};
+parse_dep_entry({Name, {git, Url, {ref, Ref}}, _Depth}) ->
+    #{name => Name, version => to_binary(Ref), source => to_binary(Url)};
+parse_dep_entry({Name, {git, Url, {tag, Tag}}, _Depth}) ->
+    #{name => Name, version => to_binary(Tag), source => to_binary(Url)};
+parse_dep_entry({Name, {git, Url, {branch, Branch}}, _Depth}) ->
+    #{name => Name, version => to_binary(Branch), source => to_binary(Url)};
+parse_dep_entry({Name, _, _Depth}) ->
+    #{name => Name, version => ~"unknown", source => ~"unknown"}.
+
+%% @private Convert to binary
+to_binary(V) when is_binary(V) -> V;
+to_binary(V) when is_list(V) -> list_to_binary(V);
+to_binary(V) when is_atom(V) -> atom_to_binary(V).
 
 -doc "Find release directory from rebar state.".
 -spec find_release(rebar_state:t(), map()) ->

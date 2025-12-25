@@ -53,8 +53,8 @@ The state passed to this adapter is a map containing:
 
 %% Behaviour callbacks
 -export([get_config/1, find_release/2, info/2, console/2, error/2]).
-%% Optional adapter callback
--export([get_app_version/1]).
+%% Optional adapter callbacks
+-export([get_app_version/1, get_dependencies/1]).
 
 %%%===================================================================
 %%% Behaviour Implementation
@@ -123,6 +123,40 @@ get_app_version(State) when is_map(State) ->
         Version when is_list(Version) -> list_to_binary(Version);
         _ -> undefined
     end.
+
+-doc """
+Get dependencies from Mix state.
+
+The dependencies are passed from Elixir via the state map as `dependencies`.
+This is used for smart layer classification (deps vs app code) and future SBOM.
+""".
+-spec get_dependencies(map()) ->
+    {ok, [#{name := binary(), version := binary(), source := binary()}]}
+    | {error, term()}.
+get_dependencies(State) when is_map(State) ->
+    case maps:get(dependencies, State, undefined) of
+        undefined ->
+            {error, not_available};
+        Deps when is_list(Deps) ->
+            %% Convert Elixir maps to Erlang maps with binary keys
+            ErlDeps = [normalize_dep(D) || D <- Deps],
+            {ok, ErlDeps};
+        _ ->
+            {error, invalid_format}
+    end.
+
+%% @private Normalize a dependency map from Elixir format
+normalize_dep(Dep) when is_map(Dep) ->
+    #{
+        name => to_binary(maps:get(name, Dep, maps:get(~"name", Dep, ~"unknown"))),
+        version => to_binary(maps:get(version, Dep, maps:get(~"version", Dep, ~"unknown"))),
+        source => to_binary(maps:get(source, Dep, maps:get(~"source", Dep, ~"unknown")))
+    }.
+
+%% @private Convert to binary
+to_binary(V) when is_binary(V) -> V;
+to_binary(V) when is_list(V) -> list_to_binary(V);
+to_binary(V) when is_atom(V) -> atom_to_binary(V).
 
 -doc """
 Log an informational message.
