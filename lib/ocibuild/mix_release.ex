@@ -108,7 +108,7 @@ defmodule Ocibuild.MixRelease do
       app_version: to_binary(release.version),
       uid: Keyword.get(ocibuild_config, :uid),
       vcs_annotations: Keyword.get(ocibuild_config, :vcs_annotations, true),
-      dependencies: get_dependencies()
+      dependencies: Ocibuild.Lock.get_dependencies()
     }
   end
 
@@ -153,45 +153,6 @@ defmodule Ocibuild.MixRelease do
       nil -> nil
       platform when is_binary(platform) -> platform
       platform when is_list(platform) -> to_binary(platform)
-    end
-  end
-
-  # Get dependencies from mix.lock for smart layer classification
-  defp get_dependencies do
-    case File.read("mix.lock") do
-      {:ok, content} ->
-        try do
-          {lock_map, _} = Code.eval_string(content)
-
-          Enum.map(lock_map, fn
-            {name, {:hex, _, version, _, _, _, _, _}} ->
-              %{name: Atom.to_string(name), version: version, source: "hex"}
-
-            {name, {:hex, _, version, _, _, _, _}} ->
-              %{name: Atom.to_string(name), version: version, source: "hex"}
-
-            {name, {:git, url, ref, _}} ->
-              %{name: Atom.to_string(name), version: ref, source: url}
-
-            {name, _} ->
-              %{name: Atom.to_string(name), version: "unknown", source: "unknown"}
-          end)
-        rescue
-          exception ->
-            IO.warn(
-              "ocibuild: failed to parse mix.lock, falling back to single-layer mode: " <>
-                Exception.message(exception)
-            )
-
-            []
-        end
-
-      {:error, reason} ->
-        IO.warn(
-          "ocibuild: unable to read mix.lock (#{inspect(reason)}), falling back to single-layer mode"
-        )
-
-        []
     end
   end
 
