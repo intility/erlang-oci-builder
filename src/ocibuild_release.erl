@@ -682,11 +682,11 @@ do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
 
     case PushResult of
         ok ->
-            AdapterModule:info("Push successful!", []),
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
             %% Clean up httpc after all pushes complete
             stop_httpc(),
+            AdapterModule:info("Push successful!", []),
             {ok, AdapterState};
         {error, PushError} ->
             stop_httpc(),
@@ -2164,18 +2164,13 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
         %% Generate SBOM
         {ok, SbomJson} = ocibuild_sbom:generate(Dependencies, SbomOpts),
 
-        %% Create SBOM layer with reproducible mtime
-        SbomLayer = ocibuild_layer:create(
-            [{~"/sbom.spdx.json", SbomJson, 8#644}],
-            #{mtime => ocibuild_time:get_timestamp(), layer_type => sbom}
-        ),
+        %% Add SBOM as layer using ocibuild:add_layer to properly update config
+        %% (updates both layers list and config diff_ids/history)
+        SbomFiles = [{~"/sbom.spdx.json", SbomJson, 8#644}],
+        Image1 = ocibuild:add_layer(Image, SbomFiles, #{layer_type => sbom}),
 
-        %% Add layer and store SBOM for later referrer push
-        Layers = maps:get(layers, Image),
-        Image#{
-            layers := [SbomLayer | Layers],
-            sbom => SbomJson
-        }
+        %% Store SBOM JSON for later referrer push
+        Image1#{sbom => SbomJson}
     catch
         _Class:Reason ->
             %% SBOM generation failed - log warning and continue without SBOM
