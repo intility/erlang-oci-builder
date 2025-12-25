@@ -699,10 +699,11 @@ is_unsupported_manifest_error(Body) when is_binary(Body) ->
     is_unsupported_manifest_error(binary_to_list(Body));
 is_unsupported_manifest_error(Body) when is_list(Body) ->
     LowerBody = string:lowercase(Body),
+    %% Check for specific error messages indicating referrer/artifact support is missing
+    %% Note: "artifact" alone is too broad and may cause false positives
     string:find(LowerBody, "unsupported") =/= nomatch orelse
         string:find(LowerBody, "not supported") =/= nomatch orelse
-        string:find(LowerBody, "unknown manifest") =/= nomatch orelse
-        string:find(LowerBody, "artifact") =/= nomatch.
+        string:find(LowerBody, "unknown manifest") =/= nomatch.
 
 %%%===================================================================
 %%% Internal functions

@@ -162,10 +162,10 @@ Opts = #{app_name => ~"myapp", app_version => ~"1.0.0"},
 """.
 -spec generate([dependency()], sbom_opts()) -> {ok, binary()}.
 generate(Dependencies, #{app_name := AppName} = Opts) ->
-    AppVersion = maps:get(app_version, Opts, ~"unknown"),
     ReleaseName = maps:get(release_name, Opts, AppName),
+    %% Get version, treating undefined as "unknown"
     VersionStr =
-        case AppVersion of
+        case maps:get(app_version, Opts, undefined) of
             undefined -> ~"unknown";
             V -> V
         end,
@@ -205,7 +205,8 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
     AllPackages = [MainPackage] ++ DepPackages ++ ErtsPackages ++ BasePackages,
 
     %% Build relationships
-    Relationships = build_relationships(AppName, AllPackages),
+    SafeAppName = sanitize_spdx_id(AppName),
+    Relationships = build_relationships(SafeAppName, AllPackages),
 
     %% Build the SPDX document
     Sbom = #{
@@ -218,7 +219,7 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
             ~"creators" => [<<"Tool: ocibuild-", (get_ocibuild_version())/binary>>]
         },
         ~"documentNamespace" => Namespace,
-        ~"documentDescribes" => [<<"SPDXRef-Package-", AppName/binary>>],
+        ~"documentDescribes" => [<<"SPDXRef-Package-", SafeAppName/binary>>],
         ~"packages" => AllPackages,
         ~"relationships" => Relationships
     },
@@ -279,7 +280,9 @@ generate_namespace(DocName) ->
     %% Extract just the hex part after "sha256:"
     <<"sha256:", Hex/binary>> = HashHex,
     ShortHash = binary:part(Hex, 0, 16),
-    <<"https://spdx.org/spdxdocs/", DocName/binary, "-", ShortHash/binary>>.
+    %% URL-encode the document name to ensure a valid URI
+    EncodedDocName = uri_encode(DocName),
+    <<"https://spdx.org/spdxdocs/", EncodedDocName/binary, "-", ShortHash/binary>>.
 
 %% @private Build the main application package
 -spec build_package(binary(), binary(), sbom_opts()) -> map().
@@ -290,8 +293,9 @@ build_package(AppName, Version, Opts) ->
             undefined -> ~"NOASSERTION";
             Url -> Url
         end,
+    SafeName = sanitize_spdx_id(AppName),
     #{
-        ~"SPDXID" => <<"SPDXRef-Package-", AppName/binary>>,
+        ~"SPDXID" => <<"SPDXRef-Package-", SafeName/binary>>,
         ~"name" => AppName,
         ~"versionInfo" => Version,
         ~"downloadLocation" => DownloadLocation,
@@ -307,8 +311,9 @@ build_package(AppName, Version, Opts) ->
 build_dependency_package(#{name := Name, version := Version} = Dep) ->
     PURL = to_purl(Dep),
     DownloadLocation = build_download_location(Dep),
+    SafeName = sanitize_spdx_id(Name),
     #{
-        ~"SPDXID" => <<"SPDXRef-Package-", Name/binary>>,
+        ~"SPDXID" => <<"SPDXRef-Package-", SafeName/binary>>,
         ~"name" => Name,
         ~"versionInfo" => Version,
         ~"downloadLocation" => DownloadLocation,
@@ -508,14 +513,13 @@ parse_git_url(Url) ->
     end.
 
 %% @private Parse HTTPS git URL
+%% Handles URLs like "github.com/owner/repo.git"
 -spec parse_https_url(binary()) -> {ok, {binary(), binary()}} | error.
 parse_https_url(Rest) ->
+    %% Split only on first "/" to separate host from path
+    %% binary:split/2 without [global] splits at most once
     case binary:split(Rest, ~"/") of
-        [Host, RepoPath] ->
-            Repo = strip_git_suffix(RepoPath),
-            {ok, {Host, Repo}};
-        [Host | PathParts] when length(PathParts) >= 1 ->
-            RepoPath = iolist_to_binary(lists:join(~"/", PathParts)),
+        [Host, RepoPath] when byte_size(Host) > 0, byte_size(RepoPath) > 0 ->
             Repo = strip_git_suffix(RepoPath),
             {ok, {Host, Repo}};
         _ ->
@@ -553,3 +557,51 @@ get_ocibuild_version() ->
         {ok, Vsn} when is_binary(Vsn) -> Vsn;
         _ -> ~"unknown"
     end.
+
+%% @private Sanitize a string for use in SPDX IDs.
+%% SPDX IDs must match: [a-zA-Z0-9.-]+
+%% Invalid characters are replaced with hyphens.
+-spec sanitize_spdx_id(binary()) -> binary().
+sanitize_spdx_id(Name) ->
+    <<<<(sanitize_spdx_char(C))/binary>> || <<C>> <= Name>>.
+
+%% @private Convert a character to a valid SPDX ID character
+-spec sanitize_spdx_char(byte()) -> binary().
+sanitize_spdx_char(C) when C >= $a, C =< $z -> <<C>>;
+sanitize_spdx_char(C) when C >= $A, C =< $Z -> <<C>>;
+sanitize_spdx_char(C) when C >= $0, C =< $9 -> <<C>>;
+sanitize_spdx_char($.) -> <<".">>;
+sanitize_spdx_char($-) -> <<"-">>;
+%% Common in Erlang names
+sanitize_spdx_char($_) -> <<"-">>;
+sanitize_spdx_char(_) -> <<"-">>.
+
+%% @private URI-encode a binary string for use in URLs.
+%% Encodes characters that are not unreserved per RFC 3986.
+-spec uri_encode(binary()) -> binary().
+uri_encode(Bin) ->
+    <<<<(uri_encode_char(C))/binary>> || <<C>> <= Bin>>.
+
+%% @private Encode a single character for URI
+-spec uri_encode_char(byte()) -> binary().
+uri_encode_char(C) when C >= $a, C =< $z -> <<C>>;
+uri_encode_char(C) when C >= $A, C =< $Z -> <<C>>;
+uri_encode_char(C) when C >= $0, C =< $9 -> <<C>>;
+uri_encode_char($-) ->
+    <<"-">>;
+uri_encode_char($.) ->
+    <<".">>;
+uri_encode_char($_) ->
+    <<"_">>;
+uri_encode_char($~) ->
+    <<"~">>;
+uri_encode_char(C) ->
+    %% Percent-encode all other characters
+    High = C bsr 4,
+    Low = C band 16#0F,
+    <<"%", (hex_digit(High)), (hex_digit(Low))>>.
+
+%% @private Convert a nibble (0-15) to a hex digit
+-spec hex_digit(0..15) -> byte().
+hex_digit(N) when N < 10 -> $0 + N;
+hex_digit(N) -> $A + N - 10.

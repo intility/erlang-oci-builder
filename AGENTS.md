@@ -948,11 +948,11 @@ Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko a
 
 SBOM is always generated and embedded. No flags needed.
 
-| Output                 | Behavior                      |
-|------------------------|-------------------------------|
-| Embed in image         | Always (at `/sbom.spdx.json`) |
-| Attach as OCI artifact | Not yet (requires push returns digest) |
-| Export to file         | Optional: `--sbom <path>`     |
+| Output                 | Behavior                                 |
+|------------------------|------------------------------------------|
+| Embed in image         | Always (at `/sbom.spdx.json`)            |
+| Attach as OCI artifact | Automatic on push (via OCI referrers API)|
+| Export to file         | Optional: `--sbom <path>`                |
 
 ```bash
 # SBOM embedded + attached automatically

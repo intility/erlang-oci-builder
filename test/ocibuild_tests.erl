@@ -1310,6 +1310,18 @@ sbom_purl_github_test() ->
     Dep = #{name => ~"my_lib", version => ~"1.0.0", source => ~"https://github.com/owner/repo.git"},
     ?assertEqual(~"pkg:github/owner/repo@1.0.0", ocibuild_sbom:to_purl(Dep)).
 
+sbom_purl_gitlab_test() ->
+    %% Test PURL generation for GitLab dependencies
+    Dep = #{name => ~"my_lib", version => ~"2.0.0", source => ~"https://gitlab.com/owner/repo.git"},
+    ?assertEqual(~"pkg:gitlab/owner/repo@2.0.0", ocibuild_sbom:to_purl(Dep)).
+
+sbom_purl_bitbucket_test() ->
+    %% Test PURL generation for Bitbucket dependencies
+    Dep = #{
+        name => ~"my_lib", version => ~"3.0.0", source => ~"https://bitbucket.org/owner/repo.git"
+    },
+    ?assertEqual(~"pkg:bitbucket/owner/repo@3.0.0", ocibuild_sbom:to_purl(Dep)).
+
 sbom_purl_generic_test() ->
     %% Test PURL generation for unknown sources
     Dep = #{name => ~"unknown", version => ~"1.0.0", source => ~"local"},

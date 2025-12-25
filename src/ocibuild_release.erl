@@ -2172,12 +2172,13 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
         %% Store SBOM JSON for later referrer push
         Image1#{sbom => SbomJson}
     catch
-        _Class:Reason ->
+        Class:Reason:Stacktrace ->
             %% SBOM generation failed - log warning and continue without SBOM
             io:format(
                 standard_error,
-                "ocibuild: warning: SBOM generation failed (~p), continuing without SBOM~n",
-                [Reason]
+                "ocibuild: warning: SBOM generation failed (~p:~p), continuing without SBOM~n"
+                "  Stacktrace: ~p~n",
+                [Class, Reason, Stacktrace]
             ),
             Image
     end.
