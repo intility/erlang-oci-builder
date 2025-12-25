@@ -685,8 +685,11 @@ do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
             AdapterModule:info("Push successful!", []),
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
+            %% Clean up httpc after all pushes complete
+            stop_httpc(),
             {ok, AdapterState};
         {error, PushError} ->
+            stop_httpc(),
             {error, {push_failed, PushError}}
     end.
 
@@ -1098,7 +1101,7 @@ push_image(Image, Registry, RepoTag, Auth, Opts) ->
     PushOpts = Opts#{progress => ProgressFn},
     Result = ocibuild:push(Image, Registry, RepoTag, Auth, PushOpts),
     clear_progress_line(),
-    stop_httpc(),
+    %% Note: Don't stop httpc here - it may be needed for SBOM referrer push
     Result.
 
 -doc """
