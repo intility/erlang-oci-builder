@@ -520,7 +520,7 @@ parse_https_url(Rest) ->
     %% binary:split/2 without [global] splits at most once
     case binary:split(Rest, ~"/") of
         [Host, RepoPath] when byte_size(Host) > 0, byte_size(RepoPath) > 0 ->
-            Repo = strip_git_suffix(RepoPath),
+            Repo = strip_vcs_suffix(RepoPath),
             {ok, {Host, Repo}};
         _ ->
             error
@@ -531,20 +531,21 @@ parse_https_url(Rest) ->
 parse_ssh_url(Rest) ->
     case binary:split(Rest, ~":") of
         [Host, RepoPath] ->
-            Repo = strip_git_suffix(RepoPath),
+            Repo = strip_vcs_suffix(RepoPath),
             {ok, {Host, Repo}};
         _ ->
             error
     end.
 
-%% @private Strip .git suffix from repo path
--spec strip_git_suffix(binary()) -> binary().
-strip_git_suffix(RepoPath) ->
-    case binary:match(RepoPath, ~".git") of
-        {Pos, 4} when Pos =:= byte_size(RepoPath) - 4 ->
-            binary:part(RepoPath, 0, Pos);
-        _ ->
-            RepoPath
+%% @private Strip common VCS suffixes from repo path (.git, .hg, .svn)
+-spec strip_vcs_suffix(binary()) -> binary().
+strip_vcs_suffix(RepoPath) ->
+    %% Check for common VCS suffixes at the end of the path
+    case RepoPath of
+        <<Prefix:(byte_size(RepoPath) - 4)/binary, ".git">> -> Prefix;
+        <<Prefix:(byte_size(RepoPath) - 3)/binary, ".hg">> -> Prefix;
+        <<Prefix:(byte_size(RepoPath) - 4)/binary, ".svn">> -> Prefix;
+        _ -> RepoPath
     end.
 
 %% @private Get ocibuild version from application metadata
