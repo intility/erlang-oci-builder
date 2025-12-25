@@ -1115,7 +1115,8 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
 
 %% Create a label for layer upload progress
 %% Pads label to fixed width so progress bars align
--define(LABEL_WIDTH, 32).
+%% Width of 40 accommodates labels like "Layer 10/10 (deps, linux/arm64/v8)"
+-define(LABEL_WIDTH, 40).
 
 -spec make_upload_label(
     pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined

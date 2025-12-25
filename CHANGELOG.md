@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.0 - 2025-12-25
+
+### Features
+
+- **Smart dependency layering**: Releases are now automatically split into multiple OCI layers for optimal caching
+  - **ERTS layer**: Contains ERTS and OTP libraries (when `include_erts: true`)
+  - **Deps layer**: Contains third-party dependencies from lock file
+  - **App layer**: Contains your application code, `bin/`, and `releases/`
+  - Uses lock file (`rebar.lock` / `mix.lock`) as source of truth for classification
+  - Falls back to single layer when lock file is unavailable (backward compatible)
+  - Typical improvement: 80-90% smaller uploads when only app code changes
+- **New `Ocibuild.Lock` module**: Shared Elixir module for parsing `mix.lock` files
+  - Uses `Mix.Dep.Lock.read/1` for safe lockfile parsing (no `Code.eval_string`)
+  - Supports hex dependencies (7 and 8-element tuples) and git dependencies
+- **New `get_dependencies/1` adapter callback**: Optional callback for adapters to provide dependency info for smart layering
+- **Configurable git timeout**: New `OCIBUILD_GIT_TIMEOUT` environment variable
+  - Timeout in milliseconds for git network operations (default: 5000, max: 300000)
+  - Useful for slow networks or large repositories
+
+### Security
+
+- **Port message flushing**: Fixed potential race condition where stale port messages could pollute the mailbox after git command timeout
+- **URL sanitization**: CI environment variables are now sanitized to prevent URL injection attacks
+  - Strips credentials, query params, fragments, and control characters from URLs
+- **Timeout upper bound**: Git timeout is now capped at 5 minutes to prevent indefinite hangs
+
+### Improvements
+
+- **Layer partitioning functions**: New public API in `ocibuild_release`:
+  - `partition_files_by_layer/5` - Split files into ERTS, deps, and app layers
+  - `classify_file_layer/5` - Classify a single file path
+  - `build_release_layers/5` - Build layers with smart partitioning
+- **Dependency parsing for rebar3**: `ocibuild_rebar3:parse_rebar_lock/1` parses both old and new lock file formats
+- **Consolidated test helpers**: Elixir tests now use shared `Ocibuild.TestHelpers` module
+
+### Documentation
+
+- Added "Environment Variables" section to README documenting `OCIBUILD_GIT_TIMEOUT`
+- Added "Smart Dependency Layering" section to README explaining layer structure and benefits
+- Documented reproducible builds requirement for layer caching to work across builds
+
 ## 0.3.0 - 2025-12-24
 
 ### Features

@@ -40,7 +40,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ```erlang
 {deps, [
-    {ocibuild, "~> 0.1"}
+    {ocibuild, "~> 0.4"}
 ]}.
 ```
 
@@ -49,7 +49,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 ```elixir
 def deps do
   [
-    {:ocibuild, "~> 0.1"}
+    {:ocibuild, "~> 0.4"}
   ]
 end
 ```
