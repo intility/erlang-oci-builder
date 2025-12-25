@@ -103,7 +103,7 @@ find_release(State, _Opts) ->
         {_, undefined} ->
             {error, {missing_config, release_path}};
         {Name, Path} when is_atom(Name) ->
-            {ok, atom_to_binary(Name), Path};
+            {ok, atom_to_binary(Name, utf8), Path};
         {Name, Path} when is_binary(Name) ->
             {ok, Name, Path};
         {Name, Path} when is_list(Name) ->
@@ -157,7 +157,7 @@ normalize_dep(Dep) when is_map(Dep) ->
 %% @private Convert to binary
 to_binary(V) when is_binary(V) -> V;
 to_binary(V) when is_list(V) -> list_to_binary(V);
-to_binary(V) when is_atom(V) -> atom_to_binary(V).
+to_binary(V) when is_atom(V) -> atom_to_binary(V, utf8).
 
 -doc """
 Log an informational message.

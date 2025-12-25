@@ -29,14 +29,22 @@ before falling back to git commands:
 SSH URLs are automatically converted to HTTPS for public visibility:
 - `git@github.com:org/repo.git` → `https://github.com/org/repo`
 - `ssh://git@github.com/org/repo.git` → `https://github.com/org/repo`
+
+## Configuration
+
+The timeout for git commands can be configured via environment variable:
+- `OCIBUILD_GIT_TIMEOUT` - Timeout in milliseconds (default: 5000)
+
+This is particularly useful for network operations like `git remote get-url`
+when working with slow networks or remote repositories.
 """.
 
 -behaviour(ocibuild_vcs).
 
 -export([detect/1, get_source_url/1, get_revision/1]).
 
-%% Timeout for git commands (milliseconds)
--define(GIT_TIMEOUT, 5000).
+%% Default timeout for git commands (milliseconds)
+-define(DEFAULT_GIT_TIMEOUT, 5000).
 
 %%%===================================================================
 %%% Behaviour Implementation
@@ -70,10 +78,10 @@ get_source_url(Path) ->
             %% Sanitize CI URL (remove credentials, .git extension)
             {ok, convert_ssh_to_https(Url)};
         not_found ->
-            %% Fall back to git command
+            %% Fall back to git command (network operation - uses configurable timeout)
             maybe
                 {ok, GitRoot} ?= find_git_root(Path),
-                {ok, Url} ?= run_git_command(GitRoot, ["remote", "get-url", "origin"]),
+                {ok, Url} ?= run_git_command(GitRoot, ["remote", "get-url", "origin"], network),
                 {ok, convert_ssh_to_https(Url)}
             else
                 not_found -> {error, not_a_git_repo};
@@ -93,10 +101,10 @@ get_revision(Path) ->
         {ok, Rev} ->
             {ok, Rev};
         not_found ->
-            %% Fall back to git command
+            %% Fall back to git command (local operation - uses default timeout)
             maybe
                 {ok, GitRoot} ?= find_git_root(Path),
-                run_git_command(GitRoot, ["rev-parse", "HEAD"])
+                run_git_command(GitRoot, ["rev-parse", "HEAD"], local)
             else
                 not_found -> {error, not_a_git_repo}
             end
@@ -121,14 +129,27 @@ get_source_url_from_env() ->
     end.
 
 %% @private Try GitHub Actions source URL (SERVER_URL + REPOSITORY)
+%% Sanitizes both components to prevent URL injection
 -spec try_github_source_url() -> {ok, binary()} | not_found.
 try_github_source_url() ->
     case {os:getenv("GITHUB_SERVER_URL"), os:getenv("GITHUB_REPOSITORY")} of
         {Server, Repo} when is_list(Server), is_list(Repo), Server =/= "", Repo =/= "" ->
-            {ok, iolist_to_binary([Server, "/", Repo])};
+            %% Sanitize both components before concatenation
+            SanitizedServer = sanitize_url_component(Server),
+            SanitizedRepo = sanitize_url_component(Repo),
+            Url = iolist_to_binary([SanitizedServer, "/", SanitizedRepo]),
+            {ok, Url};
         _ ->
             not_found
     end.
+
+%% @private Sanitize a URL component to prevent injection
+%% Removes dangerous characters that could break URL structure
+-spec sanitize_url_component(string()) -> string().
+sanitize_url_component(Component) ->
+    %% Remove newlines, carriage returns, and other control characters
+    %% that could be used for header injection or URL manipulation
+    [C || C <- Component, C >= 32, C < 127, C =/= $\s].
 
 %% @private Try to get URL/SHA from a single environment variable
 -spec try_env_var(string()) -> {ok, binary()} | not_found.
@@ -213,9 +234,42 @@ find_git_root_recursive(Path) ->
 %%% Internal Functions - Git Commands via Port
 %%%===================================================================
 
+%% @private Get the timeout for git commands based on operation type
+%% Network operations (like remote get-url) can use OCIBUILD_GIT_TIMEOUT
+%% Local operations always use the default timeout
+-spec get_git_timeout(local | network) -> pos_integer().
+get_git_timeout(local) ->
+    ?DEFAULT_GIT_TIMEOUT;
+get_git_timeout(network) ->
+    case os:getenv("OCIBUILD_GIT_TIMEOUT") of
+        false ->
+            ?DEFAULT_GIT_TIMEOUT;
+        Value ->
+            try
+                Timeout = list_to_integer(Value),
+                if
+                    Timeout > 0 -> Timeout;
+                    true -> ?DEFAULT_GIT_TIMEOUT
+                end
+            catch
+                _:_ -> ?DEFAULT_GIT_TIMEOUT
+            end
+    end.
+
 %% @private Run a git command using Erlang port for security and proper error handling
--spec run_git_command(file:filename(), [string()]) -> {ok, binary()} | {error, term()}.
-run_git_command(WorkDir, Args) ->
+%%
+%% We use `spawn_executable` instead of `os:cmd` for security:
+%% - `os:cmd` passes the command through a shell, making it vulnerable to injection
+%%   (e.g., "; rm -rf /" could be interpreted by the shell)
+%% - `spawn_executable` directly executes the binary with explicit args
+%% - Each argument is passed separately, so shell metacharacters are treated literally
+%% - This is the ONLY safe way to execute external commands in Erlang
+%%
+%% OpType indicates whether this is a local or network operation for timeout purposes.
+-spec run_git_command(file:filename(), [string()], local | network) ->
+    {ok, binary()} | {error, term()}.
+run_git_command(WorkDir, Args, OpType) ->
+    Timeout = get_git_timeout(OpType),
     case os:find_executable("git") of
         false ->
             {error, git_not_found};
@@ -232,7 +286,7 @@ run_git_command(WorkDir, Args) ->
                         hide
                     ]
                 ),
-                receive_port_output(Port, <<>>)
+                receive_port_output(Port, <<>>, Timeout)
             catch
                 error:Reason ->
                     {error, {port_error, Reason}}
@@ -240,19 +294,32 @@ run_git_command(WorkDir, Args) ->
     end.
 
 %% @private Collect output from port until exit
--spec receive_port_output(port(), binary()) -> {ok, binary()} | {error, term()}.
-receive_port_output(Port, Acc) ->
+-spec receive_port_output(port(), binary(), pos_integer()) -> {ok, binary()} | {error, term()}.
+receive_port_output(Port, Acc, Timeout) ->
     receive
         {Port, {data, Data}} ->
-            receive_port_output(Port, <<Acc/binary, Data/binary>>);
+            receive_port_output(Port, <<Acc/binary, Data/binary>>, Timeout);
         {Port, {exit_status, 0}} ->
             %% Trim trailing whitespace (especially newlines)
             {ok, string:trim(Acc, trailing)};
         {Port, {exit_status, Code}} ->
             {error, {git_exit, Code, Acc}}
-    after ?GIT_TIMEOUT ->
+    after Timeout ->
         catch port_close(Port),
+        %% Flush any remaining messages from the port to prevent mailbox pollution
+        %% This prevents race conditions where stale data could affect subsequent calls
+        flush_port_messages(Port),
         {error, timeout}
+    end.
+
+%% @private Flush remaining messages from a closed port
+%% Prevents race conditions where messages arrive after timeout
+-spec flush_port_messages(port()) -> ok.
+flush_port_messages(Port) ->
+    receive
+        {Port, _} -> flush_port_messages(Port)
+    after 0 ->
+        ok
     end.
 
 %%%===================================================================

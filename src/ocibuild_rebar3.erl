@@ -227,7 +227,7 @@ get_app_name(State, Config) ->
             %% Try to get from rebar_state project_apps
             get_project_app_name(State);
         Name when is_atom(Name) ->
-            atom_to_binary(Name);
+            atom_to_binary(Name, utf8);
         Name when is_list(Name) ->
             list_to_binary(Name);
         Name when is_binary(Name) ->
@@ -354,7 +354,7 @@ normalize_version(Vsn) when is_binary(Vsn) ->
     Vsn;
 normalize_version(Vsn) when is_atom(Vsn) ->
     %% Handle relx version atoms like 'semver' or 'git' (symbolic refs)
-    atom_to_binary(Vsn);
+    atom_to_binary(Vsn, utf8);
 normalize_version(_) ->
     undefined.
 
@@ -414,7 +414,7 @@ parse_dep_entry({Name, _, _Depth}) ->
 %% @private Convert to binary
 to_binary(V) when is_binary(V) -> V;
 to_binary(V) when is_list(V) -> list_to_binary(V);
-to_binary(V) when is_atom(V) -> atom_to_binary(V).
+to_binary(V) when is_atom(V) -> atom_to_binary(V, utf8).
 
 -doc "Find release directory from rebar state.".
 -spec find_release(rebar_state:t(), map()) ->

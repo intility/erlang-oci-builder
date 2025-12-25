@@ -209,7 +209,7 @@ get_app_version(Adapter, State) ->
 Get dependencies from an adapter, with fallback for optional callback.
 
 If the adapter implements `get_dependencies/1`, calls it and returns the result.
-If not implemented or returns error, returns an empty list.
+If not implemented or returns error, returns an empty list (with a warning for errors).
 
 The returned list contains maps with `name`, `version`, and `source` keys,
 which can be used for smart layer classification and SBOM generation.
@@ -226,8 +226,18 @@ get_dependencies(Adapter, State) ->
     case erlang:function_exported(Adapter, get_dependencies, 1) of
         true ->
             case Adapter:get_dependencies(State) of
-                {ok, Deps} -> Deps;
-                {error, _} -> []
+                {ok, Deps} ->
+                    Deps;
+                {error, Reason} ->
+                    %% Log warning for debugging - dependency parsing failed
+                    %% Falls back to single-layer mode (backward compatible)
+                    io:format(
+                        standard_error,
+                        "ocibuild: warning: failed to parse dependencies (~p), "
+                        "falling back to single-layer mode~n",
+                        [Reason]
+                    ),
+                    []
             end;
         false ->
             []

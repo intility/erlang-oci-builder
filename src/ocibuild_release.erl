@@ -376,13 +376,22 @@ build_auto_annotations(Image, ReleasePath, Config) ->
     add_base_image_annotations(Image, Annotations3).
 
 %% @private Add VCS annotations (source URL, revision) from detected VCS
+%% Wrapped in try-catch to prevent VCS failures from breaking the build
 -spec add_vcs_annotations(file:filename(), map()) -> map().
 add_vcs_annotations(ReleasePath, Annotations) ->
-    case ocibuild_vcs:detect(ReleasePath) of
-        {ok, VcsModule} ->
-            VcsAnnotations = ocibuild_vcs:get_annotations(VcsModule, ReleasePath),
-            maps:merge(Annotations, VcsAnnotations);
-        not_found ->
+    try
+        case ocibuild_vcs:detect(ReleasePath) of
+            {ok, VcsModule} ->
+                VcsAnnotations = ocibuild_vcs:get_annotations(VcsModule, ReleasePath),
+                maps:merge(Annotations, VcsAnnotations);
+            not_found ->
+                Annotations
+        end
+    catch
+        _Class:_Reason ->
+            %% VCS detection/annotation failed - silently continue without VCS annotations
+            %% This prevents issues like git binary not found or permissions errors
+            %% from breaking the image build
             Annotations
     end.
 
@@ -1047,7 +1056,7 @@ to_binary(Value) when is_binary(Value) ->
 to_binary(Value) when is_list(Value) ->
     list_to_binary(Value);
 to_binary(Value) when is_atom(Value) ->
-    atom_to_binary(Value);
+    atom_to_binary(Value, utf8);
 to_binary(Value) when is_integer(Value) ->
     integer_to_binary(Value).
 
