@@ -51,6 +51,8 @@ The TAR format consists of 512-byte blocks:
 -define(FILETYPE, $0).
 %% Directory
 -define(DIRTYPE, $5).
+%% PAX extended header (for long paths)
+-define(PAXTYPE, $x).
 
 %% Common file permission modes
 
@@ -194,6 +196,7 @@ normalize_path_internal(Path) ->
     <<"./", Path/binary>>.
 
 %% Build a directory entry
+%% Uses PAX extended headers for paths that don't fit in ustar format
 -spec build_dir_entry(binary(), non_neg_integer()) -> iolist().
 build_dir_entry(Path, MTime) ->
     %% Directories have trailing slash in tar
@@ -205,29 +208,54 @@ build_dir_entry(Path, MTime) ->
                 <<Path/binary, "/">>
         end,
     NormPath = normalize_path(DirPath),
-    Header = build_header(NormPath, 0, ?MODE_EXEC, ?DIRTYPE, MTime),
-    [Header].
+    case path_encoding(NormPath) of
+        {ustar, Prefix, Name} ->
+            Header = build_header_with_parts(Prefix, Name, 0, ?MODE_EXEC, ?DIRTYPE, MTime),
+            [Header];
+        pax ->
+            PaxData = build_pax_record(NormPath),
+            PaxHeader = build_pax_header(PaxData, MTime),
+            PaxPadding = padding(byte_size(PaxData)),
+            TruncatedName = binary:part(NormPath, 0, min(byte_size(NormPath), ?NAME_SIZE)),
+            UstarHeader = build_header_with_parts(
+                <<>>, TruncatedName, 0, ?MODE_EXEC, ?DIRTYPE, MTime
+            ),
+            [PaxHeader, PaxData, PaxPadding, UstarHeader]
+    end.
 
 %% Build a file entry (header + content + padding)
+%% Uses PAX extended headers for paths that don't fit in ustar format
 -spec build_file_entry(binary(), binary(), integer(), non_neg_integer()) -> iolist().
 build_file_entry(Path, Content, Mode, MTime) ->
     NormPath = normalize_path(Path),
     Size = byte_size(Content),
-    Header = build_header(NormPath, Size, Mode, ?FILETYPE, MTime),
     Padding = padding(Size),
-    [Header, Content, Padding].
+    case path_encoding(NormPath) of
+        {ustar, Prefix, Name} ->
+            Header = build_header_with_parts(Prefix, Name, Size, Mode, ?FILETYPE, MTime),
+            [Header, Content, Padding];
+        pax ->
+            PaxData = build_pax_record(NormPath),
+            PaxHeader = build_pax_header(PaxData, MTime),
+            PaxPadding = padding(byte_size(PaxData)),
+            %% Truncate name for the ustar header (readers will use PAX path)
+            TruncatedName = binary:part(NormPath, 0, min(byte_size(NormPath), ?NAME_SIZE)),
+            UstarHeader = build_header_with_parts(
+                <<>>, TruncatedName, Size, Mode, ?FILETYPE, MTime
+            ),
+            [PaxHeader, PaxData, PaxPadding, UstarHeader, Content, Padding]
+    end.
 
-%% Build a TAR header
--spec build_header(binary(), non_neg_integer(), integer(), byte(), non_neg_integer()) -> binary().
-build_header(Name, Size, Mode, TypeFlag, MTime) ->
-    %% Handle long names using prefix field if needed
-    {Prefix, ShortName} = split_name(Name),
-
+%% Build a TAR header with explicit prefix and name
+-spec build_header_with_parts(
+    binary(), binary(), non_neg_integer(), integer(), byte(), non_neg_integer()
+) -> binary().
+build_header_with_parts(Prefix, Name, Size, Mode, TypeFlag, MTime) ->
     %% Build header with placeholder checksum (spaces)
 
     % name
     H0 = <<
-        (pad_right(ShortName, ?NAME_SIZE))/binary,
+        (pad_right(Name, ?NAME_SIZE))/binary,
         % mode
         (octal(Mode, ?MODE_SIZE))/binary,
         % uid
@@ -273,44 +301,69 @@ build_header(Name, Size, Mode, TypeFlag, MTime) ->
     <<Before:(?CHECKSUM_OFFSET)/binary, _:(?CHECKSUM_SIZE)/binary, After/binary>> = H1,
     <<Before/binary, ChecksumStr/binary, After/binary>>.
 
-%% Split name into prefix and name if too long
--spec split_name(binary()) -> {binary(), binary()}.
-split_name(Name) when byte_size(Name) =< ?NAME_SIZE ->
-    {<<>>, Name};
-split_name(Name) ->
-    %% Try to find a good split point (at a /)
-    case find_split_point(Name) of
-        {ok, Prefix, ShortName} when
-            byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE
-        ->
-            {Prefix, ShortName};
-        _ ->
-            %% Truncate if we can't split properly
-            {<<>>, binary:part(Name, 0, min(byte_size(Name), ?NAME_SIZE))}
+%% Determine how to encode a path: ustar (with optional prefix) or PAX extended header
+-spec path_encoding(binary()) -> {ustar, Prefix :: binary(), Name :: binary()} | pax.
+path_encoding(Path) when byte_size(Path) =< ?NAME_SIZE ->
+    {ustar, <<>>, Path};
+path_encoding(Path) ->
+    case try_ustar_split(Path) of
+        {ok, Prefix, Name} -> {ustar, Prefix, Name};
+        error -> pax
     end.
 
-%% Find a split point at a directory separator
--spec find_split_point(binary()) -> {ok, binary(), binary()} | error.
-find_split_point(Name) ->
-    %% Find last / that gives us a valid split
-    case binary:matches(Name, ~"/") of
+%% Try to split path at a `/` so prefix <= 155 bytes and name <= 100 bytes
+-spec try_ustar_split(binary()) -> {ok, binary(), binary()} | error.
+try_ustar_split(Path) ->
+    case binary:matches(Path, ~"/") of
         [] ->
             error;
         Matches ->
-            find_valid_split(Name, lists:reverse(Matches))
+            %% Try splits from rightmost `/` first (maximizes prefix usage)
+            try_splits(Path, lists:reverse(Matches))
     end.
 
-find_valid_split(_Name, []) ->
+-spec try_splits(binary(), [{non_neg_integer(), non_neg_integer()}]) ->
+    {ok, binary(), binary()} | error.
+try_splits(_Path, []) ->
     error;
-find_valid_split(Name, [{Pos, _} | Rest]) ->
-    Prefix = binary:part(Name, 0, Pos),
-    ShortName = binary:part(Name, Pos + 1, byte_size(Name) - Pos - 1),
-    if
-        byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
-            {ok, Prefix, ShortName};
-        true ->
-            find_valid_split(Name, Rest)
+try_splits(Path, [{Pos, _} | Rest]) ->
+    Prefix = binary:part(Path, 0, Pos),
+    Name = binary:part(Path, Pos + 1, byte_size(Path) - Pos - 1),
+    case byte_size(Name) =< ?NAME_SIZE andalso byte_size(Prefix) =< ?PREFIX_SIZE of
+        true -> {ok, Prefix, Name};
+        false -> try_splits(Path, Rest)
     end.
+
+%% Build a PAX extended header record for the path attribute
+%% Format: "<length> path=<value>\n" where length includes itself
+-spec build_pax_record(binary()) -> binary().
+build_pax_record(Path) ->
+    %% The tricky part: length field includes itself, so we iterate to find it
+    Key = <<"path=">>,
+    Value = <<Key/binary, Path/binary, "\n">>,
+    %% Start with estimate: " path=<path>\n" needs length prefix
+    find_pax_length(Value, byte_size(Value) + 1).
+
+-spec find_pax_length(binary(), non_neg_integer()) -> binary().
+find_pax_length(Value, EstimatedLen) ->
+    LenStr = integer_to_binary(EstimatedLen),
+    % len + space + value
+    ActualLen = byte_size(LenStr) + 1 + byte_size(Value),
+    case ActualLen of
+        EstimatedLen ->
+            <<LenStr/binary, " ", Value/binary>>;
+        _ ->
+            %% Length changed due to digit count, try again
+            find_pax_length(Value, ActualLen)
+    end.
+
+%% Build a PAX extended header entry (typeflag 'x')
+-spec build_pax_header(binary(), non_neg_integer()) -> binary().
+build_pax_header(PaxData, MTime) ->
+    Size = byte_size(PaxData),
+    %% PAX header uses a placeholder name
+    PaxName = <<"./PaxHeaders/entry">>,
+    build_header_with_parts(<<>>, PaxName, Size, ?MODE_FILE, ?PAXTYPE, MTime).
 
 %% Compute checksum (sum of all bytes, treating checksum field as spaces)
 -spec compute_checksum(binary()) -> integer().

@@ -559,6 +559,68 @@ tar_safe_dots_test() ->
     Tar = ocibuild_tar:create(Files),
     ?assertEqual(0, byte_size(Tar) rem 512).
 
+tar_pax_long_filename_test() ->
+    %% Test filename > 100 bytes that cannot be split (requires PAX header)
+    %% This simulates the AshAuthentication issue from GitHub #21
+    LongFilename =
+        <<"Elixir.AshAuthentication.Strategy.Password.Authentication.",
+            "Strategies.Password.Resettable.Options.beam">>,
+    ?assert(byte_size(LongFilename) > 100),
+    Path = <<"/app/lib/myapp/ebin/", LongFilename/binary>>,
+    Content = <<"BEAM content here">>,
+    Files = [{Path, Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    %% Archive should be valid (multiple of 512)
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    %% Should contain PAX header (typeflag 'x')
+    ?assertNotEqual(nomatch, binary:match(Tar, <<"path=">>)),
+    %% Should contain the full filename in PAX data
+    ?assertNotEqual(nomatch, binary:match(Tar, LongFilename)).
+
+tar_pax_extracts_correctly_test() ->
+    %% Verify PAX archive can be extracted by system tar
+    LongFilename =
+        <<"Elixir.VeryLongModuleName.WithMany.Nested.Modules.",
+            "That.Exceed.The.Hundred.Byte.Limit.In.Ustar.beam">>,
+    Path = <<"/app/lib/myapp/ebin/", LongFilename/binary>>,
+    Content = <<"test content 12345">>,
+    Files = [{Path, Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+
+    %% Write tar and extract with system tar
+    TmpDir = make_temp_dir("pax_test"),
+    TarFile = filename:join(TmpDir, "test.tar"),
+    ok = file:write_file(TarFile, Tar),
+    Cmd = "tar -xf " ++ binary_to_list(iolist_to_binary(TarFile)) ++ " -C " ++ TmpDir,
+    _ = os:cmd(Cmd),
+
+    %% Verify extracted file has correct name and content
+    ExtractedPath = filename:join([TmpDir, ".", "app", "lib", "myapp", "ebin", LongFilename]),
+    ?assertEqual({ok, Content}, file:read_file(ExtractedPath)),
+
+    %% Cleanup
+    os:cmd("rm -rf " ++ TmpDir).
+
+tar_pax_very_long_path_test() ->
+    %% Test extremely long path (> 255 bytes, exceeds ustar entirely)
+    DeepPath = binary:copy(<<"very_long_directory_name/">>, 15),
+    Filename = <<"file.txt">>,
+    Path = <<"/", DeepPath/binary, Filename/binary>>,
+    ?assert(byte_size(Path) > 255),
+    Content = <<"deep content">>,
+    Files = [{Path, Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    ?assertNotEqual(nomatch, binary:match(Tar, <<"path=">>)).
+
+tar_ustar_still_used_when_possible_test() ->
+    %% Verify short paths don't use PAX (efficiency)
+    Files = [{~"/short/path.txt", ~"content", 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    %% Should NOT contain PAX header for short paths
+    ?assertEqual(nomatch, binary:match(Tar, <<"path=">>)).
+
 %%%===================================================================
 %%% Additional Digest tests
 %%%===================================================================
