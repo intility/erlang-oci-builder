@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.1 - 2025-12-29
+
+### Bugfixes
+
+- **Fixed long filename truncation** ([#21](https://github.com/intility/erlang-oci-builder/issues/21)): Files with names exceeding 100 bytes (the ustar limit) were being silently truncated, causing missing modules at runtime. This commonly affected Elixir projects using libraries like AshAuthentication which generate long module names (e.g., `Elixir.AshAuthentication.Strategy.Password.Authentication.Strategies.Password.Resettable.Options.beam` at 101 bytes).
+  - Implemented PAX extended headers (POSIX.1-2001) for paths that don't fit in ustar format
+  - PAX headers support arbitrary path lengths with no practical limit
+  - Backwards compatible: ustar is still used when paths fit, PAX only when needed
+
+### Security
+
+- **Null byte injection protection**: Paths containing null bytes (`\0`) are now rejected. Null bytes could truncate filenames when extracted by C-based tools, potentially allowing path manipulation.
+- **Empty path validation**: Empty paths are now rejected with a clear error message.
+- **Mode validation**: File modes outside the valid range (0-7777 octal) are now rejected. Previously, invalid modes could set unintended permissions like setuid/setgid.
+- **Overflow protection**: Numeric fields (size, mtime, mode) that exceed their octal field capacity now raise errors instead of being silently truncated, which could corrupt archives.
+- **Duplicate path detection**: Archives with duplicate paths now raise an error, preventing undefined extraction behavior. Detection works correctly when paths use different formats (e.g., `/app/file` and `app/file` both normalize to `./app/file`).
+
+### Improvements
+
+- **Clearer error messages**: All validation errors now include the offending value for easier debugging:
+  - `{null_byte, Path}` - Path contains null byte
+  - `{empty_path, <<>>}` - Empty path provided
+  - `{path_traversal, Path}` - Path contains `..`
+  - `{invalid_mode, Mode}` - Mode outside valid range
+  - `{duplicate_paths, [Path]}` - Duplicate paths in file list
+  - `{octal_overflow, N, Width}` - Value too large for field
+- **Iteration guard**: PAX length calculation now has a maximum iteration limit to prevent theoretical infinite loops.
+- **Code cleanup**: Reorganized TAR header field macros with unused offset definitions preserved as documentation comments.
+
 ## 0.5.0 - 2025-12-25
 
 ### Features

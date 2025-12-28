@@ -86,11 +86,17 @@ TarData = ocibuild_tar:create(Files, #{mtime => 1700000000}).
     Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
     Opts :: #{mtime => non_neg_integer()}.
 create(Files, Opts) ->
-    %% Check for duplicate paths
-    ok = check_duplicates(Files),
+    %% Normalize all paths first (validates and adds ./ prefix)
+    NormalizedFiles = [{normalize_path(Path), Content, Mode} || {Path, Content, Mode} <- Files],
+
+    %% Check for duplicate paths after normalization
+    %% (e.g., "/app/file" and "app/file" both become "./app/file")
+    ok = check_duplicates(NormalizedFiles),
 
     %% Sort files alphabetically for reproducibility
-    SortedFiles = lists:sort(fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end, Files),
+    SortedFiles = lists:sort(
+        fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end, NormalizedFiles
+    ),
 
     %% Get mtime (use provided value or current time)
     MTime = maps:get(mtime, Opts, erlang:system_time(second)),
@@ -157,9 +163,8 @@ collect_directories(Files) ->
     AllDirs =
         lists:foldl(
             fun({Path, _, _}, Acc) ->
-                %% Normalize path and get all parent directories
-                NormPath = normalize_path(Path),
-                parent_dirs(NormPath, Acc)
+                %% Path is already normalized, get all parent directories
+                parent_dirs(Path, Acc)
             end,
             sets:new([{version, 2}]),
             Files
@@ -219,7 +224,7 @@ normalize_path_internal(Path) ->
     %% Keep as binary interpolation
     <<"./", Path/binary>>.
 
-%% Build a directory entry
+%% Build a directory entry (Path is already normalized)
 %% Uses PAX extended headers for paths that don't fit in ustar format
 -spec build_dir_entry(binary(), non_neg_integer()) -> iolist().
 build_dir_entry(Path, MTime) ->
@@ -231,16 +236,15 @@ build_dir_entry(Path, MTime) ->
             _ ->
                 <<Path/binary, "/">>
         end,
-    NormPath = normalize_path(DirPath),
-    case path_encoding(NormPath) of
+    case path_encoding(DirPath) of
         {ustar, Prefix, Name} ->
             Header = build_header_with_parts(Prefix, Name, 0, ?MODE_EXEC, ?DIRTYPE, MTime),
             [Header];
         pax ->
-            PaxData = build_pax_record(NormPath),
+            PaxData = build_pax_record(DirPath),
             PaxHeader = build_pax_header(PaxData, MTime),
             PaxPadding = padding(byte_size(PaxData)),
-            TruncatedName = binary:part(NormPath, 0, min(byte_size(NormPath), ?NAME_SIZE)),
+            TruncatedName = binary:part(DirPath, 0, min(byte_size(DirPath), ?NAME_SIZE)),
             UstarHeader = build_header_with_parts(
                 <<>>, TruncatedName, 0, ?MODE_EXEC, ?DIRTYPE, MTime
             ),
@@ -255,23 +259,22 @@ validate_mode(Mode) ->
     error({invalid_mode, Mode}).
 
 %% Build a file entry (header + content + padding)
-%% Uses PAX extended headers for paths that don't fit in ustar format
+%% Path is already normalized. Uses PAX extended headers for paths that don't fit in ustar format.
 -spec build_file_entry(binary(), binary(), integer(), non_neg_integer()) -> iolist().
 build_file_entry(Path, Content, Mode, MTime) ->
     ok = validate_mode(Mode),
-    NormPath = normalize_path(Path),
     Size = byte_size(Content),
     Padding = padding(Size),
-    case path_encoding(NormPath) of
+    case path_encoding(Path) of
         {ustar, Prefix, Name} ->
             Header = build_header_with_parts(Prefix, Name, Size, Mode, ?FILETYPE, MTime),
             [Header, Content, Padding];
         pax ->
-            PaxData = build_pax_record(NormPath),
+            PaxData = build_pax_record(Path),
             PaxHeader = build_pax_header(PaxData, MTime),
             PaxPadding = padding(byte_size(PaxData)),
             %% Truncate name for the ustar header (readers will use PAX path)
-            TruncatedName = binary:part(NormPath, 0, min(byte_size(NormPath), ?NAME_SIZE)),
+            TruncatedName = binary:part(Path, 0, min(byte_size(Path), ?NAME_SIZE)),
             UstarHeader = build_header_with_parts(
                 <<>>, TruncatedName, Size, Mode, ?FILETYPE, MTime
             ),
