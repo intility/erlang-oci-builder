@@ -1,45 +1,37 @@
 defmodule OcibuildMixTest do
   use ExUnit.Case, async: true
 
+  alias Ocibuild.TestHelpers
+
   describe "file collection" do
     test "collects files from a mock release directory" do
       tmp_dir = create_mock_release()
+      {:ok, files} = :ocibuild_release.collect_release_files(to_charlist(tmp_dir))
 
-      try do
-        {:ok, files} = :ocibuild_release.collect_release_files(to_charlist(tmp_dir))
+      # Should have collected the files we created
+      assert length(files) >= 3
 
-        # Should have collected the files we created
-        assert length(files) >= 3
+      # Check that bin/myapp exists with correct path
+      bin_file = Enum.find(files, fn {path, _, _} -> path == "/app/bin/myapp" end)
+      assert bin_file != nil
+      {_, _, bin_mode} = bin_file
+      assert Bitwise.band(bin_mode, 0o777) == 0o755
 
-        # Check that bin/myapp exists with correct path
-        bin_file = Enum.find(files, fn {path, _, _} -> path == "/app/bin/myapp" end)
-        assert bin_file != nil
-        {_, _, bin_mode} = bin_file
-        assert Bitwise.band(bin_mode, 0o777) == 0o755
+      # Check lib file exists
+      lib_file =
+        Enum.find(files, fn {path, _, _} ->
+          path == "/app/lib/myapp-1.0.0/ebin/myapp.beam"
+        end)
 
-        # Check lib file exists
-        lib_file =
-          Enum.find(files, fn {path, _, _} ->
-            path == "/app/lib/myapp-1.0.0/ebin/myapp.beam"
-          end)
-
-        assert lib_file != nil
-        {_, _, lib_mode} = lib_file
-        assert Bitwise.band(lib_mode, 0o777) == 0o644
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      assert lib_file != nil
+      {_, _, lib_mode} = lib_file
+      assert Bitwise.band(lib_mode, 0o777) == 0o644
     end
 
     test "collects empty directory" do
       tmp_dir = make_temp_dir("ocibuild_empty")
-
-      try do
-        {:ok, files} = :ocibuild_release.collect_release_files(to_charlist(tmp_dir))
-        assert files == []
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      {:ok, files} = :ocibuild_release.collect_release_files(to_charlist(tmp_dir))
+      assert files == []
     end
   end
 
@@ -254,6 +246,16 @@ defmodule OcibuildMixTest do
   end
 
   describe "push authentication" do
+    setup do
+      on_exit(fn ->
+        System.delete_env("OCIBUILD_PUSH_TOKEN")
+        System.delete_env("OCIBUILD_PUSH_USERNAME")
+        System.delete_env("OCIBUILD_PUSH_PASSWORD")
+      end)
+
+      :ok
+    end
+
     test "returns empty map when no env vars set" do
       System.delete_env("OCIBUILD_PUSH_TOKEN")
       System.delete_env("OCIBUILD_PUSH_USERNAME")
@@ -264,13 +266,8 @@ defmodule OcibuildMixTest do
 
     test "returns token auth when OCIBUILD_PUSH_TOKEN set" do
       System.put_env("OCIBUILD_PUSH_TOKEN", "mytoken123")
-
-      try do
-        auth = :ocibuild_release.get_push_auth()
-        assert auth == %{token: "mytoken123"}
-      after
-        System.delete_env("OCIBUILD_PUSH_TOKEN")
-      end
+      auth = :ocibuild_release.get_push_auth()
+      assert auth == %{token: "mytoken123"}
     end
 
     test "returns username/password auth when set" do
@@ -278,17 +275,22 @@ defmodule OcibuildMixTest do
       System.put_env("OCIBUILD_PUSH_USERNAME", "myuser")
       System.put_env("OCIBUILD_PUSH_PASSWORD", "mypass")
 
-      try do
-        auth = :ocibuild_release.get_push_auth()
-        assert auth == %{username: "myuser", password: "mypass"}
-      after
-        System.delete_env("OCIBUILD_PUSH_USERNAME")
-        System.delete_env("OCIBUILD_PUSH_PASSWORD")
-      end
+      auth = :ocibuild_release.get_push_auth()
+      assert auth == %{username: "myuser", password: "mypass"}
     end
   end
 
   describe "pull authentication" do
+    setup do
+      on_exit(fn ->
+        System.delete_env("OCIBUILD_PULL_TOKEN")
+        System.delete_env("OCIBUILD_PULL_USERNAME")
+        System.delete_env("OCIBUILD_PULL_PASSWORD")
+      end)
+
+      :ok
+    end
+
     test "returns empty map when no env vars set" do
       System.delete_env("OCIBUILD_PULL_TOKEN")
       System.delete_env("OCIBUILD_PULL_USERNAME")
@@ -302,151 +304,87 @@ defmodule OcibuildMixTest do
       System.put_env("OCIBUILD_PULL_USERNAME", "pulluser")
       System.put_env("OCIBUILD_PULL_PASSWORD", "pullpass")
 
-      try do
-        auth = :ocibuild_release.get_pull_auth()
-        assert auth == %{username: "pulluser", password: "pullpass"}
-      after
-        System.delete_env("OCIBUILD_PULL_USERNAME")
-        System.delete_env("OCIBUILD_PULL_PASSWORD")
-      end
+      auth = :ocibuild_release.get_pull_auth()
+      assert auth == %{username: "pulluser", password: "pullpass"}
     end
   end
 
   describe "multi-platform support" do
     test "detects bundled ERTS in release" do
       tmp_dir = create_mock_release_with_erts()
-
-      try do
-        assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == true
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == true
     end
 
     test "detects no ERTS when not bundled" do
       tmp_dir = create_mock_release()
 
-      try do
-        assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == false
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      assert :ocibuild_release.has_bundled_erts(to_charlist(tmp_dir)) == false
     end
 
     test "detects native code .so files in priv directory" do
       tmp_dir = create_mock_release_with_nif(".so")
-
-      try do
-        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
-        assert length(nif_files) > 0
-        [nif_info | _] = nif_files
-        assert :maps.get(:extension, nif_info) == ".so"
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+      assert length(nif_files) > 0
+      [nif_info | _] = nif_files
+      assert :maps.get(:extension, nif_info) == ".so"
     end
 
     test "detects native code .dll files in priv directory" do
       tmp_dir = create_mock_release_with_nif(".dll")
-
-      try do
-        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
-        assert length(nif_files) > 0
-        [nif_info | _] = nif_files
-        assert :maps.get(:extension, nif_info) == ".dll"
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+      assert length(nif_files) > 0
+      [nif_info | _] = nif_files
+      assert :maps.get(:extension, nif_info) == ".dll"
     end
 
     test "detects native code .dylib files in priv directory" do
       tmp_dir = create_mock_release_with_nif(".dylib")
-
-      try do
-        {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
-        assert length(nif_files) > 0
-        [nif_info | _] = nif_files
-        assert :maps.get(:extension, nif_info) == ".dylib"
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      {:warning, nif_files} = :ocibuild_release.check_for_native_code(to_charlist(tmp_dir))
+      assert length(nif_files) > 0
+      [nif_info | _] = nif_files
+      assert :maps.get(:extension, nif_info) == ".dylib"
     end
 
     test "returns ok when no native code present" do
       tmp_dir = create_mock_release()
-
-      try do
-        assert :ocibuild_release.check_for_native_code(to_charlist(tmp_dir)) == {:ok, []}
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      assert :ocibuild_release.check_for_native_code(to_charlist(tmp_dir)) == {:ok, []}
     end
 
     test "validate_multiplatform errors with bundled ERTS" do
       tmp_dir = create_mock_release_with_erts()
 
-      try do
-        platforms = [
-          %{os: "linux", architecture: "amd64"},
-          %{os: "linux", architecture: "arm64"}
-        ]
+      platforms = [
+        %{os: "linux", architecture: "amd64"},
+        %{os: "linux", architecture: "arm64"}
+      ]
 
-        result = :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms)
-        assert {:error, {:bundled_erts, _msg}} = result
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      result = :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms)
+      assert {:error, {:bundled_erts, _msg}} = result
     end
 
     test "validate_multiplatform succeeds without ERTS for multiple platforms" do
       tmp_dir = create_mock_release()
 
-      try do
-        platforms = [
-          %{os: "linux", architecture: "amd64"},
-          %{os: "linux", architecture: "arm64"}
-        ]
+      platforms = [
+        %{os: "linux", architecture: "amd64"},
+        %{os: "linux", architecture: "arm64"}
+      ]
 
-        assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
     end
 
     test "validate_multiplatform succeeds with ERTS for single platform" do
       tmp_dir = create_mock_release_with_erts()
-
-      try do
-        platforms = [%{os: "linux", architecture: "amd64"}]
-        assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
-      after
-        cleanup_temp_dir(tmp_dir)
-      end
+      platforms = [%{os: "linux", architecture: "amd64"}]
+      assert :ocibuild_release.validate_multiplatform(to_charlist(tmp_dir), platforms) == :ok
     end
   end
 
-  # Cross-platform helpers
-
-  defp temp_dir do
-    case :os.type() do
-      {:win32, _} ->
-        System.get_env("TEMP") || System.get_env("TMP") || "C:\\Temp"
-
-      _ ->
-        "/tmp"
-    end
-  end
-
+  # Helper to create a temp dir with automatic cleanup registration
   defp make_temp_dir(prefix) do
-    unique = :erlang.unique_integer([:positive])
-    dir_name = "#{prefix}_#{unique}"
-    tmp_dir = Path.join(temp_dir(), dir_name)
-    File.mkdir_p!(tmp_dir)
+    tmp_dir = TestHelpers.make_temp_dir(prefix)
+    on_exit(fn -> TestHelpers.cleanup_temp_dir(tmp_dir) end)
     tmp_dir
-  end
-
-  defp cleanup_temp_dir(dir) do
-    File.rm_rf!(dir)
   end
 
   defp create_mock_release do
@@ -479,7 +417,7 @@ defmodule OcibuildMixTest do
   end
 
   defp create_mock_release_with_erts do
-    tmp_dir = create_mock_release()
+    tmp_dir = create_mock_release_base()
     erts_dir = Path.join(tmp_dir, "erts-15.0")
     File.mkdir_p!(Path.join(erts_dir, "bin"))
     File.write!(Path.join([erts_dir, "bin", "beam.smp"]), "beam binary")
@@ -487,10 +425,36 @@ defmodule OcibuildMixTest do
   end
 
   defp create_mock_release_with_nif(extension) do
-    tmp_dir = create_mock_release()
+    tmp_dir = create_mock_release_base()
     priv_dir = Path.join([tmp_dir, "lib", "crypto-1.0.0", "priv"])
     File.mkdir_p!(priv_dir)
     File.write!(Path.join(priv_dir, "crypto_nif#{extension}"), "fake nif binary")
+    tmp_dir
+  end
+
+  # Base helper without cleanup registration (for composition)
+  defp create_mock_release_base do
+    tmp_dir = make_temp_dir("ocibuild_release")
+
+    bin_dir = Path.join(tmp_dir, "bin")
+    lib_dir = Path.join([tmp_dir, "lib", "myapp-1.0.0", "ebin"])
+    rel_dir = Path.join([tmp_dir, "releases", "1.0.0"])
+
+    File.mkdir_p!(bin_dir)
+    File.mkdir_p!(lib_dir)
+    File.mkdir_p!(rel_dir)
+
+    bin_path = Path.join(bin_dir, "myapp")
+    File.write!(bin_path, "#!/bin/sh\nexec erl -boot release")
+    File.chmod!(bin_path, 0o755)
+
+    beam_path = Path.join(lib_dir, "myapp.beam")
+    File.write!(beam_path, "FOR1...(beam data)")
+    File.chmod!(beam_path, 0o644)
+
+    rel_path = Path.join(rel_dir, "myapp.rel")
+    File.write!(rel_path, "{release, {\"myapp\", \"1.0.0\"}, ...}.")
+
     tmp_dir
   end
 end

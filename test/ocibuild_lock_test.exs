@@ -8,19 +8,22 @@ defmodule Ocibuild.LockTest do
     test "returns empty list when mix.lock doesn't exist" do
       # Run from a temp directory without mix.lock
       tmp_dir = TestHelpers.make_temp_dir("no_lock")
+      on_exit(fn -> TestHelpers.cleanup_temp_dir(tmp_dir) end)
 
-      try do
-        File.cd!(tmp_dir, fn ->
-          assert Lock.get_dependencies() == []
-        end)
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      File.cd!(tmp_dir, fn ->
+        assert Lock.get_dependencies() == []
+      end)
     end
   end
 
   describe "get_dependencies/1" do
-    test "parses hex dependencies with 8-element tuple" do
+    setup do
+      tmp_dir = TestHelpers.make_temp_dir("lock_test")
+      on_exit(fn -> TestHelpers.cleanup_temp_dir(tmp_dir) end)
+      %{tmp_dir: tmp_dir, lock_path: Path.join(tmp_dir, "mix.lock")}
+    end
+
+    test "parses hex dependencies with 8-element tuple", %{lock_path: lock_path} do
       lock_content = """
       %{
         "jason": {:hex, :jason, "1.4.0", "e855647bc964a44e2f67df589ccf49105ae039d4179db7f6271dfd3843dc27d6", [:mix], [], "hexpm", "79a3791085b2a0f743ca04cec0f7be26443738779d09302e01318f97bdb82121"},
@@ -28,28 +31,21 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = TestHelpers.make_temp_dir("hex_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
+      assert length(deps) == 2
 
-        assert length(deps) == 2
+      jason = Enum.find(deps, &(&1.name == "jason"))
+      assert jason.version == "1.4.0"
+      assert jason.source == "hex"
 
-        jason = Enum.find(deps, &(&1.name == "jason"))
-        assert jason.version == "1.4.0"
-        assert jason.source == "hex"
-
-        plug = Enum.find(deps, &(&1.name == "plug"))
-        assert plug.version == "1.14.0"
-        assert plug.source == "hex"
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      plug = Enum.find(deps, &(&1.name == "plug"))
+      assert plug.version == "1.14.0"
+      assert plug.source == "hex"
     end
 
-    test "parses hex dependencies with 7-element tuple" do
+    test "parses hex dependencies with 7-element tuple", %{lock_path: lock_path} do
       # Some older lock files use 7-element tuples
       lock_content = """
       %{
@@ -57,72 +53,51 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = TestHelpers.make_temp_dir("hex_lock_v7")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
+      assert length(deps) == 1
 
-        assert length(deps) == 1
-
-        cowboy = Enum.find(deps, &(&1.name == "cowboy"))
-        assert cowboy.version == "2.10.0"
-        assert cowboy.source == "hex"
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      cowboy = Enum.find(deps, &(&1.name == "cowboy"))
+      assert cowboy.version == "2.10.0"
+      assert cowboy.source == "hex"
     end
 
-    test "parses git dependencies" do
+    test "parses git dependencies", %{lock_path: lock_path} do
       lock_content = """
       %{
         "my_dep": {:git, "https://github.com/example/my_dep.git", "abc123def456", [tag: "v1.0.0"]}
       }
       """
 
-      tmp_dir = TestHelpers.make_temp_dir("git_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
+      assert length(deps) == 1
 
-        assert length(deps) == 1
-
-        my_dep = Enum.find(deps, &(&1.name == "my_dep"))
-        assert my_dep.version == "abc123def456"
-        assert my_dep.source == "https://github.com/example/my_dep.git"
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      my_dep = Enum.find(deps, &(&1.name == "my_dep"))
+      assert my_dep.version == "abc123def456"
+      assert my_dep.source == "https://github.com/example/my_dep.git"
     end
 
-    test "handles unknown dependency format" do
+    test "handles unknown dependency format", %{lock_path: lock_path} do
       lock_content = """
       %{
         "unknown_dep": {:path, "../unknown_dep", []}
       }
       """
 
-      tmp_dir = TestHelpers.make_temp_dir("unknown_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
+      assert length(deps) == 1
 
-        assert length(deps) == 1
-
-        unknown = Enum.find(deps, &(&1.name == "unknown_dep"))
-        assert unknown.version == "unknown"
-        assert unknown.source == "unknown"
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      unknown = Enum.find(deps, &(&1.name == "unknown_dep"))
+      assert unknown.version == "unknown"
+      assert unknown.source == "unknown"
     end
 
-    test "parses mixed dependency types" do
+    test "parses mixed dependency types", %{lock_path: lock_path} do
       lock_content = """
       %{
         "jason": {:hex, :jason, "1.4.0", "hash1", [:mix], [], "hexpm", "hash2"},
@@ -131,26 +106,19 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = TestHelpers.make_temp_dir("mixed_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
+      assert length(deps) == 3
 
-        assert length(deps) == 3
+      jason = Enum.find(deps, &(&1.name == "jason"))
+      assert jason.source == "hex"
 
-        jason = Enum.find(deps, &(&1.name == "jason"))
-        assert jason.source == "hex"
+      git_dep = Enum.find(deps, &(&1.name == "my_git_dep"))
+      assert git_dep.source == "https://github.com/example/dep.git"
 
-        git_dep = Enum.find(deps, &(&1.name == "my_git_dep"))
-        assert git_dep.source == "https://github.com/example/dep.git"
-
-        local = Enum.find(deps, &(&1.name == "local_dep"))
-        assert local.source == "unknown"
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      local = Enum.find(deps, &(&1.name == "local_dep"))
+      assert local.source == "unknown"
     end
 
     test "returns empty list for missing lock file" do
@@ -158,20 +126,13 @@ defmodule Ocibuild.LockTest do
       assert deps == []
     end
 
-    test "returns empty list for empty lock file" do
-      tmp_dir = TestHelpers.make_temp_dir("empty_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
-
-      try do
-        File.write!(lock_path, "%{}")
-        deps = Lock.get_dependencies(lock_path)
-        assert deps == []
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+    test "returns empty list for empty lock file", %{lock_path: lock_path} do
+      File.write!(lock_path, "%{}")
+      deps = Lock.get_dependencies(lock_path)
+      assert deps == []
     end
 
-    test "handles lock file with many dependencies" do
+    test "handles lock file with many dependencies", %{lock_path: lock_path} do
       # Create a lock file with 50 dependencies
       deps_list =
         for i <- 1..50 do
@@ -181,21 +142,14 @@ defmodule Ocibuild.LockTest do
 
       lock_content = "%{\n  #{deps_list}\n}"
 
-      tmp_dir = TestHelpers.make_temp_dir("many_deps_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
-
-        assert length(deps) == 50
-        assert Enum.all?(deps, &(&1.source == "hex"))
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      assert length(deps) == 50
+      assert Enum.all?(deps, &(&1.source == "hex"))
     end
 
-    test "handles dependencies with quoted atom keys" do
+    test "handles dependencies with quoted atom keys", %{lock_path: lock_path} do
       # This is common when dependency names have special characters
       lock_content = """
       %{
@@ -203,20 +157,13 @@ defmodule Ocibuild.LockTest do
       }
       """
 
-      tmp_dir = TestHelpers.make_temp_dir("quoted_lock")
-      lock_path = Path.join(tmp_dir, "mix.lock")
+      File.write!(lock_path, lock_content)
+      deps = Lock.get_dependencies(lock_path)
 
-      try do
-        File.write!(lock_path, lock_content)
-        deps = Lock.get_dependencies(lock_path)
-
-        assert length(deps) == 1
-        plug_crypto = hd(deps)
-        assert plug_crypto.name == "plug_crypto"
-        assert plug_crypto.version == "2.0.0"
-      after
-        TestHelpers.cleanup_temp_dir(tmp_dir)
-      end
+      assert length(deps) == 1
+      plug_crypto = hd(deps)
+      assert plug_crypto.name == "plug_crypto"
+      assert plug_crypto.version == "2.0.0"
     end
   end
 end

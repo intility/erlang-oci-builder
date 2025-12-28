@@ -159,7 +159,7 @@ tar_valid_mode_edge_cases_test() ->
     ).
 
 tar_duplicate_paths_test() ->
-    %% Duplicate paths should raise error
+    %% Duplicate paths should raise error (reports normalized path)
     Files = [
         {~"/app/file.txt", ~"content1", 8#644},
         {~"/app/other.txt", ~"content2", 8#644},
@@ -167,7 +167,19 @@ tar_duplicate_paths_test() ->
         {~"/app/file.txt", ~"content3", 8#644}
     ],
     ?assertError(
-        {duplicate_paths, [~"/app/file.txt"]},
+        {duplicate_paths, [~"./app/file.txt"]},
+        ocibuild_tar:create(Files)
+    ).
+
+tar_duplicate_paths_after_normalization_test() ->
+    %% Paths that normalize to the same value should be detected as duplicates
+    %% "/app/file.txt" and "app/file.txt" both normalize to "./app/file.txt"
+    Files = [
+        {~"/app/file.txt", ~"content1", 8#644},
+        {~"app/file.txt", ~"content2", 8#644}
+    ],
+    ?assertError(
+        {duplicate_paths, [~"./app/file.txt"]},
         ocibuild_tar:create(Files)
     ).
 
@@ -670,17 +682,27 @@ tar_pax_extracts_correctly_test() ->
 
     %% Write tar and extract with system tar
     TmpDir = make_temp_dir("pax_test"),
-    TarFile = filename:join(TmpDir, "test.tar"),
-    ok = file:write_file(TarFile, Tar),
-    Cmd = "tar -xf " ++ binary_to_list(iolist_to_binary(TarFile)) ++ " -C " ++ TmpDir,
-    _ = os:cmd(Cmd),
+    try
+        TarFile = filename:join(TmpDir, "test.tar"),
+        ok = file:write_file(TarFile, Tar),
+        Cmd = "tar -xf " ++ TarFile ++ " -C " ++ TmpDir,
+        _ = os:cmd(Cmd),
 
-    %% Verify extracted file has correct name and content
-    ExtractedPath = filename:join([TmpDir, ".", "app", "lib", "myapp", "ebin", LongFilename]),
-    ?assertEqual({ok, Content}, file:read_file(ExtractedPath)),
-
-    %% Cleanup
-    os:cmd("rm -rf " ++ TmpDir).
+        %% Verify extracted file exists and has correct content
+        ExtractedPath = filename:join([
+            TmpDir,
+            ".",
+            "app",
+            "lib",
+            "myapp",
+            "ebin",
+            binary_to_list(LongFilename)
+        ]),
+        ?assert(filelib:is_regular(ExtractedPath)),
+        ?assertEqual({ok, Content}, file:read_file(ExtractedPath))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
 
 tar_pax_very_long_path_test() ->
     %% Test extremely long path (> 255 bytes, exceeds ustar entirely)
