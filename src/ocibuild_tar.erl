@@ -15,37 +15,28 @@ The TAR format consists of 512-byte blocks:
 -export([create/1, create/2, create_compressed/1, create_compressed/2]).
 
 -define(BLOCK_SIZE, 512).
-%% TAR header field offsets and sizes (POSIX ustar format)
--define(NAME_OFFSET, 0).
+
+%% TAR header field sizes (POSIX ustar format)
 -define(NAME_SIZE, 100).
--define(MODE_OFFSET, 100).
 -define(MODE_SIZE, 8).
--define(UID_OFFSET, 108).
 -define(UID_SIZE, 8).
--define(GID_OFFSET, 116).
 -define(GID_SIZE, 8).
--define(SIZE_OFFSET, 124).
 -define(SIZE_SIZE, 12).
--define(MTIME_OFFSET, 136).
 -define(MTIME_SIZE, 12).
 -define(CHECKSUM_OFFSET, 148).
 -define(CHECKSUM_SIZE, 8).
--define(TYPEFLAG_OFFSET, 156).
--define(LINKNAME_OFFSET, 157).
+-define(CHECKSUM_DIGITS, 6).
 -define(LINKNAME_SIZE, 100).
--define(MAGIC_OFFSET, 257).
--define(VERSION_OFFSET, 263).
--define(UNAME_OFFSET, 265).
 -define(UNAME_SIZE, 32).
--define(GNAME_OFFSET, 297).
 -define(GNAME_SIZE, 32).
--define(DEVMAJOR_OFFSET, 329).
 -define(DEVMAJOR_SIZE, 8).
--define(DEVMINOR_OFFSET, 337).
 -define(DEVMINOR_SIZE, 8).
--define(PREFIX_OFFSET, 345).
 -define(PREFIX_SIZE, 155).
+
 %% Type flags
+
+%% Maximum valid file mode (rwxrwxrwx + setuid + setgid + sticky = 7777 octal)
+-define(MAX_MODE, 8#7777).
 
 %% Regular file
 -define(FILETYPE, $0).
@@ -95,6 +86,9 @@ TarData = ocibuild_tar:create(Files, #{mtime => 1700000000}).
     Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
     Opts :: #{mtime => non_neg_integer()}.
 create(Files, Opts) ->
+    %% Check for duplicate paths
+    ok = check_duplicates(Files),
+
     %% Sort files alphabetically for reproducibility
     SortedFiles = lists:sort(fun({PathA, _, _}, {PathB, _, _}) -> PathA =< PathB end, Files),
 
@@ -115,6 +109,29 @@ create(Files, Opts) ->
     EndMarker = <<0:(?BLOCK_SIZE * 2 * 8)>>,
 
     iolist_to_binary([DirEntries, FileEntries, EndMarker]).
+
+%% Check for duplicate paths in the file list
+-spec check_duplicates([{binary(), binary(), integer()}]) -> ok.
+check_duplicates(Files) ->
+    Paths = [Path || {Path, _, _} <- Files],
+    case length(Paths) =:= sets:size(sets:from_list(Paths)) of
+        true -> ok;
+        false -> error({duplicate_paths, find_duplicates(Paths)})
+    end.
+
+-spec find_duplicates([binary()]) -> [binary()].
+find_duplicates(Paths) ->
+    {_, Dups} = lists:foldl(
+        fun(Path, {Seen, Dups}) ->
+            case sets:is_element(Path, Seen) of
+                true -> {Seen, [Path | Dups]};
+                false -> {sets:add_element(Path, Seen), Dups}
+            end
+        end,
+        {sets:new(), []},
+        Paths
+    ),
+    lists:usort(Dups).
 
 -doc "Create a gzip-compressed TAR archive in memory.".
 -spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
@@ -162,27 +179,34 @@ parent_dirs(Path, Acc) ->
             parent_dirs(Parent, Acc1)
     end.
 
-%% Validate path doesn't contain traversal sequences
--spec validate_path(binary()) -> ok | {error, path_traversal}.
+%% Validate path for security issues:
+%% - No ".." traversal sequences
+%% - No null bytes (could truncate paths in C-based tools)
+%% - No empty paths
+-spec validate_path(binary()) -> ok | {error, path_traversal | null_byte | empty_path}.
+validate_path(<<>>) ->
+    {error, empty_path};
 validate_path(Path) ->
-    %% Split path and check each component for ".."
-    Components = binary:split(Path, ~"/", [global]),
-    case lists:member(~"..", Components) of
-        true ->
-            {error, path_traversal};
-        false ->
-            ok
+    case binary:match(Path, <<0>>) of
+        nomatch ->
+            Components = binary:split(Path, ~"/", [global]),
+            case lists:member(~"..", Components) of
+                true -> {error, path_traversal};
+                false -> ok
+            end;
+        _ ->
+            {error, null_byte}
     end.
 
 %% Normalize path: ensure it starts with ./ for tar compatibility
-%% Rejects paths containing ".." traversal sequences (security)
+%% Raises error for security violations (traversal, null bytes, empty paths)
 -spec normalize_path(binary()) -> binary().
 normalize_path(Path) ->
     case validate_path(Path) of
         ok ->
             normalize_path_internal(Path);
-        {error, path_traversal} ->
-            error({path_traversal, Path})
+        {error, Reason} ->
+            error({Reason, Path})
     end.
 
 -spec normalize_path_internal(binary()) -> binary().
@@ -223,10 +247,18 @@ build_dir_entry(Path, MTime) ->
             [PaxHeader, PaxData, PaxPadding, UstarHeader]
     end.
 
+%% Validate file mode is within valid range
+-spec validate_mode(integer()) -> ok.
+validate_mode(Mode) when Mode >= 0, Mode =< ?MAX_MODE ->
+    ok;
+validate_mode(Mode) ->
+    error({invalid_mode, Mode}).
+
 %% Build a file entry (header + content + padding)
 %% Uses PAX extended headers for paths that don't fit in ustar format
 -spec build_file_entry(binary(), binary(), integer(), non_neg_integer()) -> iolist().
 build_file_entry(Path, Content, Mode, MTime) ->
+    ok = validate_mode(Mode),
     NormPath = normalize_path(Path),
     Size = byte_size(Content),
     Padding = padding(Size),
@@ -339,22 +371,24 @@ try_splits(Path, [{Pos, _} | Rest]) ->
 -spec build_pax_record(binary()) -> binary().
 build_pax_record(Path) ->
     %% The tricky part: length field includes itself, so we iterate to find it
-    Key = <<"path=">>,
-    Value = <<Key/binary, Path/binary, "\n">>,
+    Value = <<"path=", Path/binary, $\n>>,
     %% Start with estimate: " path=<path>\n" needs length prefix
-    find_pax_length(Value, byte_size(Value) + 1).
+    find_pax_length(Value, byte_size(Value) + 1, 0).
 
--spec find_pax_length(binary(), non_neg_integer()) -> binary().
-find_pax_length(Value, EstimatedLen) ->
+%% Maximum iterations for PAX length calculation (should converge in 1-2)
+-define(MAX_PAX_ITERATIONS, 10).
+
+-spec find_pax_length(binary(), non_neg_integer(), non_neg_integer()) -> binary().
+find_pax_length(_Value, _EstimatedLen, Iterations) when Iterations >= ?MAX_PAX_ITERATIONS ->
+    error(pax_length_convergence_failed);
+find_pax_length(Value, EstimatedLen, Iterations) ->
     LenStr = integer_to_binary(EstimatedLen),
-    % len + space + value
     ActualLen = byte_size(LenStr) + 1 + byte_size(Value),
     case ActualLen of
         EstimatedLen ->
             <<LenStr/binary, " ", Value/binary>>;
         _ ->
-            %% Length changed due to digit count, try again
-            find_pax_length(Value, ActualLen)
+            find_pax_length(Value, ActualLen, Iterations + 1)
     end.
 
 %% Build a PAX extended header entry (typeflag 'x')
@@ -362,7 +396,7 @@ find_pax_length(Value, EstimatedLen) ->
 build_pax_header(PaxData, MTime) ->
     Size = byte_size(PaxData),
     %% PAX header uses a placeholder name
-    PaxName = <<"./PaxHeaders/entry">>,
+    PaxName = ~"./PaxHeaders/entry",
     build_header_with_parts(<<>>, PaxName, Size, ?MODE_FILE, ?PAXTYPE, MTime).
 
 %% Compute checksum (sum of all bytes, treating checksum field as spaces)
@@ -372,30 +406,26 @@ compute_checksum(Header) ->
 
 %% Format number as octal string for tar header
 %% TAR octal fields are null-terminated, with optional space before null
--spec octal(integer(), integer()) -> binary().
-octal(N, Width) ->
+-spec octal(non_neg_integer(), pos_integer()) -> binary().
+octal(N, Width) when N >= 0 ->
     S = integer_to_list(N, 8),
-    %% Field format: left-pad with zeros, leave room for trailing null (and optional space)
-    %% Standard format: digits + space + null, or just digits + null
-
-    % Leave room for trailing null
     MaxDigits = Width - 1,
     case length(S) > MaxDigits of
         true ->
-            %% Truncate if too long (shouldn't happen with valid data)
-            Truncated = lists:sublist(S, MaxDigits),
-            list_to_binary(Truncated ++ [0]);
+            error({octal_overflow, N, Width});
         false ->
             PadLen = MaxDigits - length(S),
             Padded = lists:duplicate(PadLen, $0) ++ S ++ [0],
             list_to_binary(Padded)
-    end.
+    end;
+octal(N, _Width) ->
+    error({negative_value, N}).
 
 %% Format checksum (6 octal digits + null + space)
--spec octal_checksum(integer()) -> binary().
+-spec octal_checksum(non_neg_integer()) -> binary().
 octal_checksum(N) ->
     S = integer_to_list(N, 8),
-    Padded = lists:duplicate(6 - length(S), $0) ++ S,
+    Padded = lists:duplicate(?CHECKSUM_DIGITS - length(S), $0) ++ S,
     list_to_binary(Padded ++ [0, $\s]).
 
 %% Pad binary to length with null bytes

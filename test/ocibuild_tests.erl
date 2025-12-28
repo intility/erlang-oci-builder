@@ -90,6 +90,87 @@ tar_path_traversal_test() ->
         TraversalPaths
     ).
 
+tar_null_byte_injection_test() ->
+    %% Paths with null bytes should raise error (security vulnerability)
+    NullPaths = [
+        <<"/app/file.txt", 0, ".evil">>,
+        <<"/app/", 0, "passwd">>,
+        <<0, "/etc/shadow">>
+    ],
+    lists:foreach(
+        fun(Path) ->
+            Files = [{Path, ~"content", 8#644}],
+            ?assertError(
+                {null_byte, _},
+                ocibuild_tar:create(Files)
+            )
+        end,
+        NullPaths
+    ).
+
+tar_empty_path_test() ->
+    %% Empty paths should raise error
+    Files = [{<<>>, ~"content", 8#644}],
+    ?assertError(
+        {empty_path, _},
+        ocibuild_tar:create(Files)
+    ).
+
+tar_invalid_mode_test() ->
+    %% Invalid modes should raise error
+    InvalidModes = [
+        %% Negative
+        -1,
+        %% Exceeds 7777 octal
+        8#10000,
+        %% Way too large
+        16#FFFF
+    ],
+    lists:foreach(
+        fun(Mode) ->
+            Files = [{~"/app/file.txt", ~"content", Mode}],
+            ?assertError(
+                {invalid_mode, Mode},
+                ocibuild_tar:create(Files)
+            )
+        end,
+        InvalidModes
+    ).
+
+tar_valid_mode_edge_cases_test() ->
+    %% Valid mode edge cases should work
+    ValidModes = [
+        %% Minimum
+        0,
+        %% Common file mode
+        8#644,
+        %% Common executable mode
+        8#755,
+        %% Maximum (with setuid, setgid, sticky)
+        8#7777
+    ],
+    lists:foreach(
+        fun(Mode) ->
+            Files = [{~"/app/file.txt", ~"content", Mode}],
+            Tar = ocibuild_tar:create(Files),
+            ?assertEqual(0, byte_size(Tar) rem 512)
+        end,
+        ValidModes
+    ).
+
+tar_duplicate_paths_test() ->
+    %% Duplicate paths should raise error
+    Files = [
+        {~"/app/file.txt", ~"content1", 8#644},
+        {~"/app/other.txt", ~"content2", 8#644},
+        %% Duplicate!
+        {~"/app/file.txt", ~"content3", 8#644}
+    ],
+    ?assertError(
+        {duplicate_paths, [~"/app/file.txt"]},
+        ocibuild_tar:create(Files)
+    ).
+
 %%%===================================================================
 %%% Layer tests
 %%%===================================================================
