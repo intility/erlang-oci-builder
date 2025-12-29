@@ -93,6 +93,9 @@ stop_manager() ->
             receive
                 stopped -> ok
             after 2000 ->
+                %% Manager didn't respond in time - forcefully kill it
+                %% to prevent keeping the VM alive on shutdown
+                exit(Pid, kill),
                 ok
             end
     end.

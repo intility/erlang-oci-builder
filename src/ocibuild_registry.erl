@@ -1945,8 +1945,11 @@ stop_httpc() ->
             receive
                 {'DOWN', Ref, process, CleanupPid, _} -> ok
             after ?DEFAULT_TIMEOUT ->
-                %% Explicitly kill to prevent orphaned processes
+                %% Cleanup timed out - kill both the cleanup process AND httpc itself
+                %% This ensures the httpc process (which owns TCP sockets) doesn't keep
+                %% the VM alive. Without killing HttpcPid, the VM may hang on shutdown.
                 exit(CleanupPid, kill),
+                exit(HttpcPid, kill),
                 erlang:demonitor(Ref, [flush]),
                 ok
             end
