@@ -7,43 +7,203 @@
 -import(ocibuild_test_helpers, [make_temp_dir/1, cleanup_temp_dir/1]).
 
 %%%===================================================================
-%%% File collection tests (using exported function)
+%%% Test fixtures - setup/cleanup functions
 %%%===================================================================
 
-collect_release_files_test() ->
-    %% Create a mock release directory structure
-    TmpDir = create_mock_release(),
-    try
-        %% Test file collection using the actual exported function
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+%% Setup for tests needing a mock release directory
+setup_mock_release() ->
+    create_mock_release().
 
-        %% Should have collected the files we created
-        ?assert(length(Files) >= 3),
+cleanup_mock_release(TmpDir) ->
+    cleanup_temp_dir(TmpDir).
 
-        %% Check that bin/myapp has executable permissions
-        BinFile = lists:keyfind(~"/app/bin/myapp", 1, Files),
-        ?assertNotEqual(false, BinFile),
-        {_, _, BinMode} = BinFile,
-        ?assertEqual(8#755, BinMode band 8#777),
+%% Setup for tests needing a simple temp directory
+setup_temp_dir() ->
+    make_temp_dir("ocibuild_test").
 
-        %% Check that lib file has regular permissions
-        LibFile = lists:keyfind(~"/app/lib/myapp-1.0.0/ebin/myapp.beam", 1, Files),
-        ?assertNotEqual(false, LibFile),
-        {_, _, LibMode} = LibFile,
-        ?assertEqual(8#644, LibMode band 8#777)
-    after
-        %% Cleanup
-        cleanup_temp_dir(TmpDir)
-    end.
+cleanup_temp_dir_wrapper(TmpDir) ->
+    cleanup_temp_dir(TmpDir).
 
-collect_empty_dir_test() ->
-    TmpDir = make_temp_dir("ocibuild_empty"),
-    try
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
-        ?assertEqual([], Files)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+%% Setup for push auth tests
+setup_push_auth() ->
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
+    os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
+    ok.
+
+cleanup_push_auth(_) ->
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
+    os:unsetenv("OCIBUILD_PUSH_PASSWORD").
+
+%% Setup for pull auth tests
+setup_pull_auth() ->
+    os:unsetenv("OCIBUILD_PULL_TOKEN"),
+    os:unsetenv("OCIBUILD_PULL_USERNAME"),
+    os:unsetenv("OCIBUILD_PULL_PASSWORD"),
+    ok.
+
+cleanup_pull_auth(_) ->
+    os:unsetenv("OCIBUILD_PULL_TOKEN"),
+    os:unsetenv("OCIBUILD_PULL_USERNAME"),
+    os:unsetenv("OCIBUILD_PULL_PASSWORD").
+
+%%%===================================================================
+%%% Test generators
+%%%===================================================================
+
+file_collection_test_() ->
+    {foreach, fun setup_mock_release/0, fun cleanup_mock_release/1, [
+        fun(TmpDir) ->
+            {"collect release files", fun() -> collect_release_files_test(TmpDir) end}
+        end
+    ]}.
+
+empty_dir_collection_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"collect empty dir", fun() -> collect_empty_dir_test(TmpDir) end}
+        end
+    ]}.
+
+file_mode_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"get file mode", fun() -> get_file_mode_test(TmpDir) end}
+        end
+    ]}.
+
+symlink_security_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"symlink inside release", fun() -> collect_symlink_inside_release_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"symlink outside release", fun() -> collect_symlink_outside_release_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"symlink relative escape", fun() -> collect_symlink_relative_escape_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"broken symlink", fun() -> collect_broken_symlink_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"symlink to dir inside", fun() -> collect_symlink_to_dir_inside_test(TmpDir) end}
+        end
+    ]}.
+
+multiplatform_validation_test_() ->
+    {foreach, fun setup_mock_release/0, fun cleanup_mock_release/1, [
+        fun(TmpDir) ->
+            {"has bundled ERTS true", fun() -> has_bundled_erts_true_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"has bundled ERTS false", fun() -> has_bundled_erts_false_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"native code found .so", fun() -> check_for_native_code_found_so_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"native code found .dll", fun() -> check_for_native_code_found_dll_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"native code found .dylib", fun() -> check_for_native_code_found_dylib_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"native code none", fun() -> check_for_native_code_none_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"native code nested priv", fun() -> check_for_native_code_nested_priv_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"validate multiplatform ERTS error", fun() -> validate_multiplatform_erts_error_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"validate multiplatform ok", fun() -> validate_multiplatform_ok_test(TmpDir) end}
+        end
+    ]}.
+
+cli_integration_test_() ->
+    {foreach, fun setup_mock_release/0, fun cleanup_mock_release/1, [
+        fun(TmpDir) ->
+            {"run single platform", fun() -> run_single_platform_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"run multiplatform ERTS error", fun() -> run_multiplatform_erts_error_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"run multiplatform no ERTS", fun() -> run_multiplatform_no_erts_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"run no platform", fun() -> run_no_platform_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"run empty platform", fun() -> run_empty_platform_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"run nil platform", fun() -> run_nil_platform_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"run multiplatform NIF warning", fun() -> run_multiplatform_nif_warning_test(TmpDir) end}
+        end
+    ]}.
+
+layer_building_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"build layers with deps and ERTS", fun() -> build_layers_with_deps_and_erts_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"build layers with deps no ERTS", fun() -> build_layers_with_deps_no_erts_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"build layers fallback no deps", fun() -> build_layers_fallback_no_deps_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"build layers fallback no app name", fun() -> build_layers_fallback_no_app_name_test(TmpDir) end}
+        end
+    ]}.
+
+push_auth_test_() ->
+    {foreach, fun setup_push_auth/0, fun cleanup_push_auth/1, [
+        {"push auth empty", fun get_push_auth_empty_test/0},
+        {"push auth token", fun get_push_auth_token_test/0},
+        {"push auth username password", fun get_push_auth_username_password_test/0},
+        {"push auth username only", fun get_push_auth_username_only_test/0},
+        {"push auth password only", fun get_push_auth_password_only_test/0}
+    ]}.
+
+pull_auth_test_() ->
+    {foreach, fun setup_pull_auth/0, fun cleanup_pull_auth/1, [
+        {"pull auth empty", fun get_pull_auth_empty_test/0},
+        {"pull auth username password", fun get_pull_auth_username_password_test/0}
+    ]}.
+
+%%%===================================================================
+%%% File collection tests
+%%%===================================================================
+
+collect_release_files_test(TmpDir) ->
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+
+    %% Should have collected the files we created
+    ?assert(length(Files) >= 3),
+
+    %% Check that bin/myapp has executable permissions
+    BinFile = lists:keyfind(~"/app/bin/myapp", 1, Files),
+    ?assertNotEqual(false, BinFile),
+    {_, _, BinMode} = BinFile,
+    ?assertEqual(8#755, BinMode band 8#777),
+
+    %% Check that lib file has regular permissions
+    LibFile = lists:keyfind(~"/app/lib/myapp-1.0.0/ebin/myapp.beam", 1, Files),
+    ?assertNotEqual(false, LibFile),
+    {_, _, LibMode} = LibFile,
+    ?assertEqual(8#644, LibMode band 8#777).
+
+collect_empty_dir_test(TmpDir) ->
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+    ?assertEqual([], Files).
 
 %%%===================================================================
 %%% Build image tests (using exported function)
@@ -145,57 +305,49 @@ parse_tag(Tag) ->
     end.
 
 %%%===================================================================
-%%% Auth tests (using exported function)
+%%% Auth tests
 %%%===================================================================
 
 get_push_auth_empty_test() ->
-    %% Clear any existing env vars
-    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
-    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
-    os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
-
     ?assertEqual(#{}, ocibuild_release:get_push_auth()).
 
 get_push_auth_token_test() ->
     os:putenv("OCIBUILD_PUSH_TOKEN", "mytoken123"),
-    try
-        Auth = ocibuild_release:get_push_auth(),
-        ?assertEqual(#{token => ~"mytoken123"}, Auth)
-    after
-        os:unsetenv("OCIBUILD_PUSH_TOKEN")
-    end.
+    Auth = ocibuild_release:get_push_auth(),
+    ?assertEqual(#{token => ~"mytoken123"}, Auth).
 
 get_push_auth_username_password_test() ->
+    %% Ensure token is not set (takes precedence over username/password)
     os:unsetenv("OCIBUILD_PUSH_TOKEN"),
     os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
     os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
-    try
-        Auth = ocibuild_release:get_push_auth(),
-        ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, Auth)
-    after
-        os:unsetenv("OCIBUILD_PUSH_USERNAME"),
-        os:unsetenv("OCIBUILD_PUSH_PASSWORD")
-    end.
+    Auth = ocibuild_release:get_push_auth(),
+    ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, Auth).
+
+get_push_auth_username_only_test() ->
+    %% Ensure token and password are not set
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
+    os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
+    %% Missing password should return empty
+    ?assertEqual(#{}, ocibuild_release:get_push_auth()).
+
+get_push_auth_password_only_test() ->
+    %% Ensure token and username are not set
+    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
+    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
+    %% Missing username should return empty
+    ?assertEqual(#{}, ocibuild_release:get_push_auth()).
 
 get_pull_auth_empty_test() ->
-    %% Clear any existing env vars
-    os:unsetenv("OCIBUILD_PULL_TOKEN"),
-    os:unsetenv("OCIBUILD_PULL_USERNAME"),
-    os:unsetenv("OCIBUILD_PULL_PASSWORD"),
-
     ?assertEqual(#{}, ocibuild_release:get_pull_auth()).
 
 get_pull_auth_username_password_test() ->
-    os:unsetenv("OCIBUILD_PULL_TOKEN"),
     os:putenv("OCIBUILD_PULL_USERNAME", "pulluser"),
     os:putenv("OCIBUILD_PULL_PASSWORD", "pullpass"),
-    try
-        Auth = ocibuild_release:get_pull_auth(),
-        ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, Auth)
-    after
-        os:unsetenv("OCIBUILD_PULL_USERNAME"),
-        os:unsetenv("OCIBUILD_PULL_PASSWORD")
-    end.
+    Auth = ocibuild_release:get_pull_auth(),
+    ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, Auth).
 
 %%%===================================================================
 %%% Format error tests
@@ -354,32 +506,6 @@ chunk_size_undefined_uses_default_test() ->
     ok.
 
 %%%===================================================================
-%%% Auth partial tests
-%%%===================================================================
-
-get_push_auth_username_only_test() ->
-    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
-    os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
-    os:unsetenv("OCIBUILD_PUSH_PASSWORD"),
-    try
-        %% Missing password should return empty
-        ?assertEqual(#{}, ocibuild_release:get_push_auth())
-    after
-        os:unsetenv("OCIBUILD_PUSH_USERNAME")
-    end.
-
-get_push_auth_password_only_test() ->
-    os:unsetenv("OCIBUILD_PUSH_TOKEN"),
-    os:unsetenv("OCIBUILD_PUSH_USERNAME"),
-    os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
-    try
-        %% Missing username should return empty
-        ?assertEqual(#{}, ocibuild_release:get_push_auth())
-    after
-        os:unsetenv("OCIBUILD_PUSH_PASSWORD")
-    end.
-
-%%%===================================================================
 %%% to_container_path tests
 %%%===================================================================
 
@@ -396,23 +522,18 @@ to_container_path_nested_test() ->
 %%% get_file_mode tests
 %%%===================================================================
 
-get_file_mode_test() ->
-    TmpDir = make_temp_dir("ocibuild_mode"),
-    try
-        %% Create a file with specific permissions
-        FilePath = filename:join(TmpDir, "test.txt"),
-        ok = file:write_file(FilePath, ~"test"),
-        ok = file:change_mode(FilePath, 8#644),
-        ?assertEqual(8#644, ocibuild_release:get_file_mode(FilePath)),
+get_file_mode_test(TmpDir) ->
+    %% Create a file with specific permissions
+    FilePath = filename:join(TmpDir, "test.txt"),
+    ok = file:write_file(FilePath, ~"test"),
+    ok = file:change_mode(FilePath, 8#644),
+    ?assertEqual(8#644, ocibuild_release:get_file_mode(FilePath)),
 
-        %% Create executable
-        ExePath = filename:join(TmpDir, "test.sh"),
-        ok = file:write_file(ExePath, ~"#!/bin/sh"),
-        ok = file:change_mode(ExePath, 8#755),
-        ?assertEqual(8#755, ocibuild_release:get_file_mode(ExePath))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% Create executable
+    ExePath = filename:join(TmpDir, "test.sh"),
+    ok = file:write_file(ExePath, ~"#!/bin/sh"),
+    ok = file:change_mode(ExePath, 8#755),
+    ?assertEqual(8#755, ocibuild_release:get_file_mode(ExePath)).
 
 get_file_mode_nonexistent_test() ->
     %% Non-existent file should return default mode
@@ -589,237 +710,177 @@ make_progress_callback_test() ->
 %%% Symlink security tests
 %%%===================================================================
 
-collect_symlink_inside_release_test() ->
-    TmpDir = make_temp_dir("ocibuild_symlink_inside"),
-    try
-        %% Create a file and a symlink pointing to it (within release)
-        BinDir = filename:join(TmpDir, "bin"),
-        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+collect_symlink_inside_release_test(TmpDir) ->
+    %% Create a file and a symlink pointing to it (within release)
+    BinDir = filename:join(TmpDir, "bin"),
+    ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
 
-        TargetPath = filename:join(BinDir, "real_file"),
-        ok = file:write_file(TargetPath, ~"real content"),
+    TargetPath = filename:join(BinDir, "real_file"),
+    ok = file:write_file(TargetPath, ~"real content"),
 
-        SymlinkPath = filename:join(BinDir, "link_to_file"),
-        ok = file:make_symlink("real_file", SymlinkPath),
+    SymlinkPath = filename:join(BinDir, "link_to_file"),
+    ok = file:make_symlink("real_file", SymlinkPath),
 
-        %% Should successfully collect both files
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
-        ?assertEqual(2, length(Files)),
+    %% Should successfully collect both files
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+    ?assertEqual(2, length(Files)),
 
-        %% Symlink should resolve to the same content
-        LinkFile = lists:keyfind(~"/app/bin/link_to_file", 1, Files),
-        ?assertNotEqual(false, LinkFile),
-        {_, Content, _} = LinkFile,
-        ?assertEqual(~"real content", Content)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% Symlink should resolve to the same content
+    LinkFile = lists:keyfind(~"/app/bin/link_to_file", 1, Files),
+    ?assertNotEqual(false, LinkFile),
+    {_, Content, _} = LinkFile,
+    ?assertEqual(~"real content", Content).
 
-collect_symlink_outside_release_test() ->
-    TmpDir = make_temp_dir("ocibuild_symlink_outside"),
-    try
-        %% Create a symlink pointing outside the release directory
-        BinDir = filename:join(TmpDir, "bin"),
-        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+collect_symlink_outside_release_test(TmpDir) ->
+    %% Create a symlink pointing outside the release directory
+    BinDir = filename:join(TmpDir, "bin"),
+    ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
 
-        %% Create a regular file
-        RegularPath = filename:join(BinDir, "regular"),
-        ok = file:write_file(RegularPath, ~"regular content"),
+    %% Create a regular file
+    RegularPath = filename:join(BinDir, "regular"),
+    ok = file:write_file(RegularPath, ~"regular content"),
 
-        %% Create a symlink pointing to /etc/passwd (outside release)
-        SymlinkPath = filename:join(BinDir, "evil_link"),
-        ok = file:make_symlink("/etc/passwd", SymlinkPath),
+    %% Create a symlink pointing to /etc/passwd (outside release)
+    SymlinkPath = filename:join(BinDir, "evil_link"),
+    ok = file:make_symlink("/etc/passwd", SymlinkPath),
 
-        %% Should collect only the regular file, not the symlink
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
-        ?assertEqual(1, length(Files)),
+    %% Should collect only the regular file, not the symlink
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+    ?assertEqual(1, length(Files)),
 
-        %% The evil symlink should not be present
-        EvilFile = lists:keyfind(~"/app/bin/evil_link", 1, Files),
-        ?assertEqual(false, EvilFile)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% The evil symlink should not be present
+    EvilFile = lists:keyfind(~"/app/bin/evil_link", 1, Files),
+    ?assertEqual(false, EvilFile).
 
-collect_symlink_relative_escape_test() ->
-    TmpDir = make_temp_dir("ocibuild_symlink_escape"),
-    try
-        %% Create a symlink using relative path to escape release directory
-        BinDir = filename:join(TmpDir, "bin"),
-        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+collect_symlink_relative_escape_test(TmpDir) ->
+    %% Create a symlink using relative path to escape release directory
+    BinDir = filename:join(TmpDir, "bin"),
+    ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
 
-        %% Create a regular file
-        RegularPath = filename:join(BinDir, "regular"),
-        ok = file:write_file(RegularPath, ~"regular content"),
+    %% Create a regular file
+    RegularPath = filename:join(BinDir, "regular"),
+    ok = file:write_file(RegularPath, ~"regular content"),
 
-        %% Create a symlink using ../../.. to escape
-        SymlinkPath = filename:join(BinDir, "escape_link"),
-        ok = file:make_symlink("../../../etc/passwd", SymlinkPath),
+    %% Create a symlink using ../../.. to escape
+    SymlinkPath = filename:join(BinDir, "escape_link"),
+    ok = file:make_symlink("../../../etc/passwd", SymlinkPath),
 
-        %% Should collect only the regular file
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
-        ?assertEqual(1, length(Files)),
+    %% Should collect only the regular file
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+    ?assertEqual(1, length(Files)),
 
-        %% The escape symlink should not be present
-        EscapeFile = lists:keyfind(~"/app/bin/escape_link", 1, Files),
-        ?assertEqual(false, EscapeFile)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% The escape symlink should not be present
+    EscapeFile = lists:keyfind(~"/app/bin/escape_link", 1, Files),
+    ?assertEqual(false, EscapeFile).
 
-collect_broken_symlink_test() ->
-    TmpDir = make_temp_dir("ocibuild_symlink_broken"),
-    try
-        %% Create a broken symlink (target doesn't exist)
-        BinDir = filename:join(TmpDir, "bin"),
-        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+collect_broken_symlink_test(TmpDir) ->
+    %% Create a broken symlink (target doesn't exist)
+    BinDir = filename:join(TmpDir, "bin"),
+    ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
 
-        %% Create a regular file
-        RegularPath = filename:join(BinDir, "regular"),
-        ok = file:write_file(RegularPath, ~"regular content"),
+    %% Create a regular file
+    RegularPath = filename:join(BinDir, "regular"),
+    ok = file:write_file(RegularPath, ~"regular content"),
 
-        %% Create a broken symlink
-        SymlinkPath = filename:join(BinDir, "broken_link"),
-        ok = file:make_symlink("nonexistent_file", SymlinkPath),
+    %% Create a broken symlink
+    SymlinkPath = filename:join(BinDir, "broken_link"),
+    ok = file:make_symlink("nonexistent_file", SymlinkPath),
 
-        %% Should collect only the regular file
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
-        ?assertEqual(1, length(Files))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% Should collect only the regular file
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+    ?assertEqual(1, length(Files)).
 
-collect_symlink_to_dir_inside_test() ->
-    TmpDir = make_temp_dir("ocibuild_symlink_dir"),
-    try
-        %% Create a directory with a file, and a symlink to that directory
-        RealDir = filename:join(TmpDir, "real_dir"),
-        ok = filelib:ensure_dir(filename:join(RealDir, "placeholder")),
+collect_symlink_to_dir_inside_test(TmpDir) ->
+    %% Create a directory with a file, and a symlink to that directory
+    RealDir = filename:join(TmpDir, "real_dir"),
+    ok = filelib:ensure_dir(filename:join(RealDir, "placeholder")),
 
-        FilePath = filename:join(RealDir, "file.txt"),
-        ok = file:write_file(FilePath, ~"file in real dir"),
+    FilePath = filename:join(RealDir, "file.txt"),
+    ok = file:write_file(FilePath, ~"file in real dir"),
 
-        %% Create symlink to directory (within release)
-        SymlinkPath = filename:join(TmpDir, "link_dir"),
-        ok = file:make_symlink("real_dir", SymlinkPath),
+    %% Create symlink to directory (within release)
+    SymlinkPath = filename:join(TmpDir, "link_dir"),
+    ok = file:make_symlink("real_dir", SymlinkPath),
 
-        %% Should collect files from both the real dir and via the symlink
-        {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
+    %% Should collect files from both the real dir and via the symlink
+    {ok, Files} = ocibuild_release:collect_release_files(TmpDir),
 
-        %% Should have 2 files (same file accessible via two paths)
-        ?assertEqual(2, length(Files)),
+    %% Should have 2 files (same file accessible via two paths)
+    ?assertEqual(2, length(Files)),
 
-        %% Both paths should have the same content
-        RealFile = lists:keyfind(~"/app/real_dir/file.txt", 1, Files),
-        LinkFile = lists:keyfind(~"/app/link_dir/file.txt", 1, Files),
-        ?assertNotEqual(false, RealFile),
-        ?assertNotEqual(false, LinkFile)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% Both paths should have the same content
+    RealFile = lists:keyfind(~"/app/real_dir/file.txt", 1, Files),
+    LinkFile = lists:keyfind(~"/app/link_dir/file.txt", 1, Files),
+    ?assertNotEqual(false, RealFile),
+    ?assertNotEqual(false, LinkFile).
 
 %%%===================================================================
 %%% Multi-platform validation tests
 %%%===================================================================
 
-has_bundled_erts_true_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add erts directory
-        ErtsDir = filename:join(TmpDir, "erts-27.0"),
-        ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
-        ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), ~"beam"),
+has_bundled_erts_true_test(TmpDir) ->
+    %% Add erts directory
+    ErtsDir = filename:join(TmpDir, "erts-27.0"),
+    ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
+    ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), ~"beam"),
 
-        ?assertEqual(true, ocibuild_release:has_bundled_erts(TmpDir))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    ?assertEqual(true, ocibuild_release:has_bundled_erts(TmpDir)).
 
-has_bundled_erts_false_test() ->
-    TmpDir = create_mock_release(),
-    try
-        ?assertEqual(false, ocibuild_release:has_bundled_erts(TmpDir))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+has_bundled_erts_false_test(TmpDir) ->
+    ?assertEqual(false, ocibuild_release:has_bundled_erts(TmpDir)).
 
 has_bundled_erts_nonexistent_test() ->
     ?assertEqual(false, ocibuild_release:has_bundled_erts("/nonexistent/path")).
 
-check_for_native_code_found_so_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add a .so file in lib/crypto-1.0.0/priv/
-        PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
-        ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-        ok = file:write_file(filename:join(PrivDir, "crypto_nif.so"), ~"fake so"),
+check_for_native_code_found_so_test(TmpDir) ->
+    %% Add a .so file in lib/crypto-1.0.0/priv/
+    PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
+    ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+    ok = file:write_file(filename:join(PrivDir, "crypto_nif.so"), ~"fake so"),
 
-        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
-        ?assertEqual(1, length(NifFiles)),
-        [#{app := App, file := File, extension := Ext}] = NifFiles,
-        ?assertEqual(~"crypto", App),
-        ?assertEqual(~"crypto_nif.so", File),
-        ?assertEqual(~".so", Ext)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+    ?assertEqual(1, length(NifFiles)),
+    [#{app := App, file := File, extension := Ext}] = NifFiles,
+    ?assertEqual(~"crypto", App),
+    ?assertEqual(~"crypto_nif.so", File),
+    ?assertEqual(~".so", Ext).
 
-check_for_native_code_found_dll_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add a .dll file
-        PrivDir = filename:join([TmpDir, "lib", "nif_app-2.0.0", "priv"]),
-        ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-        ok = file:write_file(filename:join(PrivDir, "nif_app.dll"), ~"fake dll"),
+check_for_native_code_found_dll_test(TmpDir) ->
+    %% Add a .dll file
+    PrivDir = filename:join([TmpDir, "lib", "nif_app-2.0.0", "priv"]),
+    ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+    ok = file:write_file(filename:join(PrivDir, "nif_app.dll"), ~"fake dll"),
 
-        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
-        ?assertEqual(1, length(NifFiles)),
-        [#{extension := Ext}] = NifFiles,
-        ?assertEqual(~".dll", Ext)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+    ?assertEqual(1, length(NifFiles)),
+    [#{extension := Ext}] = NifFiles,
+    ?assertEqual(~".dll", Ext).
 
-check_for_native_code_found_dylib_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add a .dylib file
-        PrivDir = filename:join([TmpDir, "lib", "mac_nif-1.0.0", "priv"]),
-        ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-        ok = file:write_file(filename:join(PrivDir, "mac_nif.dylib"), ~"fake dylib"),
+check_for_native_code_found_dylib_test(TmpDir) ->
+    %% Add a .dylib file
+    PrivDir = filename:join([TmpDir, "lib", "mac_nif-1.0.0", "priv"]),
+    ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+    ok = file:write_file(filename:join(PrivDir, "mac_nif.dylib"), ~"fake dylib"),
 
-        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
-        ?assertEqual(1, length(NifFiles)),
-        [#{extension := Ext}] = NifFiles,
-        ?assertEqual(~".dylib", Ext)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+    ?assertEqual(1, length(NifFiles)),
+    [#{extension := Ext}] = NifFiles,
+    ?assertEqual(~".dylib", Ext).
 
-check_for_native_code_none_test() ->
-    TmpDir = create_mock_release(),
-    try
-        ?assertEqual({ok, []}, ocibuild_release:check_for_native_code(TmpDir))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+check_for_native_code_none_test(TmpDir) ->
+    ?assertEqual({ok, []}, ocibuild_release:check_for_native_code(TmpDir)).
 
-check_for_native_code_nested_priv_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add a .so file in a subdirectory of priv
-        NestedDir = filename:join([TmpDir, "lib", "nested-1.0.0", "priv", "native"]),
-        ok = filelib:ensure_dir(filename:join(NestedDir, "placeholder")),
-        ok = file:write_file(filename:join(NestedDir, "nested_nif.so"), ~"fake so"),
+check_for_native_code_nested_priv_test(TmpDir) ->
+    %% Add a .so file in a subdirectory of priv
+    NestedDir = filename:join([TmpDir, "lib", "nested-1.0.0", "priv", "native"]),
+    ok = filelib:ensure_dir(filename:join(NestedDir, "placeholder")),
+    ok = file:write_file(filename:join(NestedDir, "nested_nif.so"), ~"fake so"),
 
-        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
-        ?assertEqual(1, length(NifFiles)),
-        [#{file := File}] = NifFiles,
-        %% Should include the path relative to priv
-        ?assert(binary:match(File, ~"native") =/= nomatch)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+    ?assertEqual(1, length(NifFiles)),
+    [#{file := File}] = NifFiles,
+    %% Should include the path relative to priv
+    ?assert(binary:match(File, ~"native") =/= nomatch).
 
 validate_multiplatform_single_platform_ok_test() ->
     %% Single platform builds don't need validation
@@ -830,155 +891,100 @@ validate_multiplatform_empty_platforms_ok_test() ->
     %% Empty platforms list is OK
     ?assertEqual(ok, ocibuild_release:validate_multiplatform("/any/path", [])).
 
-validate_multiplatform_erts_error_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add erts directory
-        ErtsDir = filename:join(TmpDir, "erts-27.0"),
-        ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
+validate_multiplatform_erts_error_test(TmpDir) ->
+    %% Add erts directory
+    ErtsDir = filename:join(TmpDir, "erts-27.0"),
+    ok = filelib:ensure_dir(filename:join(ErtsDir, "bin/placeholder")),
 
-        Platforms = [
-            #{os => ~"linux", architecture => ~"amd64"},
-            #{os => ~"linux", architecture => ~"arm64"}
-        ],
-        Result = ocibuild_release:validate_multiplatform(TmpDir, Platforms),
-        ?assertMatch({error, {bundled_erts, _}}, Result)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    Platforms = [
+        #{os => ~"linux", architecture => ~"amd64"},
+        #{os => ~"linux", architecture => ~"arm64"}
+    ],
+    Result = ocibuild_release:validate_multiplatform(TmpDir, Platforms),
+    ?assertMatch({error, {bundled_erts, _}}, Result).
 
-validate_multiplatform_ok_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% No ERTS, no NIFs - should be OK
-        Platforms = [
-            #{os => ~"linux", architecture => ~"amd64"},
-            #{os => ~"linux", architecture => ~"arm64"}
-        ],
-        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+validate_multiplatform_ok_test(TmpDir) ->
+    %% No ERTS, no NIFs - should be OK
+    Platforms = [
+        #{os => ~"linux", architecture => ~"amd64"},
+        #{os => ~"linux", architecture => ~"arm64"}
+    ],
+    ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms)).
 
 %%%===================================================================
 %%% CLI Integration tests (run/3 with platforms)
 %%%===================================================================
 
-%% Test that single platform build works without validation
-run_single_platform_test() ->
-    TmpDir = create_mock_release(),
-    try
-        State = create_mock_adapter_state(TmpDir, #{
-            platform => ~"linux/amd64"
-        }),
-        %% Single platform should work even with ERTS
-        add_mock_erts(TmpDir),
+run_single_platform_test(TmpDir) ->
+    State = create_mock_adapter_state(TmpDir, #{
+        platform => ~"linux/amd64"
+    }),
+    %% Single platform should work even with ERTS
+    add_mock_erts(TmpDir),
 
-        %% This should succeed (single platform allows ERTS)
-        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
-        ?assertMatch({ok, _}, Result)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% This should succeed (single platform allows ERTS)
+    Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+    ?assertMatch({ok, _}, Result).
 
-%% Test that multi-platform build fails with bundled ERTS
-run_multiplatform_erts_error_test() ->
-    TmpDir = create_mock_release(),
-    try
-        State = create_mock_adapter_state(TmpDir, #{
-            platform => ~"linux/amd64,linux/arm64"
-        }),
-        %% Add ERTS to trigger validation error
-        add_mock_erts(TmpDir),
+run_multiplatform_erts_error_test(TmpDir) ->
+    State = create_mock_adapter_state(TmpDir, #{
+        platform => ~"linux/amd64,linux/arm64"
+    }),
+    %% Add ERTS to trigger validation error
+    add_mock_erts(TmpDir),
 
-        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
-        ?assertMatch({error, {bundled_erts, _}}, Result)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+    ?assertMatch({error, {bundled_erts, _}}, Result).
 
-%% Test that multi-platform validation succeeds without ERTS
-%% (Full build would require network access, so we just test validation)
-run_multiplatform_no_erts_test() ->
-    TmpDir = create_mock_release(),
-    try
-        Platforms = [
-            #{os => ~"linux", architecture => ~"amd64"},
-            #{os => ~"linux", architecture => ~"arm64"}
-        ],
-        %% No ERTS, validation should succeed
-        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+run_multiplatform_no_erts_test(TmpDir) ->
+    Platforms = [
+        #{os => ~"linux", architecture => ~"amd64"},
+        #{os => ~"linux", architecture => ~"arm64"}
+    ],
+    %% No ERTS, validation should succeed
+    ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms)).
 
-%% Test that no platform specified works (default behavior)
-run_no_platform_test() ->
-    TmpDir = create_mock_release(),
-    try
-        State = create_mock_adapter_state(TmpDir, #{
-            platform => undefined
-        }),
-        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
-        ?assertMatch({ok, _}, Result)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+run_no_platform_test(TmpDir) ->
+    State = create_mock_adapter_state(TmpDir, #{
+        platform => undefined
+    }),
+    Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+    ?assertMatch({ok, _}, Result).
 
-%% Test that empty platform string works
-run_empty_platform_test() ->
-    TmpDir = create_mock_release(),
-    try
-        State = create_mock_adapter_state(TmpDir, #{
-            platform => <<>>
-        }),
-        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
-        ?assertMatch({ok, _}, Result)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+run_empty_platform_test(TmpDir) ->
+    State = create_mock_adapter_state(TmpDir, #{
+        platform => <<>>
+    }),
+    Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+    ?assertMatch({ok, _}, Result).
 
-%% Test that nil platform (Elixir interop) works
-run_nil_platform_test() ->
-    TmpDir = create_mock_release(),
-    try
-        State = create_mock_adapter_state(TmpDir, #{
-            platform => nil
-        }),
-        Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
-        ?assertMatch({ok, _}, Result)
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+run_nil_platform_test(TmpDir) ->
+    State = create_mock_adapter_state(TmpDir, #{
+        platform => nil
+    }),
+    Result = ocibuild_release:run(ocibuild_test_adapter, State, #{}),
+    ?assertMatch({ok, _}, Result).
 
-%% Test that multi-platform with NIFs passes validation but detects NIFs.
-%% NIFs trigger a warning (visible in test output) but don't block the build.
-run_multiplatform_nif_warning_test() ->
-    TmpDir = create_mock_release(),
-    try
-        %% Add NIF to the release
-        add_mock_nif(TmpDir),
+run_multiplatform_nif_warning_test(TmpDir) ->
+    %% Add NIF to the release
+    add_mock_nif(TmpDir),
 
-        Platforms = [
-            #{os => ~"linux", architecture => ~"amd64"},
-            #{os => ~"linux", architecture => ~"arm64"}
-        ],
+    Platforms = [
+        #{os => ~"linux", architecture => ~"amd64"},
+        #{os => ~"linux", architecture => ~"arm64"}
+    ],
 
-        %% NIFs should be detected by check_for_native_code
-        {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
-        ?assertEqual(1, length(NifFiles)),
+    %% NIFs should be detected by check_for_native_code
+    {warning, NifFiles} = ocibuild_release:check_for_native_code(TmpDir),
+    ?assertEqual(1, length(NifFiles)),
 
-        %% Verify the detected NIF file details
-        [NifInfo] = NifFiles,
-        ?assertEqual(~"crypto", maps:get(app, NifInfo)),
-        ?assertEqual(~"test_nif.so", maps:get(file, NifInfo)),
+    %% Verify the detected NIF file details
+    [NifInfo] = NifFiles,
+    ?assertEqual(~"crypto", maps:get(app, NifInfo)),
+    ?assertEqual(~"test_nif.so", maps:get(file, NifInfo)),
 
-        %% Validation should succeed - NIFs warn but don't block
-        %% (Warning "Native code detected..." is printed to stderr, visible in test output)
-        ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% Validation should succeed - NIFs warn but don't block
+    ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms)).
 
 %% Helper to create mock adapter state
 create_mock_adapter_state(ReleasePath, Overrides) ->
@@ -1068,23 +1074,21 @@ parse_rebar_lock_new_format_test() ->
         " {<<\"cowlib\">>,{pkg,<<\"cowlib\">>,<<\"2.12.1\">>},1}]}.\n"
     >>,
     TmpFile = make_temp_lock_file("rebar_new", LockContent),
-    try
-        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-        ?assertEqual(2, length(Deps)),
-        [Cowboy, Cowlib] = lists:sort(
-            fun(A, B) ->
-                maps:get(name, A) < maps:get(name, B)
-            end,
-            Deps
-        ),
-        ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
-        ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
-        ?assertEqual(~"hex", maps:get(source, Cowboy)),
-        ?assertEqual(~"cowlib", maps:get(name, Cowlib)),
-        ?assertEqual(~"2.12.1", maps:get(version, Cowlib))
-    after
-        file:delete(TmpFile)
-    end.
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    file:delete(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    ?assertEqual(2, length(Deps)),
+    [Cowboy, Cowlib] = lists:sort(
+        fun(A, B) ->
+            maps:get(name, A) < maps:get(name, B)
+        end,
+        Deps
+    ),
+    ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
+    ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
+    ?assertEqual(~"hex", maps:get(source, Cowboy)),
+    ?assertEqual(~"cowlib", maps:get(name, Cowlib)),
+    ?assertEqual(~"2.12.1", maps:get(version, Cowlib)).
 
 parse_rebar_lock_old_format_test() ->
     %% Old format: just a list without version tuple
@@ -1092,42 +1096,36 @@ parse_rebar_lock_old_format_test() ->
         "[{<<\"cowboy\">>,{pkg,<<\"cowboy\">>,<<\"2.10.0\">>},0}].\n"
     >>,
     TmpFile = make_temp_lock_file("rebar_old", LockContent),
-    try
-        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-        ?assertEqual(1, length(Deps)),
-        [Cowboy] = Deps,
-        ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
-        ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
-        ?assertEqual(~"hex", maps:get(source, Cowboy))
-    after
-        file:delete(TmpFile)
-    end.
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    file:delete(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    ?assertEqual(1, length(Deps)),
+    [Cowboy] = Deps,
+    ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
+    ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
+    ?assertEqual(~"hex", maps:get(source, Cowboy)).
 
 parse_rebar_lock_git_dep_test() ->
     LockContent = <<
         "[{<<\"mylib\">>,{git,\"https://github.com/org/mylib.git\",{ref,\"abc123\"}},0}].\n"
     >>,
     TmpFile = make_temp_lock_file("rebar_git", LockContent),
-    try
-        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-        ?assertEqual(1, length(Deps)),
-        [Mylib] = Deps,
-        ?assertEqual(~"mylib", maps:get(name, Mylib)),
-        ?assertEqual(~"abc123", maps:get(version, Mylib)),
-        ?assertEqual(~"https://github.com/org/mylib.git", maps:get(source, Mylib))
-    after
-        file:delete(TmpFile)
-    end.
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    file:delete(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    ?assertEqual(1, length(Deps)),
+    [Mylib] = Deps,
+    ?assertEqual(~"mylib", maps:get(name, Mylib)),
+    ?assertEqual(~"abc123", maps:get(version, Mylib)),
+    ?assertEqual(~"https://github.com/org/mylib.git", maps:get(source, Mylib)).
 
 parse_rebar_lock_empty_test() ->
     LockContent = ~"[].\n",
     TmpFile = make_temp_lock_file("rebar_empty", LockContent),
-    try
-        {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-        ?assertEqual([], Deps)
-    after
-        file:delete(TmpFile)
-    end.
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    file:delete(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    ?assertEqual([], Deps).
 
 parse_rebar_lock_missing_test() ->
     {ok, Deps} = ocibuild_rebar3:parse_rebar_lock("/nonexistent/path/rebar.lock"),
@@ -1324,7 +1322,10 @@ partition_files_no_deps_without_erts_test() ->
 
 %% Layer building tests
 
-build_layers_with_deps_and_erts_test() ->
+build_layers_with_deps_and_erts_test(TmpDir) ->
+    %% Create erts directory to simulate bundled ERTS
+    ok = file:make_dir(filename:join(TmpDir, "erts-14.2.1")),
+
     Files = [
         {~"/app/erts-14.2.1/bin/erl", ~"erl", 8#755},
         {~"/app/lib/stdlib-5.0/ebin/lists.beam", ~"beam", 8#644},
@@ -1332,54 +1333,42 @@ build_layers_with_deps_and_erts_test() ->
         {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
     ],
     Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
-    TmpDir = make_temp_release_dir_with_erts(),
-    try
-        {ok, Image0} = ocibuild:scratch(),
-        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
-        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
-        Layers = maps:get(layers, Image1),
-        %% Should have 3 layers: ERTS, deps, app
-        ?assertEqual(3, length(Layers))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
 
-build_layers_with_deps_no_erts_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
+    Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
+    Layers = maps:get(layers, Image1),
+    %% Should have 3 layers: ERTS, deps, app
+    ?assertEqual(3, length(Layers)).
+
+build_layers_with_deps_no_erts_test(TmpDir) ->
     Files = [
         {~"/app/lib/cowboy-2.10.0/ebin/cowboy.app", ~"app", 8#644},
         {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
     ],
     Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
-    TmpDir = make_temp_release_dir_no_erts(),
-    try
-        {ok, Image0} = ocibuild:scratch(),
-        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
-        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
-        Layers = maps:get(layers, Image1),
-        %% Should have 2 layers: deps, app
-        ?assertEqual(2, length(Layers))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
 
-build_layers_fallback_no_deps_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
+    Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
+    Layers = maps:get(layers, Image1),
+    %% Should have 2 layers: deps, app
+    ?assertEqual(2, length(Layers)).
+
+build_layers_fallback_no_deps_test(TmpDir) ->
     Files = [
         {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644},
         {~"/app/bin/myapp", ~"script", 8#755}
     ],
-    TmpDir = make_temp_release_dir_no_erts(),
-    try
-        {ok, Image0} = ocibuild:scratch(),
-        Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
-        %% Empty deps should fall back to single layer
-        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, [], Opts),
-        Layers = maps:get(layers, Image1),
-        ?assertEqual(1, length(Layers))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
 
-build_layers_fallback_no_app_name_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Opts = #{release_name => ~"myapp", app_name => ~"myapp", workdir => ~"/app"},
+    %% Empty deps should fall back to single layer
+    Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, [], Opts),
+    Layers = maps:get(layers, Image1),
+    ?assertEqual(1, length(Layers)).
+
+build_layers_fallback_no_app_name_test(TmpDir) ->
     %% When app_name is missing, should fall back to single layer
     %% even if deps are present (can't do smart layering without knowing the app)
     Files = [
@@ -1387,17 +1376,13 @@ build_layers_fallback_no_app_name_test() ->
         {~"/app/lib/myapp-1.0.0/ebin/myapp.beam", ~"beam", 8#644}
     ],
     Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
-    TmpDir = make_temp_release_dir_no_erts(),
-    try
-        {ok, Image0} = ocibuild:scratch(),
-        %% No app_name in opts - should fall back to single layer
-        Opts = #{release_name => ~"myapp", workdir => ~"/app"},
-        Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
-        Layers = maps:get(layers, Image1),
-        ?assertEqual(1, length(Layers))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+
+    {ok, Image0} = ocibuild:scratch(),
+    %% No app_name in opts - should fall back to single layer
+    Opts = #{release_name => ~"myapp", workdir => ~"/app"},
+    Image1 = ocibuild_release:build_release_layers(Image0, Files, TmpDir, Deps, Opts),
+    Layers = maps:get(layers, Image1),
+    ?assertEqual(1, length(Layers)).
 
 %% Helper functions for layer tests
 
@@ -1406,12 +1391,3 @@ make_temp_lock_file(Prefix, Content) ->
     LockFile = filename:join(TmpDir, Prefix ++ ".lock"),
     ok = file:write_file(LockFile, Content),
     LockFile.
-
-make_temp_release_dir_with_erts() ->
-    TmpDir = make_temp_dir("erts_test"),
-    %% Create erts directory to simulate bundled ERTS
-    ok = file:make_dir(filename:join(TmpDir, "erts-14.2.1")),
-    TmpDir.
-
-make_temp_release_dir_no_erts() ->
-    make_temp_dir("no_erts_test").

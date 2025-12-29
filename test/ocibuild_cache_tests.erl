@@ -34,22 +34,38 @@ cache_test_() ->
         {"get corrupted blob", fun get_corrupted_test/0},
         {"put overwrites existing", fun put_overwrites_test/0},
         {"clear removes all blobs", fun clear_test/0},
-        {"cache_dir returns env var value", fun cache_dir_env_var_test/0}
+        fun(TempDir) ->
+            {"cache_dir returns env var value", fun() -> cache_dir_env_var_test(TempDir) end}
+        end
     ]}.
 
 project_root_test_() ->
     {foreach, fun setup_project_root/0, fun cleanup_project_root/1, [
-        {"find rebar.config project root", fun find_rebar_project_root_test/0},
-        {"find mix.exs project root", fun find_mix_project_root_test/0},
-        {"find gleam.toml project root", fun find_gleam_project_root_test/0},
-        {"not found when no markers", fun find_no_project_root_test/0},
-        {"finds nearest project root", fun find_nearest_project_root_test/0}
+        fun(TempDir) ->
+            {"find rebar.config project root", fun() -> find_rebar_project_root_test(TempDir) end}
+        end,
+        fun(TempDir) ->
+            {"find mix.exs project root", fun() -> find_mix_project_root_test(TempDir) end}
+        end,
+        fun(TempDir) ->
+            {"find gleam.toml project root", fun() -> find_gleam_project_root_test(TempDir) end}
+        end,
+        fun(TempDir) ->
+            {"not found when no markers", fun() -> find_no_project_root_test(TempDir) end}
+        end,
+        fun(TempDir) ->
+            {"finds nearest project root", fun() -> find_nearest_project_root_test(TempDir) end}
+        end
     ]}.
 
 cache_dir_without_env_test_() ->
     {foreach, fun setup_cache_dir_test/0, fun cleanup_cache_dir_test/1, [
-        {"cache_dir falls back to project root", fun cache_dir_project_root_test/0},
-        {"cache_dir falls back to cwd", fun cache_dir_cwd_fallback_test/0}
+        fun({_OrigCwd, TempDir}) ->
+            {"cache_dir falls back to project root", fun() -> cache_dir_project_root_test(TempDir) end}
+        end,
+        fun({_OrigCwd, TempDir}) ->
+            {"cache_dir falls back to cwd", fun() -> cache_dir_cwd_fallback_test(TempDir) end}
+        end
     ]}.
 
 %%%===================================================================
@@ -120,18 +136,11 @@ clear_test() ->
     ?assertEqual({error, not_found}, ocibuild_cache:get(Digest1)),
     ?assertEqual({error, not_found}, ocibuild_cache:get(Digest2)).
 
-cache_dir_env_var_test() ->
-    %% The env var is set in setup() before this test runs
-    %% Verify cache_dir returns what we set
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_env_test"),
-    try
-        os:putenv("OCIBUILD_CACHE_DIR", TempDir),
-        CacheDir = ocibuild_cache:cache_dir(),
-        ?assertEqual(TempDir, CacheDir)
-    after
-        os:unsetenv("OCIBUILD_CACHE_DIR"),
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+cache_dir_env_var_test(TempDir) ->
+    %% The fixture's TempDir is already set in OCIBUILD_CACHE_DIR
+    %% Verify cache_dir returns what was set
+    CacheDir = ocibuild_cache:cache_dir(),
+    ?assertEqual(TempDir, CacheDir).
 
 %%%===================================================================
 %%% Project root detection tests
@@ -146,89 +155,63 @@ setup_project_root() ->
 cleanup_project_root(TempDir) ->
     ocibuild_test_helpers:cleanup_temp_dir(TempDir).
 
-find_rebar_project_root_test() ->
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_rebar_test"),
-    try
-        %% Create a fake rebar project structure
-        RebarFile = filename:join(TempDir, "rebar.config"),
-        SubDir = filename:join([TempDir, "src", "subdir"]),
-        %% ensure_dir creates parent dirs but not the final component
-        ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
-        ok = file:write_file(RebarFile, ~"{deps, []}."),
+find_rebar_project_root_test(TempDir) ->
+    %% Create a fake rebar project structure
+    RebarFile = filename:join(TempDir, "rebar.config"),
+    SubDir = filename:join([TempDir, "src", "subdir"]),
+    %% ensure_dir creates parent dirs but not the final component
+    ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
+    ok = file:write_file(RebarFile, ~"{deps, []}."),
 
-        %% Find project root from subdir
-        ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir))
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Find project root from subdir
+    ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir)).
 
-find_mix_project_root_test() ->
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_mix_test"),
-    try
-        %% Create a fake mix project structure
-        MixFile = filename:join(TempDir, "mix.exs"),
-        SubDir = filename:join([TempDir, "lib", "myapp"]),
-        ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
-        ok = file:write_file(MixFile, ~"defmodule Mix do end"),
+find_mix_project_root_test(TempDir) ->
+    %% Create a fake mix project structure
+    MixFile = filename:join(TempDir, "mix.exs"),
+    SubDir = filename:join([TempDir, "lib", "myapp"]),
+    ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
+    ok = file:write_file(MixFile, ~"defmodule Mix do end"),
 
-        %% Find project root from subdir
-        ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir))
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Find project root from subdir
+    ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir)).
 
-find_gleam_project_root_test() ->
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_gleam_test"),
-    try
-        %% Create a fake gleam project structure
-        GleamFile = filename:join(TempDir, "gleam.toml"),
-        SubDir = filename:join([TempDir, "src"]),
-        ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
-        ok = file:write_file(GleamFile, <<"name = \"myapp\"">>),
+find_gleam_project_root_test(TempDir) ->
+    %% Create a fake gleam project structure
+    GleamFile = filename:join(TempDir, "gleam.toml"),
+    SubDir = filename:join([TempDir, "src"]),
+    ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
+    ok = file:write_file(GleamFile, <<"name = \"myapp\"">>),
 
-        %% Find project root from subdir
-        ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir))
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Find project root from subdir
+    ?assertEqual({ok, TempDir}, ocibuild_cache:find_project_root(SubDir)).
 
-find_no_project_root_test() ->
-    %% /tmp usually doesn't have project markers
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_empty_test"),
-    try
-        %% Create an isolated temp directory with no markers
-        SubDir = filename:join(TempDir, "subdir"),
-        ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
+find_no_project_root_test(TempDir) ->
+    %% Create an isolated temp directory with no markers
+    SubDir = filename:join(TempDir, "subdir"),
+    ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
 
-        %% Since we're in /tmp, which may have parent markers, let's test
-        %% that find_project_root returns not_found when walking up
-        %% to filesystem root without finding markers.
-        %% The best we can do is check it doesn't crash.
-        Result = ocibuild_cache:find_project_root(SubDir),
-        ?assert(Result =:= not_found orelse element(1, Result) =:= ok)
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Since we're in /tmp, which may have parent markers, let's test
+    %% that find_project_root returns not_found when walking up
+    %% to filesystem root without finding markers.
+    %% The best we can do is check it doesn't crash.
+    Result = ocibuild_cache:find_project_root(SubDir),
+    ?assert(Result =:= not_found orelse element(1, Result) =:= ok).
 
-find_nearest_project_root_test() ->
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_nested_test"),
-    try
-        %% Create nested project structure (monorepo-like)
-        OuterProject = TempDir,
-        InnerProject = filename:join([TempDir, "packages", "inner"]),
-        InnerSubDir = filename:join(InnerProject, "src"),
+find_nearest_project_root_test(TempDir) ->
+    %% Create nested project structure (monorepo-like)
+    OuterProject = TempDir,
+    InnerProject = filename:join([TempDir, "packages", "inner"]),
+    InnerSubDir = filename:join(InnerProject, "src"),
 
-        ok = filelib:ensure_dir(filename:join(InnerSubDir, "dummy")),
+    ok = filelib:ensure_dir(filename:join(InnerSubDir, "dummy")),
 
-        %% Create markers at both levels
-        ok = file:write_file(filename:join(OuterProject, "rebar.config"), <<>>),
-        ok = file:write_file(filename:join(InnerProject, "rebar.config"), <<>>),
+    %% Create markers at both levels
+    ok = file:write_file(filename:join(OuterProject, "rebar.config"), <<>>),
+    ok = file:write_file(filename:join(InnerProject, "rebar.config"), <<>>),
 
-        %% Should find the nearest (inner) project root
-        ?assertEqual({ok, InnerProject}, ocibuild_cache:find_project_root(InnerSubDir))
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Should find the nearest (inner) project root
+    ?assertEqual({ok, InnerProject}, ocibuild_cache:find_project_root(InnerSubDir)).
 
 %%%===================================================================
 %%% Cache dir fallback tests
@@ -247,47 +230,36 @@ cleanup_cache_dir_test({OrigCwd, TempDir}) ->
     ok = file:set_cwd(OrigCwd),
     ocibuild_test_helpers:cleanup_temp_dir(TempDir).
 
-cache_dir_project_root_test() ->
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_projcache_test"),
-    try
-        %% Create a rebar project
-        ok = file:write_file(filename:join(TempDir, "rebar.config"), <<>>),
-        SubDir = filename:join(TempDir, "src"),
-        ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
+cache_dir_project_root_test(TempDir) ->
+    %% Create a rebar project
+    ok = file:write_file(filename:join(TempDir, "rebar.config"), <<>>),
+    SubDir = filename:join(TempDir, "src"),
+    ok = filelib:ensure_dir(filename:join(SubDir, "dummy")),
 
-        %% Change to the subdir
-        {ok, _} = file:get_cwd(),
-        ok = file:set_cwd(SubDir),
+    %% Change to the subdir
+    ok = file:set_cwd(SubDir),
 
-        %% Cache dir should be <project>/_build/ocibuild_cache
-        %% Use basename comparison to handle macOS /tmp -> /private/tmp symlink
-        CacheDir = ocibuild_cache:cache_dir(),
-        ?assertEqual("ocibuild_cache", filename:basename(CacheDir)),
-        ?assertEqual("_build", filename:basename(filename:dirname(CacheDir))),
-        %% Verify it's under our temp project (check for the unique prefix)
-        ?assert(string:find(CacheDir, "ocibuild_projcache_test_") =/= nomatch)
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Cache dir should be <project>/_build/ocibuild_cache
+    %% Use basename comparison to handle macOS /tmp -> /private/tmp symlink
+    CacheDir = ocibuild_cache:cache_dir(),
+    ?assertEqual("ocibuild_cache", filename:basename(CacheDir)),
+    ?assertEqual("_build", filename:basename(filename:dirname(CacheDir))),
+    %% Verify it's under our temp project (check for the unique prefix)
+    ?assert(string:find(CacheDir, "ocibuild_cachedir_test_") =/= nomatch).
 
-cache_dir_cwd_fallback_test() ->
-    TempDir = ocibuild_test_helpers:make_temp_dir("ocibuild_cwdcache_test"),
-    try
-        %% No project markers, just an empty directory
-        ok = file:set_cwd(TempDir),
+cache_dir_cwd_fallback_test(TempDir) ->
+    %% No project markers, just an empty directory
+    ok = file:set_cwd(TempDir),
 
-        %% Cache dir should fall back to ./_build/ocibuild_cache
-        %% But since we're in /tmp which might have markers, let's just
-        %% check it returns a sensible path
-        CacheDir = ocibuild_cache:cache_dir(),
-        ?assert(is_list(CacheDir)),
-        ?assertMatch(
-            "_build/ocibuild_cache",
-            filename:basename(filename:dirname(CacheDir)) ++ "/" ++ filename:basename(CacheDir)
-        )
-    after
-        ocibuild_test_helpers:cleanup_temp_dir(TempDir)
-    end.
+    %% Cache dir should fall back to ./_build/ocibuild_cache
+    %% But since we're in /tmp which might have markers, let's just
+    %% check it returns a sensible path
+    CacheDir = ocibuild_cache:cache_dir(),
+    ?assert(is_list(CacheDir)),
+    ?assertMatch(
+        "_build/ocibuild_cache",
+        filename:basename(filename:dirname(CacheDir)) ++ "/" ++ filename:basename(CacheDir)
+    ).
 
 %%%===================================================================
 %%% Utility function tests
