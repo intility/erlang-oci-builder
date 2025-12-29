@@ -107,7 +107,9 @@ multiplatform_validation_test_() ->
             {"native code found .dll", fun() -> check_for_native_code_found_dll_test(TmpDir) end}
         end,
         fun(TmpDir) ->
-            {"native code found .dylib", fun() -> check_for_native_code_found_dylib_test(TmpDir) end}
+            {"native code found .dylib", fun() ->
+                check_for_native_code_found_dylib_test(TmpDir)
+            end}
         end,
         fun(TmpDir) ->
             {"native code none", fun() -> check_for_native_code_none_test(TmpDir) end}
@@ -116,7 +118,9 @@ multiplatform_validation_test_() ->
             {"native code nested priv", fun() -> check_for_native_code_nested_priv_test(TmpDir) end}
         end,
         fun(TmpDir) ->
-            {"validate multiplatform ERTS error", fun() -> validate_multiplatform_erts_error_test(TmpDir) end}
+            {"validate multiplatform ERTS error", fun() ->
+                validate_multiplatform_erts_error_test(TmpDir)
+            end}
         end,
         fun(TmpDir) ->
             {"validate multiplatform ok", fun() -> validate_multiplatform_ok_test(TmpDir) end}
@@ -144,23 +148,33 @@ cli_integration_test_() ->
             {"run nil platform", fun() -> run_nil_platform_test(TmpDir) end}
         end,
         fun(TmpDir) ->
-            {"run multiplatform NIF warning", fun() -> run_multiplatform_nif_warning_test(TmpDir) end}
+            {"run multiplatform NIF warning", fun() ->
+                run_multiplatform_nif_warning_test(TmpDir)
+            end}
         end
     ]}.
 
 layer_building_test_() ->
     {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
         fun(TmpDir) ->
-            {"build layers with deps and ERTS", fun() -> build_layers_with_deps_and_erts_test(TmpDir) end}
+            {"build layers with deps and ERTS", fun() ->
+                build_layers_with_deps_and_erts_test(TmpDir)
+            end}
         end,
         fun(TmpDir) ->
-            {"build layers with deps no ERTS", fun() -> build_layers_with_deps_no_erts_test(TmpDir) end}
+            {"build layers with deps no ERTS", fun() ->
+                build_layers_with_deps_no_erts_test(TmpDir)
+            end}
         end,
         fun(TmpDir) ->
-            {"build layers fallback no deps", fun() -> build_layers_fallback_no_deps_test(TmpDir) end}
+            {"build layers fallback no deps", fun() ->
+                build_layers_fallback_no_deps_test(TmpDir)
+            end}
         end,
         fun(TmpDir) ->
-            {"build layers fallback no app name", fun() -> build_layers_fallback_no_app_name_test(TmpDir) end}
+            {"build layers fallback no app name", fun() ->
+                build_layers_fallback_no_app_name_test(TmpDir)
+            end}
         end
     ]}.
 

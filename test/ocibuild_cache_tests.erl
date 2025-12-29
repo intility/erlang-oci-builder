@@ -61,7 +61,9 @@ project_root_test_() ->
 cache_dir_without_env_test_() ->
     {foreach, fun setup_cache_dir_test/0, fun cleanup_cache_dir_test/1, [
         fun({_OrigCwd, TempDir}) ->
-            {"cache_dir falls back to project root", fun() -> cache_dir_project_root_test(TempDir) end}
+            {"cache_dir falls back to project root", fun() ->
+                cache_dir_project_root_test(TempDir)
+            end}
         end,
         fun({_OrigCwd, TempDir}) ->
             {"cache_dir falls back to cwd", fun() -> cache_dir_cwd_fallback_test(TempDir) end}
