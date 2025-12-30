@@ -338,32 +338,27 @@ get_vcs_annotations(Args, Config) ->
 -doc """
 Get application version from rebar state.
 
-Extracts the version from the first release in the relx configuration.
-This is used for the `org.opencontainers.image.version` annotation.
+Extracts the actual application version from the first project app's
+`.app.src` file. This is the resolved version (not symbolic refs like
+`semver` or `git`), used for the `org.opencontainers.image.version` annotation.
+
+The version is obtained from `rebar_app_info:original_vsn/1` which returns
+the version as defined in the `.app.src` file, already resolved by rebar3.
 """.
 -spec get_app_version(rebar_state:t()) -> binary() | undefined.
 get_app_version(State) ->
-    RelxConfig = rebar_state:get(State, relx, []),
-    get_version_from_relx(RelxConfig).
-
-%% @private Extract version from relx config
-get_version_from_relx([]) ->
-    undefined;
-get_version_from_relx([{release, {_Name, Vsn}, _Apps} | _]) ->
-    normalize_version(Vsn);
-get_version_from_relx([{release, {_Name, Vsn}, _Apps, _Opts} | _]) ->
-    normalize_version(Vsn);
-get_version_from_relx([_ | Rest]) ->
-    get_version_from_relx(Rest).
+    case rebar_state:project_apps(State) of
+        [] ->
+            undefined;
+        [AppInfo | _] ->
+            normalize_version(rebar_app_info:original_vsn(AppInfo))
+    end.
 
 %% @private Normalize version to binary
 normalize_version(Vsn) when is_list(Vsn) ->
     list_to_binary(Vsn);
 normalize_version(Vsn) when is_binary(Vsn) ->
     Vsn;
-normalize_version(Vsn) when is_atom(Vsn) ->
-    %% Handle relx version atoms like 'semver' or 'git' (symbolic refs)
-    atom_to_binary(Vsn, utf8);
 normalize_version(_) ->
     undefined.
 
