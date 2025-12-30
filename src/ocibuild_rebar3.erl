@@ -185,6 +185,7 @@ find_relx_release([_ | Rest]) ->
 get_base_image(Args, Config) ->
     case proplists:get_value(base, Args) of
         undefined ->
+            %% todo: fixme
             proplists:get_value(base_image, Config, ?DEFAULT_BASE_IMAGE);
         Base ->
             list_to_binary(Base)
