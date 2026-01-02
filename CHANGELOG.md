@@ -16,6 +16,29 @@
   ```
   This format is machine-parseable for CI/CD pipelines that need the digest for signing, attestation, or verification.
 
+### Improvements
+
+- **OTP-supervised HTTP client** ([#23](https://github.com/intility/erlang-oci-builder/issues/23)): Refactored HTTP operations to use proper OTP supervision instead of `stand_alone` mode. This fixes CI hangs where the VM can't exit due to open http connections. 
+  - New supervisor tree: `ocibuild_http_sup` → `ocibuild_http_pool` → `ocibuild_http_worker`
+  - Each HTTP worker owns its own httpc profile for clean isolation
+  - Clean shutdown via OTP supervision cascade (no more force-kill workarounds)
+  - Removed `persistent_term` tracking and manual process cleanup
+- **Domain-based source organization**: Source files reorganized into logical subdirectories:
+  - `src/http/` - HTTP and registry operations
+  - `src/oci/` - OCI image building modules
+  - `src/adapters/` - Build system adapters
+  - `src/vcs/` - Version control adapters
+  - `src/util/` - Utility modules
+- **Test suite reorganization**: Tests reorganized to mirror source directory structure with proper separation between adapter tests and shared release API tests
+
+### New Modules
+
+- `ocibuild_http` - Public api for HTTP operations with `start/0`, `stop/0`, `pmap/2,3`
+- `ocibuild_http_sup` - OTP supervisor for HTTP workers
+- `ocibuild_http_pool` - Coordinates parallel HTTP operations with bounded concurrency
+- `ocibuild_http_worker` - Single-use worker that owns its httpc profile
+
+
 ## 0.5.1 - 2025-12-29
 
 ### Bugfixes
