@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
--module(ocibuild_rebar3_tests).
--moduledoc "Tests for the rebar3 provider".
+-module(ocibuild_release_tests).
+-moduledoc "Tests for the shared release handling API (ocibuild_release)".
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -299,26 +299,6 @@ build_with_labels_test() ->
     ?assertEqual(~"1.0.0", maps:get(~"org.opencontainers.image.version", ImageLabels)).
 
 %%%===================================================================
-%%% Tag parsing tests (internal logic test)
-%%%===================================================================
-
-parse_tag_simple_test() ->
-    ?assertEqual({~"myapp", ~"1.0.0"}, parse_tag(~"myapp:1.0.0")).
-
-parse_tag_no_version_test() ->
-    ?assertEqual({~"myapp", ~"latest"}, parse_tag(~"myapp")).
-
-parse_tag_with_path_test() ->
-    ?assertEqual({~"myorg/myapp", ~"v1"}, parse_tag(~"myorg/myapp:v1")).
-
-%% Helper to test tag parsing logic (mirrors internal function)
-parse_tag(Tag) ->
-    case binary:split(Tag, ~":") of
-        [Repo, ImageTag] -> {Repo, ImageTag};
-        [Repo] -> {Repo, ~"latest"}
-    end.
-
-%%%===================================================================
 %%% Auth tests
 %%%===================================================================
 
@@ -364,49 +344,6 @@ get_pull_auth_username_password_test() ->
     ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, Auth).
 
 %%%===================================================================
-%%% Format error tests
-%%%===================================================================
-
-format_error_missing_tag_test() ->
-    Result = ocibuild_rebar3:format_error(missing_tag),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "--tag") =/= nomatch).
-
-format_error_release_not_found_test() ->
-    Result = ocibuild_rebar3:format_error({release_not_found, "myapp", "/path/to/rel"}),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "myapp") =/= nomatch).
-
-format_error_no_release_test() ->
-    Result = ocibuild_rebar3:format_error({no_release_configured, []}),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "No release") =/= nomatch).
-
-format_error_file_read_error_test() ->
-    Result = ocibuild_rebar3:format_error({file_read_error, "/path/file", enoent}),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "/path/file") =/= nomatch).
-
-format_error_save_failed_test() ->
-    Result = ocibuild_rebar3:format_error({save_failed, some_reason}),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "save") =/= nomatch).
-
-format_error_push_failed_test() ->
-    Result = ocibuild_rebar3:format_error({push_failed, auth_error}),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "push") =/= nomatch).
-
-format_error_base_image_failed_test() ->
-    Result = ocibuild_rebar3:format_error({build_failed, {base_image_failed, not_found}}),
-    ?assert(is_list(Result)),
-    ?assert(string:find(Result, "base image") =/= nomatch).
-
-format_error_generic_test() ->
-    Result = ocibuild_rebar3:format_error({some, random, error}),
-    ?assert(is_list(Result)).
-
-%%%===================================================================
 %%% Format bytes tests
 %%%===================================================================
 
@@ -438,6 +375,23 @@ format_progress_zero_total_test() ->
     Result = lists:flatten(ocibuild_release:format_progress(100, 0)),
     ?assert(is_list(Result)).
 
+format_progress_negative_total_test() ->
+    %% Negative total should be handled
+    Result = lists:flatten(ocibuild_release:format_progress(100, -1)),
+    ?assert(is_list(Result)).
+
+format_progress_large_values_test() ->
+    %% Large values (gigabytes)
+    Result = lists:flatten(
+        ocibuild_release:format_progress(1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
+    ),
+    ?assert(string:find(Result, "50%") =/= nomatch).
+
+format_progress_overflow_test() ->
+    %% More received than total should cap at 100%
+    Result = lists:flatten(ocibuild_release:format_progress(2000, 1000)),
+    ?assert(string:find(Result, "100%") =/= nomatch).
+
 %%%===================================================================
 %%% to_binary tests
 %%%===================================================================
@@ -452,7 +406,7 @@ to_binary_atom_test() ->
     ?assertEqual(~"myatom", ocibuild_release:to_binary(myatom)).
 
 %%%===================================================================
-%%% parse_tag tests (moved to ocibuild_release)
+%%% parse_tag tests
 %%%===================================================================
 
 parse_tag_exported_simple_test() ->
@@ -583,52 +537,6 @@ strip_prefix_partial_match_test() ->
     ).
 
 %%%===================================================================
-%%% find_relx_release tests
-%%%===================================================================
-
-find_relx_release_simple_test() ->
-    Config = [{release, {myapp, "1.0.0"}, [kernel, stdlib]}],
-    ?assertEqual({ok, "myapp"}, ocibuild_rebar3:find_relx_release(Config)).
-
-find_relx_release_with_opts_test() ->
-    Config = [{release, {myapp, "1.0.0"}, [kernel], [{dev_mode, true}]}],
-    ?assertEqual({ok, "myapp"}, ocibuild_rebar3:find_relx_release(Config)).
-
-find_relx_release_empty_test() ->
-    ?assertEqual(error, ocibuild_rebar3:find_relx_release([])).
-
-find_relx_release_no_release_test() ->
-    Config = [{profiles, [{prod, []}]}, {deps, []}],
-    ?assertEqual(error, ocibuild_rebar3:find_relx_release(Config)).
-
-find_relx_release_multiple_test() ->
-    %% Should return the first release found
-    Config = [
-        {release, {app1, "1.0"}, [kernel]},
-        {release, {app2, "2.0"}, [stdlib]}
-    ],
-    ?assertEqual({ok, "app1"}, ocibuild_rebar3:find_relx_release(Config)).
-
-%%%===================================================================
-%%% get_base_image tests
-%%%===================================================================
-
-get_base_image_from_args_test() ->
-    Args = [{base, "alpine:3.19"}],
-    Config = [{base_image, ~"debian:stable-slim"}],
-    ?assertEqual(~"alpine:3.19", ocibuild_rebar3:get_base_image(Args, Config)).
-
-get_base_image_from_config_test() ->
-    Args = [],
-    Config = [{base_image, ~"ubuntu:22.04"}],
-    ?assertEqual(~"ubuntu:22.04", ocibuild_rebar3:get_base_image(Args, Config)).
-
-get_base_image_default_test() ->
-    Args = [],
-    Config = [],
-    ?assertEqual(~"debian:stable-slim", ocibuild_rebar3:get_base_image(Args, Config)).
-
-%%%===================================================================
 %%% make_relative_path tests
 %%%===================================================================
 
@@ -677,27 +585,6 @@ build_image_all_options_test() ->
     Labels = maps:get(~"Labels", InnerConfig),
     ?assertEqual(~"1.0.0", maps:get(~"version", Labels)),
     ?assertEqual(~"test", maps:get(~"author", Labels)).
-
-%%%===================================================================
-%%% format_progress edge cases
-%%%===================================================================
-
-format_progress_negative_total_test() ->
-    %% Negative total should be handled
-    Result = lists:flatten(ocibuild_release:format_progress(100, -1)),
-    ?assert(is_list(Result)).
-
-format_progress_large_values_test() ->
-    %% Large values (gigabytes)
-    Result = lists:flatten(
-        ocibuild_release:format_progress(1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
-    ),
-    ?assert(string:find(Result, "50%") =/= nomatch).
-
-format_progress_overflow_test() ->
-    %% More received than total should cap at 100%
-    Result = lists:flatten(ocibuild_release:format_progress(2000, 1000)),
-    ?assert(string:find(Result, "100%") =/= nomatch).
 
 %%%===================================================================
 %%% Progress callback tests
@@ -1000,150 +887,9 @@ run_multiplatform_nif_warning_test(TmpDir) ->
     %% Validation should succeed - NIFs warn but don't block
     ?assertEqual(ok, ocibuild_release:validate_multiplatform(TmpDir, Platforms)).
 
-%% Helper to create mock adapter state
-create_mock_adapter_state(ReleasePath, Overrides) ->
-    OutputPath = filename:join(ReleasePath, "test-image.tar.gz"),
-    BaseState = #{
-        release_path => ReleasePath,
-        release_name => myapp,
-        base_image => ~"scratch",
-        workdir => ~"/app",
-        env => #{},
-        expose => [],
-        labels => #{},
-        cmd => ~"start",
-        description => undefined,
-        tag => ~"myapp:1.0.0",
-        output => list_to_binary(OutputPath),
-        push => undefined,
-        chunk_size => undefined,
-        platform => undefined
-    },
-    maps:merge(BaseState, Overrides).
-
-%% Helper to add mock ERTS to release
-add_mock_erts(TmpDir) ->
-    ErtsDir = filename:join(TmpDir, "erts-27.0"),
-    ok = filelib:ensure_dir(filename:join([ErtsDir, "bin", "placeholder"])),
-    ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), ~"beam").
-
-%% Helper to add mock NIF to release
-add_mock_nif(TmpDir) ->
-    PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
-    ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
-    ok = file:write_file(filename:join(PrivDir, "test_nif.so"), ~"fake so").
-
-%%%===================================================================
-%%% Test fixtures
-%%%===================================================================
-
-create_mock_release() ->
-    TmpDir = make_temp_dir("ocibuild_release"),
-
-    %% Create directory structure using filename:join for cross-platform paths
-    BinDir = filename:join(TmpDir, "bin"),
-    LibDir = filename:join([TmpDir, "lib", "myapp-1.0.0", "ebin"]),
-    RelDir = filename:join([TmpDir, "releases", "1.0.0"]),
-
-    ok =
-        filelib:ensure_dir(
-            filename:join(BinDir, "placeholder")
-        ),
-    ok =
-        filelib:ensure_dir(
-            filename:join(LibDir, "placeholder")
-        ),
-    ok =
-        filelib:ensure_dir(
-            filename:join(RelDir, "placeholder")
-        ),
-
-    %% Create bin script (executable)
-    BinPath = filename:join(BinDir, "myapp"),
-    ok = file:write_file(BinPath, ~"#!/bin/sh\nexec erl -boot release"),
-    ok = file:change_mode(BinPath, 8#755),
-
-    %% Create beam file
-    BeamPath = filename:join(LibDir, "myapp.beam"),
-    ok = file:write_file(BeamPath, ~"FOR1...(beam data)"),
-    ok = file:change_mode(BeamPath, 8#644),
-
-    %% Create release file
-    RelPath = filename:join(RelDir, "myapp.rel"),
-    ok = file:write_file(RelPath, ~"{release, {\"myapp\", \"1.0.0\"}, ...}."),
-
-    TmpDir.
-
 %%%===================================================================
 %%% Smart Layer Partitioning tests
 %%%===================================================================
-
-%% rebar.lock parsing tests
-
-parse_rebar_lock_new_format_test() ->
-    %% New format with version tuple: {"1.2.0", [{...}]}
-    LockContent = <<
-        "{\"1.2.0\",\n"
-        "[{<<\"cowboy\">>,{pkg,<<\"cowboy\">>,<<\"2.10.0\">>},0},\n"
-        " {<<\"cowlib\">>,{pkg,<<\"cowlib\">>,<<\"2.12.1\">>},1}]}.\n"
-    >>,
-    TmpFile = make_temp_lock_file("rebar_new", LockContent),
-    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-    file:delete(TmpFile),
-    cleanup_temp_dir(filename:dirname(TmpFile)),
-    ?assertEqual(2, length(Deps)),
-    [Cowboy, Cowlib] = lists:sort(
-        fun(A, B) ->
-            maps:get(name, A) < maps:get(name, B)
-        end,
-        Deps
-    ),
-    ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
-    ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
-    ?assertEqual(~"hex", maps:get(source, Cowboy)),
-    ?assertEqual(~"cowlib", maps:get(name, Cowlib)),
-    ?assertEqual(~"2.12.1", maps:get(version, Cowlib)).
-
-parse_rebar_lock_old_format_test() ->
-    %% Old format: just a list without version tuple
-    LockContent = <<
-        "[{<<\"cowboy\">>,{pkg,<<\"cowboy\">>,<<\"2.10.0\">>},0}].\n"
-    >>,
-    TmpFile = make_temp_lock_file("rebar_old", LockContent),
-    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-    file:delete(TmpFile),
-    cleanup_temp_dir(filename:dirname(TmpFile)),
-    ?assertEqual(1, length(Deps)),
-    [Cowboy] = Deps,
-    ?assertEqual(~"cowboy", maps:get(name, Cowboy)),
-    ?assertEqual(~"2.10.0", maps:get(version, Cowboy)),
-    ?assertEqual(~"hex", maps:get(source, Cowboy)).
-
-parse_rebar_lock_git_dep_test() ->
-    LockContent = <<
-        "[{<<\"mylib\">>,{git,\"https://github.com/org/mylib.git\",{ref,\"abc123\"}},0}].\n"
-    >>,
-    TmpFile = make_temp_lock_file("rebar_git", LockContent),
-    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-    file:delete(TmpFile),
-    cleanup_temp_dir(filename:dirname(TmpFile)),
-    ?assertEqual(1, length(Deps)),
-    [Mylib] = Deps,
-    ?assertEqual(~"mylib", maps:get(name, Mylib)),
-    ?assertEqual(~"abc123", maps:get(version, Mylib)),
-    ?assertEqual(~"https://github.com/org/mylib.git", maps:get(source, Mylib)).
-
-parse_rebar_lock_empty_test() ->
-    LockContent = ~"[].\n",
-    TmpFile = make_temp_lock_file("rebar_empty", LockContent),
-    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
-    file:delete(TmpFile),
-    cleanup_temp_dir(filename:dirname(TmpFile)),
-    ?assertEqual([], Deps).
-
-parse_rebar_lock_missing_test() ->
-    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock("/nonexistent/path/rebar.lock"),
-    ?assertEqual([], Deps).
 
 %% Layer classification tests
 %% New signature: classify_file_layer(Path, DepNames, AppName, Workdir, HasErts)
@@ -1398,10 +1144,80 @@ build_layers_fallback_no_app_name_test(TmpDir) ->
     Layers = maps:get(layers, Image1),
     ?assertEqual(1, length(Layers)).
 
-%% Helper functions for layer tests
+%%%===================================================================
+%%% Helper functions
+%%%===================================================================
 
-make_temp_lock_file(Prefix, Content) ->
-    TmpDir = make_temp_dir("lock_test"),
-    LockFile = filename:join(TmpDir, Prefix ++ ".lock"),
-    ok = file:write_file(LockFile, Content),
-    LockFile.
+%% Helper to create mock adapter state
+create_mock_adapter_state(ReleasePath, Overrides) ->
+    OutputPath = filename:join(ReleasePath, "test-image.tar.gz"),
+    BaseState = #{
+        release_path => ReleasePath,
+        release_name => myapp,
+        base_image => ~"scratch",
+        workdir => ~"/app",
+        env => #{},
+        expose => [],
+        labels => #{},
+        cmd => ~"start",
+        description => undefined,
+        tag => ~"myapp:1.0.0",
+        output => list_to_binary(OutputPath),
+        push => undefined,
+        chunk_size => undefined,
+        platform => undefined
+    },
+    maps:merge(BaseState, Overrides).
+
+%% Helper to add mock ERTS to release
+add_mock_erts(TmpDir) ->
+    ErtsDir = filename:join(TmpDir, "erts-27.0"),
+    ok = filelib:ensure_dir(filename:join([ErtsDir, "bin", "placeholder"])),
+    ok = file:write_file(filename:join([ErtsDir, "bin", "beam.smp"]), ~"beam").
+
+%% Helper to add mock NIF to release
+add_mock_nif(TmpDir) ->
+    PrivDir = filename:join([TmpDir, "lib", "crypto-1.0.0", "priv"]),
+    ok = filelib:ensure_dir(filename:join(PrivDir, "placeholder")),
+    ok = file:write_file(filename:join(PrivDir, "test_nif.so"), ~"fake so").
+
+%%%===================================================================
+%%% Test fixtures
+%%%===================================================================
+
+create_mock_release() ->
+    TmpDir = make_temp_dir("ocibuild_release"),
+
+    %% Create directory structure using filename:join for cross-platform paths
+    BinDir = filename:join(TmpDir, "bin"),
+    LibDir = filename:join([TmpDir, "lib", "myapp-1.0.0", "ebin"]),
+    RelDir = filename:join([TmpDir, "releases", "1.0.0"]),
+
+    ok =
+        filelib:ensure_dir(
+            filename:join(BinDir, "placeholder")
+        ),
+    ok =
+        filelib:ensure_dir(
+            filename:join(LibDir, "placeholder")
+        ),
+    ok =
+        filelib:ensure_dir(
+            filename:join(RelDir, "placeholder")
+        ),
+
+    %% Create bin script (executable)
+    BinPath = filename:join(BinDir, "myapp"),
+    ok = file:write_file(BinPath, ~"#!/bin/sh\nexec erl -boot release"),
+    ok = file:change_mode(BinPath, 8#755),
+
+    %% Create beam file
+    BeamPath = filename:join(LibDir, "myapp.beam"),
+    ok = file:write_file(BeamPath, ~"FOR1...(beam data)"),
+    ok = file:change_mode(BeamPath, 8#644),
+
+    %% Create release file
+    RelPath = filename:join(RelDir, "myapp.rel"),
+    ok = file:write_file(RelPath, ~"{release, {\"myapp\", \"1.0.0\"}, ...}."),
+
+    TmpDir.
