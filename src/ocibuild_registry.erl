@@ -355,14 +355,15 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
             false
     end.
 
--doc "Push an image to a registry.".
--spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
+-doc "Push an image to a registry. Returns the manifest digest on success.".
+-spec push(ocibuild:image(), binary(), binary(), binary(), map()) ->
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
     push(Image, Registry, Repo, Tag, Auth, #{}).
 
--doc "Push an image to a registry with options (supports chunked uploads).".
+-doc "Push an image to a registry with options (supports chunked uploads). Returns the manifest digest on success.".
 -spec push(ocibuild:image(), binary(), binary(), binary(), map(), push_opts()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
@@ -375,7 +376,7 @@ push(Image, Registry, Repo, Tag, Auth, Opts) ->
                     %% Push config (no chunked upload needed - configs are small)
                     case push_config(Image, BaseUrl, NormalizedRepo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
-                            %% Push manifest
+                            %% Push manifest and return digest
                             push_manifest(Image, BaseUrl, NormalizedRepo, Tag, Token, #{
                                 config_digest => ConfigDigest,
                                 config_size => ConfigSize
@@ -399,9 +400,11 @@ This function:
 3. Tags the index so the registry serves the correct platform to clients
 
 Each image in the list must have a `platform` field set.
+
+Returns the digest of the image index on success.
 """.
 -spec push_multi([ocibuild:image()], binary(), binary(), binary(), map(), push_opts()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push_multi([], _Registry, _Repo, _Tag, _Auth, _Opts) ->
     {error, no_images_to_push};
 push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
@@ -413,7 +416,7 @@ push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
             %% Push each platform image and collect manifest info
             case push_platform_images(Images, BaseUrl, NormalizedRepo, Token, Opts, []) of
                 {ok, ManifestDescriptors} ->
-                    %% Create and push the image index
+                    %% Create and push the image index, return digest
                     push_image_index(BaseUrl, NormalizedRepo, Tag, Token, ManifestDescriptors);
                 {error, _} = Err ->
                     Err
@@ -537,17 +540,18 @@ push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
             Err
     end.
 
-%% Push the image index and tag it
+%% Push the image index and tag it, return the index digest
 -spec push_image_index(
     string(),
     binary(),
     binary(),
     term(),
     [{ocibuild:platform(), binary(), non_neg_integer()}]
-) -> ok | {error, term()}.
+) -> {ok, Digest :: binary()} | {error, term()}.
 push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
     Index = ocibuild_index:create(ManifestDescriptors),
     IndexJson = ocibuild_index:to_json(Index),
+    IndexDigest = ocibuild_digest:sha256(IndexJson),
 
     %% Push index with tag
     Url = io_lib:format(
@@ -560,7 +564,7 @@ push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
 
     case ?MODULE:http_put(lists:flatten(Url), Headers, IndexJson) of
         {ok, _} ->
-            ok;
+            {ok, IndexDigest};
         {error, _} = Err ->
             Err
     end.
@@ -1793,7 +1797,7 @@ upload_chunks_loop(
     Token :: binary(),
     Opts :: map()
 ) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
     ConfigDigest = maps:get(config_digest, Opts),
     ConfigSize = maps:get(config_size, Opts),
@@ -1829,7 +1833,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
     %% Get annotations from image
     Annotations = maps:get(annotations, Image, #{}),
 
-    {ManifestJson, _} =
+    {ManifestJson, ManifestDigest} =
         ocibuild_manifest:build(
             #{
                 ~"mediaType" =>
@@ -1850,7 +1854,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
 
     case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
         {ok, _} ->
-            ok;
+            {ok, ManifestDigest};
         {error, _} = Err ->
             Err
     end.

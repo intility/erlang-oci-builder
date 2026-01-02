@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 - 2026-01-02
+
+### Breaking Changes
+
+- **Push functions now return digest**: `ocibuild:push/3,4,5` and `ocibuild:push_multi/4,5` now return `{ok, Digest}` instead of `ok` on success. This enables CI/CD integration with attestation workflows (e.g., `actions/attest-build-provenance`).
+  - Before: `ok = ocibuild:push(Image, Registry, RepoTag)`
+  - After: `{ok, Digest} = ocibuild:push(Image, Registry, RepoTag)`
+
+### Features
+
+- **Digest output after push**: After a successful push, the full image reference with digest is printed to stdout:
+  ```
+  Pushed: ghcr.io/org/repo:tag@sha256:abc123...
+  ```
+  This format is machine-parseable for CI/CD pipelines that need the digest for signing, attestation, or verification.
+
 ## 0.5.1 - 2025-12-29
 
 ### Bugfixes

@@ -417,10 +417,13 @@ user(#{config := Config} = Image, User) when is_binary(User) ->
 Push the image to a container registry.
 
 ```
-ok = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1.0.0").
+{ok, Digest} = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1.0.0").
 ```
+
+Returns `{ok, Digest}` where Digest is the sha256 digest of the pushed manifest.
 """.
--spec push(image(), Registry :: binary(), RepoTag :: binary()) -> ok | {error, term()}.
+-spec push(image(), Registry :: binary(), RepoTag :: binary()) ->
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, RepoTag) ->
     push(Image, Registry, RepoTag, #{}).
 
@@ -430,11 +433,13 @@ Push the image to a container registry with authentication.
 ```
 %% GHCR uses username + token as password
 Auth = #{username => ~"github-user", password => ~"github-token"},
-ok = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1.0.0", Auth).
+{ok, Digest} = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1.0.0", Auth).
 ```
+
+Returns `{ok, Digest}` where Digest is the sha256 digest of the pushed manifest.
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, RepoTag, Auth) ->
     push(Image, Registry, RepoTag, Auth, #{}).
 
@@ -450,11 +455,13 @@ Example:
 ```
 Auth = #{username => ~"user", password => ~"pass"},
 Opts = #{chunk_size => 10 * 1024 * 1024},  % 10MB chunks
-ok = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1", Auth, Opts).
+{ok, Digest} = ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:v1", Auth, Opts).
 ```
+
+Returns `{ok, Digest}` where Digest is the sha256 digest of the pushed manifest.
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth(), map()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, RepoTag, Auth, Opts) ->
     {Repo, Tag} = parse_repo_tag(RepoTag),
     ocibuild_registry:push(Image, Registry, Repo, Tag, Auth, Opts).
@@ -478,17 +485,23 @@ Example:
 Images2 = [ocibuild:copy(I, Files, ~"/app") || I <- Images],
 %% Push as multi-platform image
 Auth = #{username => ~"user", password => ~"pass"},
-ok = ocibuild:push_multi(Images2, ~"ghcr.io", ~"myorg/myapp:v1", Auth).
+{ok, Digest} = ocibuild:push_multi(Images2, ~"ghcr.io", ~"myorg/myapp:v1", Auth).
 ```
+
+Returns `{ok, Digest}` where Digest is the sha256 digest of the pushed image index.
 """.
 -spec push_multi([image()], Registry :: binary(), RepoTag :: binary(), auth()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push_multi(Images, Registry, RepoTag, Auth) ->
     push_multi(Images, Registry, RepoTag, Auth, #{}).
 
--doc "Push multiple images as a multi-platform image with options.".
+-doc """
+Push multiple images as a multi-platform image with options.
+
+Returns `{ok, Digest}` where Digest is the sha256 digest of the pushed image index.
+""".
 -spec push_multi([image()], Registry :: binary(), RepoTag :: binary(), auth(), map()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push_multi(Images, Registry, RepoTag, Auth, Opts) ->
     {Repo, Tag} = parse_repo_tag(RepoTag),
     ocibuild_registry:push_multi(Images, Registry, Repo, Tag, Auth, Opts).
