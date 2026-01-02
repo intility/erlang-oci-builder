@@ -1,19 +1,17 @@
-%%%-------------------------------------------------------------------
-%%% @doc
-%%% HTTP pool coordinator for parallel operations.
-%%%
-%%% This gen_server coordinates parallel HTTP operations with bounded
-%%% concurrency. It provides a `pmap/2,3` interface similar to the
-%%% existing `pmap_bounded/3` but uses supervised HTTP workers.
-%%%
-%%% Key features:
-%%% - Bounded concurrency (default: 4 workers)
-%%% - Results returned in original order
-%%% - Fail-fast: one worker crash fails entire operation
-%%% - Clean shutdown via OTP supervision
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_http_pool).
+-moduledoc """
+HTTP pool coordinator for parallel operations.
+
+This gen_server coordinates parallel HTTP operations with bounded
+concurrency. It provides a `pmap/2,3` interface similar to the
+existing `pmap_bounded/3` but uses supervised HTTP workers.
+
+Key features:
+- Bounded concurrency (default: 4 workers)
+- Results returned in original order
+- Fail-fast: one worker crash fails entire operation
+- Clean shutdown via OTP supervision
+""".
 
 -behaviour(gen_server).
 

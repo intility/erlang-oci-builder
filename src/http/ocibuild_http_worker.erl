@@ -1,19 +1,17 @@
-%%%-------------------------------------------------------------------
-%%% @doc
-%%% HTTP worker for executing single HTTP operations.
-%%%
-%%% Each worker:
-%%% - Owns its own httpc profile (isolation)
-%%% - Executes a single task
-%%% - Sends result back to pool
-%%% - Terminates after completing task
-%%% - Properly cleans up httpc in terminate/2
-%%%
-%%% The httpc profile is set in the process dictionary so that
-%%% HTTP helper functions in ocibuild_registry can access it.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_http_worker).
+-moduledoc """
+HTTP worker for executing single HTTP operations.
+
+Each worker:
+- Owns its own httpc profile (isolation)
+- Executes a single task
+- Sends result back to pool
+- Terminates after completing task
+- Properly cleans up httpc in terminate/2
+
+The httpc profile is set in the process dictionary so that
+HTTP helper functions in ocibuild_registry can access it.
+""".
 
 -behaviour(gen_server).
 

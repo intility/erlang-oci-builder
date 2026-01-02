@@ -1,27 +1,23 @@
-%%%-------------------------------------------------------------------
-%%% @doc
-%%% OTP supervisor for HTTP operations.
-%%%
-%%% This supervisor manages the HTTP pool and workers for parallel
-%%% downloads and uploads. It uses `auto_shutdown: all_significant`
-%%% to automatically terminate when the pool (the only significant
-%%% child) exits.
-%%%
-%%% Architecture:
-%%% ```
-%%% ocibuild_http_sup (one_for_one, auto_shutdown: all_significant)
-%%% ├── ocibuild_http_pool (gen_server) [permanent, significant: true]
-%%% │   - Coordinates parallel HTTP operations
-%%% │   - Enforces max concurrency
-%%% │
-%%% └── ocibuild_http_worker (gen_server) [temporary, significant: false]
-%%%     - Started dynamically via start_worker/2
-%%%     - Owns unique httpc profile
-%%%     - Cleans up in terminate/2
-%%% ```
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_http_sup).
+-moduledoc """
+OTP supervisor for HTTP operations.
+
+This supervisor manages the HTTP pool and workers for parallel
+downloads and uploads.
+
+Architecture:
+```
+ocibuild_http_sup (one_for_one)
+├── ocibuild_http_pool (gen_server) [transient]
+│   - Coordinates parallel HTTP operations
+│   - Enforces max concurrency
+│
+└── ocibuild_http_worker (gen_server) [temporary]
+    - Started dynamically via start_worker/2
+    - Owns unique httpc profile
+    - Cleans up in terminate/2
+```
+""".
 
 -behaviour(supervisor).
 

@@ -1,25 +1,23 @@
-%%%-------------------------------------------------------------------
-%%% @doc
-%%% Public API for supervised HTTP operations.
-%%%
-%%% This module provides a clean interface to the HTTP supervision tree.
-%%% It handles starting/stopping the supervisor on demand and provides
-%%% the parallel map functionality used for layer downloads/uploads.
-%%%
-%%% Usage:
-%%% ```
-%%% %% Start is automatic, but can be explicit
-%%% ok = ocibuild_http:start(),
-%%%
-%%% %% Execute HTTP operations in parallel
-%%% Results = ocibuild_http:pmap(fun download_layer/1, Layers),
-%%%
-%%% %% Clean shutdown
-%%% ok = ocibuild_http:stop().
-%%% ```
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_http).
+-moduledoc """
+Public API for supervised HTTP operations.
+
+This module provides a clean interface to the HTTP supervision tree.
+It handles starting/stopping the supervisor on demand and provides
+the parallel map functionality used for layer downloads/uploads.
+
+Usage:
+```erlang
+%% Start is automatic, but can be explicit
+ok = ocibuild_http:start(),
+
+%% Execute HTTP operations in parallel
+Results = ocibuild_http:pmap(fun download_layer/1, Layers),
+
+%% Clean shutdown
+ok = ocibuild_http:stop().
+```
+""".
 
 -export([start/0, stop/0, pmap/2, pmap/3]).
 
