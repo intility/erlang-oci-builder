@@ -148,6 +148,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
 | `--no-vcs-annotations` | | Disable automatic VCS annotations            |
 | `--sbom`       |       | Export SBOM to file path (SBOM always in image)   |
+| `--sign-key`   |       | Path to cosign private key for image signing      |
 
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
 files to support the new functionality.
@@ -164,7 +165,8 @@ files to support the new functionality.
     {expose, [8080]},
     {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}},
     {description, "My application"},
-    {vcs_annotations, true}    % Automatic VCS annotations (default: true)
+    {vcs_annotations, true},   % Automatic VCS annotations (default: true)
+    {sign_key, "cosign.key"}   % Optional: path to cosign private key
 ]}.
 ```
 
@@ -178,7 +180,8 @@ def project do
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080],
       description: "My application",
-      vcs_annotations: true    # Automatic VCS annotations (default: true)
+      vcs_annotations: true,   # Automatic VCS annotations (default: true)
+      sign_key: "cosign.key"   # Optional: path to cosign private key
     ]
   ]
 end

@@ -16,6 +16,7 @@ See: https://github.com/opencontainers/distribution-spec
     push/5, push/6,
     push_multi/6,
     push_referrer/7, push_referrer/8,
+    push_signature/7, push_signature/8,
     check_blob_exists/4,
     stop_httpc/0
 ]).
@@ -708,6 +709,120 @@ is_unsupported_manifest_error(Body) when is_list(Body) ->
     string:find(LowerBody, "unsupported") =/= nomatch orelse
         string:find(LowerBody, "not supported") =/= nomatch orelse
         string:find(LowerBody, "unknown manifest") =/= nomatch.
+
+%%%===================================================================
+%%% Cosign Signature Push
+%%%===================================================================
+
+-doc """
+Push a cosign-compatible signature as a referrer to an image manifest.
+
+The signature is attached using the OCI referrers API with:
+- artifactType: application/vnd.dev.cosign.simplesigning.v1+json
+- Signature stored as base64 in layer annotation
+- Payload stored as config blob
+
+Returns ok on success, or {error, {referrer_not_supported, _}} if the
+registry doesn't support the referrers API.
+""".
+-spec push_signature(
+    PayloadJson :: binary(),
+    Signature :: binary(),
+    Registry :: binary(),
+    Repo :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer(),
+    Auth :: map()
+) -> ok | {error, term()}.
+push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSize, Auth) ->
+    push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSize, Auth, #{}).
+
+-doc "Push a cosign signature with options.".
+-spec push_signature(
+    PayloadJson :: binary(),
+    Signature :: binary(),
+    Registry :: binary(),
+    Repo :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer(),
+    Auth :: map(),
+    Opts :: push_opts()
+) -> ok | {error, term()}.
+push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSize, Auth, _Opts) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
+        {ok, Token} ->
+            %% Push the payload blob (simplesigning JSON)
+            PayloadDigest = ocibuild_digest:sha256(PayloadJson),
+            PayloadSize = byte_size(PayloadJson),
+
+            case push_blob(BaseUrl, NormalizedRepo, PayloadDigest, PayloadJson, Token) of
+                ok ->
+                    %% Build and push the signature referrer manifest
+                    push_signature_manifest(
+                        BaseUrl,
+                        NormalizedRepo,
+                        Token,
+                        PayloadDigest,
+                        PayloadSize,
+                        Signature,
+                        SubjectDigest,
+                        SubjectSize
+                    );
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Build and push a cosign signature referrer manifest
+-spec push_signature_manifest(
+    BaseUrl :: string(),
+    Repo :: binary(),
+    Token :: term(),
+    PayloadDigest :: binary(),
+    PayloadSize :: non_neg_integer(),
+    Signature :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer()
+) -> ok | {error, term()}.
+push_signature_manifest(
+    BaseUrl, Repo, Token, PayloadDigest, PayloadSize, Signature, SubjectDigest, SubjectSize
+) ->
+    %% Build manifest using ocibuild_sign
+    Manifest = ocibuild_sign:build_referrer_manifest(
+        PayloadDigest, PayloadSize, Signature, SubjectDigest, SubjectSize
+    ),
+    ManifestJson = ocibuild_json:encode(Manifest),
+    ManifestDigest = ocibuild_digest:sha256(ManifestJson),
+
+    %% Push the manifest (using digest as tag - required for referrers)
+    Url = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(ManifestDigest)]
+    ),
+    Headers =
+        auth_headers(Token) ++
+            [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+
+    case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
+        {ok, _} ->
+            ok;
+        {error, {http_error, 404, _}} ->
+            {error, {referrer_not_supported, SubjectDigest}};
+        {error, {http_error, 405, _}} ->
+            {error, {referrer_not_supported, SubjectDigest}};
+        {error, {http_error, 400, Body}} ->
+            case is_unsupported_manifest_error(Body) of
+                true -> {error, {referrer_not_supported, SubjectDigest}};
+                false -> {error, {push_signature_manifest, Body}}
+            end;
+        {error, _} = Err ->
+            Err
+    end.
 
 %%%===================================================================
 %%% Internal functions
