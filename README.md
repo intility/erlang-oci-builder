@@ -195,6 +195,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 | `--chunk-size`         |       | Chunk size in MB for uploads (default: 5)         |
 | `--sbom`               |       | Export SBOM to file path (SBOM always in image)   |
 | `--no-vcs-annotations` |       | Disable automatic VCS annotations                 |
+| `--sign-key`           |       | Path to cosign private key for image signing      |
 
 **Notes:**
 - Tag defaults to `app:version` in Mix, required in rebar3
@@ -468,6 +469,60 @@ Found bundled ERTS in release directory.
 ```
 
 Native code (NIFs) in the release will trigger a warning since `.so` files may not be portable across platforms.
+
+## Image Signing
+
+Sign images with ECDSA P-256 keys (cosign-compatible format) to prove authenticity and enable verification by Kubernetes admission controllers.
+
+### Key Generation
+
+Generate a cosign-compatible key pair:
+
+```bash
+# Using cosign
+cosign generate-key-pair
+
+# Or using openssl
+openssl ecparam -genkey -name prime256v1 -noout -out cosign.key
+openssl ec -in cosign.key -pubout -out cosign.pub
+```
+
+### Usage
+
+```bash
+# Sign with key file
+rebar3 ocibuild --push ghcr.io/myorg --sign-key cosign.key
+mix ocibuild --push ghcr.io/myorg --sign-key cosign.key
+
+# Or via environment variable
+OCIBUILD_SIGN_KEY=cosign.key rebar3 ocibuild --push ghcr.io/myorg
+```
+
+### Configuration
+
+```erlang
+%% rebar.config
+{ocibuild, [
+    {sign_key, "cosign.key"}
+]}.
+```
+
+```elixir
+# mix.exs
+ocibuild: [
+  sign_key: "cosign.key"
+]
+```
+
+### Verification
+
+After pushing, verify the signature with cosign:
+
+```bash
+cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
+```
+
+The signature is attached to the image using the OCI Referrers API, making it compatible with standard cosign verification workflows and Kubernetes admission controllers like Kyverno and OPA Gatekeeper.
 
 ## Reproducible Builds
 
