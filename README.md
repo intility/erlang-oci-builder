@@ -112,7 +112,7 @@ The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
-{deps, [{ocibuild, "~> 0.6"}]}.
+{project_plugin, [{ocibuild, "~> 0.6"}]}.
 
 {ocibuild, [
     {base_image, "debian:stable-slim"},

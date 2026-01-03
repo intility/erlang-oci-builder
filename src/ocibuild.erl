@@ -42,6 +42,9 @@ memory limits.
 %% API - Output
 -export([push/3, push/4, push/5, push_multi/4, push_multi/5, save/2, save/3, export/2]).
 
+%% rebar3 plugin entry point
+-export([init/1]).
+
 %% Types
 -export_type([image/0, layer/0, auth/0, base_ref/0, platform/0]).
 
@@ -542,6 +545,13 @@ ok = ocibuild:export(Image, "./myimage").
 -spec export(image(), file:filename()) -> ok | {error, term()}.
 export(Image, Path) ->
     ocibuild_layout:export_directory(Image, Path).
+
+%%%===================================================================
+%%% rebar3 plugin dispatch
+%%%===================================================================
+-spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
+init(State) ->
+    ocibuild_rebar3:init(State).
 
 %%%===================================================================
 %%% Platform utilities
