@@ -56,7 +56,9 @@ ocibuild_progress:stop_manager().
     bar_order :: [reference()],
     % Number of lines we've actually printed to terminal
     lines_printed :: non_neg_integer(),
-    is_tty :: boolean()
+    is_tty :: boolean(),
+    % Max label width for alignment (dynamically calculated)
+    max_label_width :: non_neg_integer()
 }).
 
 %%%===================================================================
@@ -73,7 +75,8 @@ start_manager() ->
                 bars = #{},
                 bar_order = [],
                 lines_printed = 0,
-                is_tty = IsTTY
+                is_tty = IsTTY,
+                max_label_width = 0
             },
             Pid = spawn_link(fun() -> manager_loop(State) end),
             register(ocibuild_progress_manager, Pid),
@@ -220,18 +223,23 @@ make_callback(Opts) ->
 manager_loop(State) ->
     receive
         {register, Ref, Label, Total} ->
+            LabelBin = iolist_to_binary(Label),
             Bar = #bar_state{
                 ref = Ref,
-                label = Label,
+                label = LabelBin,
                 total = Total,
                 current = 0,
                 complete = false
             },
             NewBars = maps:put(Ref, Bar, State#manager_state.bars),
             NewOrder = State#manager_state.bar_order ++ [Ref],
+            %% Update max label width if this label is wider
+            LabelWidth = byte_size(LabelBin),
+            NewMaxWidth = max(LabelWidth, State#manager_state.max_label_width),
             NewState = State#manager_state{
                 bars = NewBars,
-                bar_order = NewOrder
+                bar_order = NewOrder,
+                max_label_width = NewMaxWidth
             },
             %% redraw_all handles printing new lines if needed
             FinalState = redraw_all(NewState),
@@ -300,7 +308,8 @@ manager_loop(State) ->
             NewState = State#manager_state{
                 bars = #{},
                 bar_order = [],
-                lines_printed = 0
+                lines_printed = 0,
+                max_label_width = 0
             },
             manager_loop(NewState);
         {stop, From} ->
@@ -320,7 +329,8 @@ manager_loop(State) ->
 redraw_all(#manager_state{is_tty = false} = State) ->
     %% Non-TTY mode: don't do animated updates
     State;
-redraw_all(#manager_state{bars = Bars, bar_order = Order, lines_printed = LinesPrinted} = State) ->
+redraw_all(#manager_state{bars = Bars, bar_order = Order, lines_printed = LinesPrinted,
+                          max_label_width = MaxLabelWidth} = State) ->
     BarCount = length(Order),
     case BarCount of
         0 ->
@@ -340,7 +350,7 @@ redraw_all(#manager_state{bars = Bars, bar_order = Order, lines_printed = LinesP
                 fun(Ref) ->
                     case maps:find(Ref, Bars) of
                         {ok, Bar} ->
-                            render_bar(Bar),
+                            render_bar(Bar, MaxLabelWidth),
                             io:format("~n");
                         error ->
                             io:format("~n")
@@ -353,9 +363,16 @@ redraw_all(#manager_state{bars = Bars, bar_order = Order, lines_printed = LinesP
             State#manager_state{lines_printed = BarCount}
     end.
 
-render_bar(#bar_state{label = Label, total = Total, current = Current}) ->
+render_bar(#bar_state{label = Label, total = Total, current = Current}, MaxLabelWidth) ->
     %% Clear line and render progress bar (ESC[K = clear to end of line)
     io:format("\r\033[K"),
+
+    %% Pad label to max width for alignment
+    LabelWidth = byte_size(Label),
+    PaddedLabel = case LabelWidth < MaxLabelWidth of
+        true -> <<Label/binary, (binary:copy(~" ", MaxLabelWidth - LabelWidth))/binary>>;
+        false -> Label
+    end,
 
     Percent =
         case Total of
@@ -375,7 +392,7 @@ render_bar(#bar_state{label = Label, total = Total, current = Current}) ->
 
     io:format(
         "  ~s: [~s~s] ~3B% ~s/~s",
-        [Label, FilledStr, EmptyStr, Percent, CurrentStr, TotalStr]
+        [PaddedLabel, FilledStr, EmptyStr, Percent, CurrentStr, TotalStr]
     ).
 
 %%%===================================================================

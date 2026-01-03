@@ -66,8 +66,8 @@ See: https://github.com/opencontainers/distribution-spec
 -export_type([progress_callback/0, progress_info/0, pull_opts/0, push_opts/0, upload_session/0]).
 
 -define(DEFAULT_TIMEOUT, 30000).
-%% Stand-alone httpc profile for ocibuild (not supervised by inets)
--define(HTTPC_PROFILE, ocibuild).
+%% Default httpc profile for fallback mode (non-worker context)
+-define(DEFAULT_HTTPC_PROFILE, ocibuild).
 -define(HTTPC_KEY, {?MODULE, httpc_pid}).
 %% Maximum concurrent uploads (to avoid rate limiting)
 -define(MAX_CONCURRENT_UPLOADS, 4).
@@ -355,14 +355,15 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
             false
     end.
 
--doc "Push an image to a registry.".
--spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
+-doc "Push an image to a registry. Returns the manifest digest on success.".
+-spec push(ocibuild:image(), binary(), binary(), binary(), map()) ->
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
     push(Image, Registry, Repo, Tag, Auth, #{}).
 
--doc "Push an image to a registry with options (supports chunked uploads).".
+-doc "Push an image to a registry with options (supports chunked uploads). Returns the manifest digest on success.".
 -spec push(ocibuild:image(), binary(), binary(), binary(), map(), push_opts()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
@@ -375,7 +376,7 @@ push(Image, Registry, Repo, Tag, Auth, Opts) ->
                     %% Push config (no chunked upload needed - configs are small)
                     case push_config(Image, BaseUrl, NormalizedRepo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
-                            %% Push manifest
+                            %% Push manifest and return digest
                             push_manifest(Image, BaseUrl, NormalizedRepo, Tag, Token, #{
                                 config_digest => ConfigDigest,
                                 config_size => ConfigSize
@@ -399,9 +400,11 @@ This function:
 3. Tags the index so the registry serves the correct platform to clients
 
 Each image in the list must have a `platform` field set.
+
+Returns the digest of the image index on success.
 """.
 -spec push_multi([ocibuild:image()], binary(), binary(), binary(), map(), push_opts()) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push_multi([], _Registry, _Repo, _Tag, _Auth, _Opts) ->
     {error, no_images_to_push};
 push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
@@ -413,7 +416,7 @@ push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
             %% Push each platform image and collect manifest info
             case push_platform_images(Images, BaseUrl, NormalizedRepo, Token, Opts, []) of
                 {ok, ManifestDescriptors} ->
-                    %% Create and push the image index
+                    %% Create and push the image index, return digest
                     push_image_index(BaseUrl, NormalizedRepo, Tag, Token, ManifestDescriptors);
                 {error, _} = Err ->
                     Err
@@ -428,12 +431,12 @@ push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
 push_platform_images([], _BaseUrl, _Repo, _Token, _Opts, _Acc) ->
     {ok, []};
 push_platform_images(Images, BaseUrl, Repo, Token, Opts, _Acc) ->
-    %% Push all platform images in parallel
+    %% Push all platform images in parallel with supervised HTTP workers
     PushFn = fun(Image) ->
         push_single_platform_image(Image, BaseUrl, Repo, Token, Opts)
     end,
     try
-        Results = ocibuild_layout:pmap_bounded(PushFn, Images, ?MAX_CONCURRENT_UPLOADS),
+        Results = ocibuild_http:pmap(PushFn, Images, ?MAX_CONCURRENT_UPLOADS),
         {ok, Results}
     catch
         error:{platform_push_failed, Reason} ->
@@ -537,17 +540,18 @@ push_manifest_untagged(Image, BaseUrl, Repo, Token, ConfigDigest, ConfigSize) ->
             Err
     end.
 
-%% Push the image index and tag it
+%% Push the image index and tag it, return the index digest
 -spec push_image_index(
     string(),
     binary(),
     binary(),
     term(),
     [{ocibuild:platform(), binary(), non_neg_integer()}]
-) -> ok | {error, term()}.
+) -> {ok, Digest :: binary()} | {error, term()}.
 push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
     Index = ocibuild_index:create(ManifestDescriptors),
     IndexJson = ocibuild_index:to_json(Index),
+    IndexDigest = ocibuild_digest:sha256(IndexJson),
 
     %% Push index with tag
     Url = io_lib:format(
@@ -560,7 +564,7 @@ push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
 
     case ?MODULE:http_put(lists:flatten(Url), Headers, IndexJson) of
         {ok, _} ->
-            ok;
+            {ok, IndexDigest};
         {error, _} = Err ->
             Err
     end.
@@ -965,12 +969,12 @@ discover_auth(Registry, Repo, Auth) ->
     BaseUrl = registry_url(Registry),
     V2Url = BaseUrl ++ "/v2/",
 
-    ensure_started(),
+    Profile = get_httpc_profile(),
     Request = {V2Url, [{"Connection", "close"}]},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
 
-    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(get, Request, HttpOpts, Opts, Profile) of
         {ok, {{_, 200, _}, RespHeaders, _}} ->
             %% Anonymous access allowed for /v2/, but push may still require auth
             %% If credentials provided, try to get a token anyway
@@ -1245,8 +1249,8 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
             end,
 
             try
-                %% All layers in parallel
-                ocibuild_layout:pmap_bounded(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
+                %% All layers in parallel with supervised HTTP workers
+                ocibuild_http:pmap(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
                 ok
             catch
                 error:{upload_failed, Digest, Reason} ->
@@ -1255,33 +1259,19 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
     end.
 
 %% Create a label for layer upload progress
-%% Pads label to fixed width so progress bars align
-%% Width of 40 accommodates labels like "Layer 10/10 (deps, linux/arm64/v8)"
--define(LABEL_WIDTH, 40).
-
 -spec make_upload_label(
     pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined
 ) -> binary().
 make_upload_label(Index, Total, undefined, undefined) ->
-    pad_label(io_lib:format("Layer ~B/~B", [Index, Total]));
+    iolist_to_binary(io_lib:format("Layer ~B/~B", [Index, Total]));
 make_upload_label(Index, Total, undefined, LayerType) ->
-    pad_label(io_lib:format("Layer ~B/~B (~s)", [Index, Total, LayerType]));
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s)", [Index, Total, LayerType]));
 make_upload_label(Index, Total, Platform, undefined) ->
     Arch = get_platform_arch(Platform),
-    pad_label(io_lib:format("Layer ~B/~B (~s)", [Index, Total, Arch]));
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s)", [Index, Total, Arch]));
 make_upload_label(Index, Total, Platform, LayerType) ->
     Arch = get_platform_arch(Platform),
-    pad_label(io_lib:format("Layer ~B/~B (~s, ~s)", [Index, Total, LayerType, Arch])).
-
-%% Pad label to fixed width for alignment
--spec pad_label(iolist()) -> binary().
-pad_label(Label) ->
-    Bin = iolist_to_binary(Label),
-    Len = byte_size(Bin),
-    case Len < ?LABEL_WIDTH of
-        true -> <<Bin/binary, (binary:copy(~" ", ?LABEL_WIDTH - Len))/binary>>;
-        false -> Bin
-    end.
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s, ~s)", [Index, Total, LayerType, Arch])).
 
 %% Push base image layers to target registry in parallel
 -spec push_base_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
@@ -1358,7 +1348,8 @@ push_base_layers_parallel(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token, O
     end,
 
     try
-        ocibuild_layout:pmap_bounded(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
+        %% Upload base layers in parallel with supervised HTTP workers
+        ocibuild_http:pmap(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
         ok
     catch
         error:{base_layer_upload_failed, Digest, Reason} ->
@@ -1793,7 +1784,7 @@ upload_chunks_loop(
     Token :: binary(),
     Opts :: map()
 ) ->
-    ok | {error, term()}.
+    {ok, Digest :: binary()} | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
     ConfigDigest = maps:get(config_digest, Opts),
     ConfigSize = maps:get(config_size, Opts),
@@ -1829,7 +1820,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
     %% Get annotations from image
     Annotations = maps:get(annotations, Image, #{}),
 
-    {ManifestJson, _} =
+    {ManifestJson, ManifestDigest} =
         ocibuild_manifest:build(
             #{
                 ~"mediaType" =>
@@ -1850,7 +1841,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, Opts) ->
 
     case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
         {ok, _} ->
-            ok;
+            {ok, ManifestDigest};
         {error, _} = Err ->
             Err
     end.
@@ -1887,17 +1878,31 @@ resolve_url(BaseUrl, RelUrl) ->
 %%% HTTP helpers (using httpc)
 %%%===================================================================
 
-%% Ensure ssl is started and our stand_alone httpc is running
--spec ensure_started() -> ok.
-ensure_started() ->
+%% Get the httpc profile to use for HTTP requests.
+%% In worker context (spawned by ocibuild_http_worker), returns the worker's profile.
+%% In fallback context (tests, direct API usage), uses the default profile.
+-spec get_httpc_profile() -> atom().
+get_httpc_profile() ->
+    case get(ocibuild_httpc_profile) of
+        undefined ->
+            %% Fallback for non-worker context (tests, direct API usage)
+            ensure_fallback_httpc(),
+            ?DEFAULT_HTTPC_PROFILE;
+        Profile ->
+            Profile
+    end.
+
+%% Ensure ssl is started and fallback httpc is running (for non-worker context)
+-spec ensure_fallback_httpc() -> ok.
+ensure_fallback_httpc() ->
     %% SSL is needed for HTTPS
     case ssl:start() of
         ok -> ok;
         {error, {already_started, _}} -> ok
     end,
     %% Start httpc in stand_alone mode (not supervised by inets)
-    %% This allows clean shutdown when we're done
-    ProfileName = httpc_profile_name(?HTTPC_PROFILE),
+    %% This is the fallback for non-worker context (tests, direct API usage)
+    ProfileName = httpc_profile_name(?DEFAULT_HTTPC_PROFILE),
     case persistent_term:get(?HTTPC_KEY, undefined) of
         undefined ->
             %% Check if a process is already registered under the profile name
@@ -1908,7 +1913,7 @@ ensure_started() ->
                     persistent_term:put(?HTTPC_KEY, ExistingPid),
                     ok;
                 undefined ->
-                    {ok, Pid} = inets:start(httpc, [{profile, ?HTTPC_PROFILE}], stand_alone),
+                    {ok, Pid} = inets:start(httpc, [{profile, ?DEFAULT_HTTPC_PROFILE}], stand_alone),
                     %% Register the process so httpc:request/5 can find it by profile name
                     %% stand_alone mode doesn't register automatically
                     true = register(ProfileName, Pid),
@@ -1924,9 +1929,17 @@ ensure_started() ->
 httpc_profile_name(Profile) ->
     list_to_atom("httpc_" ++ atom_to_list(Profile)).
 
--doc "Stop the stand_alone httpc to allow clean VM exit.".
+-doc """
+Stop the fallback httpc to allow clean VM exit.
+
+Note: When using the supervised HTTP pool (ocibuild_http), this is not needed
+as cleanup happens automatically through OTP supervision.
+""".
 -spec stop_httpc() -> ok.
 stop_httpc() ->
+    %% First stop the supervised HTTP pool if running
+    ocibuild_http:stop(),
+    %% Then clean up fallback httpc if running
     case persistent_term:get(?HTTPC_KEY, undefined) of
         undefined ->
             ok;
@@ -1938,7 +1951,7 @@ stop_httpc() ->
             %% propagating to the caller/shell.
             CleanupPid = spawn(fun() ->
                 process_flag(trap_exit, true),
-                _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
+                _ = (catch unregister(httpc_profile_name(?DEFAULT_HTTPC_PROFILE))),
                 _ = (catch inets:stop(stand_alone, HttpcPid))
             end),
             Ref = erlang:monitor(process, CleanupPid),
@@ -1977,14 +1990,14 @@ http_get(Url, Headers) ->
 http_get(_Url, _Headers, 0) ->
     {error, too_many_redirects};
 http_get(Url, Headers, RedirectsLeft) ->
-    ensure_started(),
+    Profile = get_httpc_profile(),
     %% Add Connection: close to prevent stale connection reuse issues
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     %% Disable autoredirect - we handle redirects manually to strip auth headers
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(get, Request, HttpOpts, Opts, Profile) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
         {ok, {{_, Status, _}, RespHeaders, _}} when
@@ -2031,12 +2044,12 @@ strip_auth_headers(Headers) ->
 -spec http_head(string(), [{string(), string()}]) ->
     {ok, [{string(), string()}]} | {error, term()}.
 http_head(Url, Headers) ->
-    ensure_started(),
+    Profile = get_httpc_profile(),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{socket_opts, [{keepalive, false}]}],
-    case httpc:request(head, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(head, Request, HttpOpts, Opts, Profile) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, ResponseHeaders};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -2048,13 +2061,13 @@ http_head(Url, Headers) ->
 -spec http_post(string(), [{string(), string()}], binary()) ->
     {ok, binary(), [{string(), string()}]} | {error, term()}.
 http_post(Url, Headers, Body) ->
-    ensure_started(),
+    Profile = get_httpc_profile(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(post, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(post, Request, HttpOpts, Opts, Profile) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _ResponseBody}} ->
@@ -2071,13 +2084,13 @@ http_put(Url, Headers, Body) ->
 -spec http_put(string(), [{string(), string()}], binary(), pos_integer()) ->
     {ok, binary()} | {error, term()}.
 http_put(Url, Headers, Body, Timeout) ->
-    ensure_started(),
+    Profile = get_httpc_profile(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(put, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(put, Request, HttpOpts, Opts, Profile) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -2091,13 +2104,13 @@ http_put(Url, Headers, Body, Timeout) ->
 -spec http_patch(string(), [{string(), string()}], binary(), pos_integer()) ->
     {ok, integer(), [{string(), string()}]} | {error, term()}.
 http_patch(Url, Headers, Body, Timeout) ->
-    ensure_started(),
+    Profile = get_httpc_profile(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(patch, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(patch, Request, HttpOpts, Opts, Profile) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, Status, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -2251,7 +2264,7 @@ http_get_with_progress_internal(_Url, _Headers, _ProgressFn, _Phase, _TotalBytes
 http_get_with_progress_internal(
     Url, Headers, ProgressFn, Phase, TotalBytes, ProgressOpts, RedirectsLeft
 ) ->
-    ensure_started(),
+    Profile = get_httpc_profile(),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders},
     %% Use streaming mode to receive chunks
@@ -2264,7 +2277,7 @@ http_get_with_progress_internal(
     LayerIndex = maps:get(layer_index, ProgressOpts, 0),
     TotalLayers = maps:get(total_layers, ProgressOpts, 1),
 
-    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+    case httpc:request(get, Request, HttpOpts, Opts, Profile) of
         {ok, RequestId} ->
             State = #stream_state{
                 request_id = RequestId,

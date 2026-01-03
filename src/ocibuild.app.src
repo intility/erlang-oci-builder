@@ -1,6 +1,6 @@
 {application, ocibuild, [
     {description, "Build and publish OCI container images from the BEAM"},
-    {vsn, "0.5.1"},
+    {vsn, "0.6.0"},
     {registered, []},
     {applications, [kernel, stdlib, crypto, ssl, inets]},
     {env, []},

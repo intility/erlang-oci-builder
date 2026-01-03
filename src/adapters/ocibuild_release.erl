@@ -686,12 +686,14 @@ do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
         end,
 
     case PushResult of
-        ok ->
+        {ok, Digest} ->
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
             %% Clean up httpc after all pushes complete
             stop_httpc(),
-            AdapterModule:info("Push successful!", []),
+            %% Print digest for CI/CD integration (e.g., attestation workflows)
+            FullImageRef = <<Registry/binary, "/", Repo/binary, ":", ImageTag/binary>>,
+            AdapterModule:console("Pushed: ~s@~s~n", [FullImageRef, Digest]),
             {ok, AdapterState};
         {error, PushError} ->
             stop_httpc(),
@@ -1099,8 +1101,10 @@ save_image(Image, OutputPath, Opts) ->
 Push an image to a registry.
 
 Handles authentication, progress display, and httpc cleanup.
+Returns `{ok, Digest}` where Digest is the sha256 digest of the pushed manifest.
 """.
--spec push_image(ocibuild:image(), binary(), binary(), map(), map()) -> ok | {error, term()}.
+-spec push_image(ocibuild:image(), binary(), binary(), map(), map()) ->
+    {ok, Digest :: binary()} | {error, term()}.
 push_image(Image, Registry, RepoTag, Auth, Opts) ->
     ProgressFn = make_progress_callback(),
     PushOpts = Opts#{progress => ProgressFn},

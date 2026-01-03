@@ -17,22 +17,21 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ## Features 🚀
 
-| Feature                       | Status | Description                                                             |
-|-------------------------------|--------|-------------------------------------------------------------------------|
-| **No Docker required**        | ✅     | Builds images directly without container runtime.                       |
-| **Push to any registry**      | ✅     | Docker Hub, GHCR, ECR, GCR, and any OCI-compliant registry.             |
-| **OCI compliant**             | ✅     | Produces standard OCI image layouts.                                    |
-| **Layer caching**             | ✅     | Base image layers cached locally for faster rebuilds.                   |
-| **Tarball export**            | ✅     | Export images for `podman load`, skopeo, crane, buildah.                |
-| **OCI annotations**           | ✅     | Add custom annotations to image manifests.                              |
-| **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                     |
-| **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command.  |
-| **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.       |
-| **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.           |
-| **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.          |
-| **Auto OCI annotations**      | ✅     | Automatically populate source URL, revision, version from VCS.          |
-| **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers. |
-| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                 |
+| Feature                       | Status | Description                                                                                               |
+|-------------------------------|--------|-----------------------------------------------------------------------------------------------------------|
+| **No Docker required**        | ✅     | Builds images directly without container runtime.                                                         |
+| **Push to any registry**      | ✅     | Docker Hub, GHCR, ECR, GCR, and any OCI-compliant registry.                                               |
+| **OCI compliant**             | ✅     | Produces standard OCI image layouts.                                                                      |
+| **Layer caching**             | ✅     | Base image layers cached locally for faster rebuilds.                                                     |
+| **Tarball export**            | ✅     | Export images for podman, skopeo, crane, buildah, etc.                                                    |
+| **OCI annotations**           | ✅     | Add custom annotations to image manifests. Automatically populate source URL, revision, version from VCS. |
+| **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                                                       |
+| **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command.                                    |
+| **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.                                         |
+| **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.                                             |
+| **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.                                            |
+| **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.                                   |
+| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
 
 ## Installation
 
@@ -40,7 +39,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ```erlang
 {deps, [
-    {ocibuild, "~> 0.5"}
+    {ocibuild, "~> 0.6"}
 ]}.
 ```
 
@@ -49,7 +48,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 ```elixir
 def deps do
   [
-    {:ocibuild, "~> 0.5"}
+    {:ocibuild, "~> 0.6"}
   ]
 end
 ```
@@ -63,7 +62,7 @@ The easiest way to use `ocibuild` with Elixir:
 ```elixir
 # mix.exs
 def deps do
-  [{:ocibuild, "~> 0.5"}]
+  [{:ocibuild, "~> 0.6"}]
 end
 
 def project do
@@ -113,7 +112,7 @@ The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
-{deps, [{ocibuild, "~> 0.5"}]}.
+{deps, [{ocibuild, "~> 0.6"}]}.
 
 {ocibuild, [
     {base_image, "debian:stable-slim"},

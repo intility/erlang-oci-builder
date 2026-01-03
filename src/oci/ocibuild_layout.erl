@@ -374,8 +374,9 @@ build_base_layers(
         {blob_path(Digest), CompressedData, ?MODE_FILE}
     end,
 
-    %% Download layers in parallel with bounded concurrency
-    pmap_bounded(DownloadFn, IndexedLayers, ?DEFAULT_MAX_CONCURRENCY);
+    %% Download layers in parallel with supervised HTTP workers
+    %% Each worker gets its own httpc profile for isolation
+    ocibuild_http:pmap(DownloadFn, IndexedLayers, ?DEFAULT_MAX_CONCURRENCY);
 build_base_layers(_Image) ->
     [].
 

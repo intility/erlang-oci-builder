@@ -12,22 +12,22 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 
 ### Feature Comparison with Similar Tools
 
-| Feature                       | ocibuild           | ko (Go)     | jib (Java)        | .NET Containers |
-|-------------------------------|--------------------|-------------|-------------------|-----------------|
-| No Docker required            | ✅                 | ✅          | ✅                | ✅              |
-| Push to registries            | ✅                 | ✅          | ✅                | ✅              |
-| Layer caching                 | ✅                 | ✅          | ✅                | ✅              |
-| Tarball export                | ✅                 | ✅          | ✅                | ✅              |
-| OCI annotations               | ✅                 | ✅          | ✅                | ✅              |
-| Build system integration      | ✅ (rebar3/Mix)    | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
-| **Multi-platform images**     | ✅                 | ✅          | ✅                | ✅              |
-| **Reproducible builds**       | ✅                 | ✅          | ✅                | ✅              |
-| **Smart dependency layering** | ✅                 | N/A         | ✅                | ✅              |
-| **Non-root by default**       | ✅                 | ✅          | ❌                | ✅              |
-| **Auto OCI annotations**      | ✅                 | ✅          | ✅                | ✅              |
-| **SBOM generation**           | ✅ (SPDX)          | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
-| **Image signing**             | ⏳ Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
-| Zstd compression              | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
+| Feature                   | ocibuild           | ko (Go)     | jib (Java)        | .NET Containers |
+|---------------------------|--------------------|-------------|-------------------|-----------------|
+| No Docker required        | ✅                 | ✅          | ✅                | ✅              |
+| Push to registries        | ✅                 | ✅          | ✅                | ✅              |
+| Layer caching             | ✅                 | ✅          | ✅                | ✅              |
+| Tarball export            | ✅                 | ✅          | ✅                | ✅              |
+| OCI annotations           | ✅                 | ✅          | ✅                | ✅              |
+| Auto OCI annotations      | ✅ (VCS)           | ✅          | ✅                | ✅              |
+| Build system integration  | ✅ (rebar3/Mix)    | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
+| Multi-platform images     | ✅                 | ✅          | ✅                | ✅              |
+| Reproducible builds       | ✅                 | ✅          | ✅                | ✅              |
+| Smart dependency layering | ✅                 | N/A         | ✅                | ✅              |
+| Non-root by default       | ✅                 | ✅          | ❌                | ✅              |
+| SBOM generation           | ✅ (SPDX)          | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
+| Image signing             | ⏳ Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
+| Zstd compression          | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
 
 Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented
 
@@ -60,30 +60,44 @@ Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented
 
 ```
 src/
-├── ocibuild.erl           # Public API - the main interface users interact with
-├── ocibuild_adapter.erl   # Behaviour for build system adapters (rebar3, Mix, etc.)
-├── ocibuild_rebar3.erl    # Rebar3 provider (implements ocibuild_adapter)
-├── ocibuild_mix.erl       # Mix adapter (implements ocibuild_adapter)
-├── ocibuild_release.erl   # Shared release handling (configure_release_image is the single
-│                          # source of truth for image config: layers, env, ports, labels,
-│                          # annotations, uid, etc. Used by both CLI and programmatic API)
-├── ocibuild_tar.erl       # In-memory TAR archive builder (POSIX ustar format)
-├── ocibuild_layer.erl     # OCI layer creation (tar + gzip + digests)
-├── ocibuild_digest.erl    # SHA256 digest utilities
-├── ocibuild_json.erl      # JSON encode/decode (OTP 27 native + fallback)
-├── ocibuild_manifest.erl  # OCI manifest generation (with annotations support)
-├── ocibuild_index.erl     # OCI image index for multi-platform images
-├── ocibuild_layout.erl    # OCI image layout export (directory/tarball, multi-platform)
-├── ocibuild_registry.erl  # Registry client (pull/push via HTTP with retry logic)
-├── ocibuild_cache.erl     # Layer caching for base images
-├── ocibuild_time.erl      # Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
-├── ocibuild_vcs.erl       # VCS behaviour and detection for auto-annotations
-├── ocibuild_vcs_git.erl   # Git adapter (source URL, revision from git or CI env vars)
-└── ocibuild.app.src       # OTP application spec
+├── ocibuild.erl              # Public API - the main interface users interact with
+├── ocibuild.app.src          # OTP application spec
+│
+├── http/                     # HTTP/Registry operations
+│   ├── ocibuild_http.erl         # Public facade for HTTP operations
+│   ├── ocibuild_http_sup.erl     # OTP supervisor for HTTP workers
+│   ├── ocibuild_http_pool.erl    # Coordinates parallel HTTP operations
+│   ├── ocibuild_http_worker.erl  # Single-use worker (owns its httpc profile)
+│   ├── ocibuild_registry.erl     # Registry client (pull/push via HTTP with retry)
+│   └── ocibuild_cache.erl        # Layer caching for base images
+│
+├── oci/                      # OCI image building
+│   ├── ocibuild_layer.erl        # OCI layer creation (tar + gzip + digests)
+│   ├── ocibuild_manifest.erl     # OCI manifest generation (with annotations)
+│   ├── ocibuild_index.erl        # OCI image index for multi-platform images
+│   ├── ocibuild_layout.erl       # OCI image layout export (directory/tarball)
+│   ├── ocibuild_tar.erl          # In-memory TAR archive builder (POSIX ustar)
+│   └── ocibuild_sbom.erl         # SPDX 2.2 SBOM generation
+│
+├── adapters/                 # Build system adapters
+│   ├── ocibuild_adapter.erl      # Behaviour for adapters (rebar3, Mix, etc.)
+│   ├── ocibuild_release.erl      # Shared release handling (layers, env, ports, etc.)
+│   ├── ocibuild_rebar3.erl       # Rebar3 provider (implements ocibuild_adapter)
+│   └── ocibuild_mix.erl          # Mix adapter (implements ocibuild_adapter)
+│
+├── vcs/                      # Version control
+│   ├── ocibuild_vcs.erl          # VCS behaviour and detection
+│   └── ocibuild_vcs_git.erl      # Git adapter (CI env vars + git commands)
+│
+└── util/                     # Utilities
+    ├── ocibuild_digest.erl       # SHA256 digest utilities
+    ├── ocibuild_json.erl         # JSON encode/decode (OTP 27 native + fallback)
+    ├── ocibuild_time.erl         # Timestamp utilities (SOURCE_DATE_EPOCH)
+    └── ocibuild_progress.erl     # Progress reporting
 
 lib/
-├── mix/tasks/ocibuild.ex      # Mix task (mix ocibuild command)
-└── ocibuild/mix_release.ex    # Mix release step integration
+├── mix/tasks/ocibuild.ex         # Mix task (mix ocibuild command)
+└── ocibuild/mix_release.ex       # Mix release step integration
 ```
 
 **Adapter Pattern:**
@@ -96,13 +110,13 @@ lib/
     │                     │                     │
 ocibuild_rebar3    ocibuild_mix         (Future adapters)
 (rebar3 provider)  (Mix integration)    (Gleam, LFE, etc.)
-    │                     │
-    └──────────┬──────────┘
-               │
-       ocibuild_adapter (behaviour)
-         - get_config/1
-         - find_release/2
-         - info/2, console/2, error/2
+    │                     │                     │
+    └─────────────────────┼─────────────────────┘
+                          │
+               ocibuild_adapter (behaviour)
+                 - get_config/1
+                 - find_release/2
+                 - info/2, console/2, error/2
 ```
 
 ### Data Flow
@@ -121,9 +135,11 @@ ocibuild_rebar3 / ocibuild_mix (Adapters)
             │
             └─► ocibuild.erl (Public API)
                     │
-                    ├─► ocibuild_registry ──► Pull base image manifest + config + layers
+                    ├─► ocibuild_http ──────► Parallel HTTP operations (supervised)
                     │       │
-                    │       └─► ocibuild_cache ──► Cache layers locally in _build/
+                    │       └─► ocibuild_registry ──► Pull/push via HTTP with retry
+                    │               │
+                    │               └─► ocibuild_cache ──► Cache layers locally in _build/
                     │
                     ├─► ocibuild_layer ─────► Create new layers
                     │       │
@@ -139,6 +155,30 @@ ocibuild_rebar3 / ocibuild_mix (Adapters)
                         OR
                         ocibuild_registry ──► Push to registry (single or multi-platform)
 ```
+
+### HTTP Supervision Tree
+
+```
+ocibuild_http_sup (one_for_one)
+├── ocibuild_http_pool (transient) ─── Coordinates parallel operations
+│       - pmap/2,3 for bounded concurrency
+│       - Tracks active workers, pending tasks, results
+│       - Fail-fast: one worker crash fails entire operation
+│
+└── [Dynamic workers via start_child]
+    ocibuild_http_worker (temporary)
+        - Single-use, started per HTTP task
+        - Owns unique httpc profile (httpc_ocibuild_N)
+        - Sets profile in process dict for HTTP helpers
+        - Clean shutdown via OTP supervision cascade
+```
+
+**Key Design Decisions:**
+- **On-demand startup** - Supervisor starts when first HTTP operation requested
+- **Worker isolation** - Each worker owns its httpc profile to prevent cross-contamination
+- **Process dict for profile** - Workers set `ocibuild_httpc_profile` in process dict
+- **Fail-fast errors** - One worker failure terminates all workers and returns error
+- **Clean VM shutdown** - Fixes CI timeout issues where httpc processes blocked VM exit
 
 ---
 
@@ -403,6 +443,41 @@ myimage/
 
 ---
 
+### ocibuild_http.erl (HTTP Supervision Facade)
+
+**Status: ✅ Implemented and tested**
+
+Public API for supervised HTTP operations. Provides parallel map functionality with bounded concurrency.
+
+**Key Functions:**
+
+```erlang
+%% Start the HTTP supervisor tree (called automatically)
+-spec start() -> ok | {error, term()}.
+
+%% Stop the HTTP supervisor tree
+-spec stop() -> ok.
+
+%% Execute function on each item in parallel with bounded concurrency
+-spec pmap(Fun, Items) -> [term()].
+-spec pmap(Fun, Items, MaxWorkers) -> [term()].
+```
+
+**Usage:**
+```erlang
+%% Parallel downloads with max 4 workers (default)
+Results = ocibuild_http:pmap(fun download_layer/1, Layers),
+
+%% Custom concurrency limit
+Results = ocibuild_http:pmap(fun upload_blob/1, Blobs, 8).
+```
+
+**Error Handling:**
+- If any worker fails, the exception is re-raised in the caller
+- All other workers are terminated on first failure (fail-fast)
+
+---
+
 ### ocibuild_registry.erl (Registry Client)
 
 **Status: ✅ Implemented and tested (GHCR integration tests in CI)**
@@ -498,26 +573,60 @@ mix test
 
 # Single test
 rebar3 eunit --test=ocibuild_tests:test_name_test
+
+# Run tests for a specific module
+rebar3 eunit --module=ocibuild_mix_tests
+```
+
+### Test File Organization
+
+Tests are organized by domain, mirroring the source structure:
+
+```
+test/
+├── ocibuild_tests.erl           # Main/integration tests
+├── ocibuild_test_helpers.erl    # Shared test helpers
+│
+├── adapters/
+│   ├── ocibuild_mix_tests.erl       # Mix adapter tests
+│   ├── ocibuild_rebar3_tests.erl    # Rebar3 adapter tests
+│   ├── ocibuild_release_tests.erl   # Shared release API tests
+│   └── ocibuild_test_adapter.erl    # Mock adapter for testing
+│
+├── http/
+│   ├── ocibuild_cache_tests.erl     # Cache tests
+│   └── ocibuild_registry_tests.erl  # Registry client tests
+│
+├── oci/
+│   ├── ocibuild_index_tests.erl     # OCI index tests
+│   └── ocibuild_sbom_tests.erl      # SBOM generation tests
+│
+└── vcs/
+    └── ocibuild_vcs_tests.erl       # VCS tests
 ```
 
 ### Test Coverage
 
-| Module            | Status                         |
-|-------------------|--------------------------------|
-| ocibuild_digest   | ✅ Tested                      |
-| ocibuild_json     | ✅ Tested                      |
-| ocibuild_tar      | ✅ Tested                      |
-| ocibuild_layer    | ✅ Tested                      |
-| ocibuild_manifest | ✅ Tested                      |
-| ocibuild_layout   | ✅ Tested                      |
-| ocibuild_registry | ✅ Tested (unit + integration) |
-| ocibuild_cache    | ✅ Tested                      |
-| ocibuild_release  | ✅ Tested                      |
-| ocibuild_index    | ✅ Tested                      |
-| ocibuild_time     | ✅ Tested                      |
-| ocibuild_vcs      | ✅ Tested                      |
-| ocibuild_vcs_git  | ✅ Tested                      |
-| ocibuild (API)    | ✅ Tested                      |
+| Module             | Status                         |
+|--------------------|--------------------------------|
+| ocibuild (API)     | ✅ Tested                      |
+| ocibuild_http      | ✅ Tested                      |
+| ocibuild_registry  | ✅ Tested (unit + integration) |
+| ocibuild_cache     | ✅ Tested                      |
+| ocibuild_layer     | ✅ Tested                      |
+| ocibuild_manifest  | ✅ Tested                      |
+| ocibuild_index     | ✅ Tested                      |
+| ocibuild_layout    | ✅ Tested                      |
+| ocibuild_tar       | ✅ Tested                      |
+| ocibuild_sbom      | ✅ Tested                      |
+| ocibuild_release   | ✅ Tested                      |
+| ocibuild_rebar3    | ✅ Tested                      |
+| ocibuild_mix       | ✅ Tested                      |
+| ocibuild_vcs       | ✅ Tested                      |
+| ocibuild_vcs_git   | ✅ Tested                      |
+| ocibuild_digest    | ✅ Tested                      |
+| ocibuild_json      | ✅ Tested                      |
+| ocibuild_time      | ✅ Tested                      |
 
 ---
 
@@ -1116,6 +1225,11 @@ cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
   - File collection (`collect_release_files`, symlink handling) → `ocibuild_files.erl`
   - Platform validation (ERTS detection, NIF warnings) → `ocibuild_platform.erl`
 - Core orchestration (`run/3`, `build_platform_images`, `do_output`) should remain
+
+**HTTP Client Improvements (✅ OTP Supervision Implemented):**
+- Previously: httpc in `stand_alone` mode caused VM hangs in CI (10+ minute timeouts)
+- Fixed: Proper OTP supervision tree with worker isolation and clean shutdown
+- Future: Could add connection pooling for persistent connections to same registry
 
 **Resumable Uploads:**
 - Chunked uploads are implemented but resume capability is not

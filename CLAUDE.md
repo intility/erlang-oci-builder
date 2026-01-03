@@ -36,30 +36,43 @@ rebar3 fmt -w
 
 ```
 src/
-├── ocibuild.erl          → Public API (from, copy, push, save, annotation, etc.)
-├── ocibuild_adapter.erl  → Behaviour for build system adapters
-├── ocibuild_release.erl  → Shared release handling (configure_release_image is the single
-│                           source of truth for image config; file collection, auth,
-│                           progress display, save/push operations, validation)
-├── ocibuild_rebar3.erl   → Rebar3 provider (implements ocibuild_adapter)
-├── ocibuild_mix.erl      → Mix adapter (implements ocibuild_adapter)
-├── ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar format)
-├── ocibuild_layer.erl    → OCI layer creation (tar + gzip + SHA256)
-├── ocibuild_digest.erl   → SHA256 digest utilities
-├── ocibuild_json.erl     → JSON encode/decode (OTP 27 native + fallback)
-├── ocibuild_manifest.erl → OCI manifest generation (with annotations support)
-├── ocibuild_index.erl    → OCI image index for multi-platform images
-├── ocibuild_layout.erl   → Export to directory or tarball (including multi-platform)
-├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry, multi-platform)
-├── ocibuild_cache.erl    → Layer caching for base images
-├── ocibuild_time.erl     → Timestamp utilities for reproducible builds (SOURCE_DATE_EPOCH)
-├── ocibuild_vcs.erl      → VCS behaviour and detection for auto-annotations
-├── ocibuild_vcs_git.erl  → Git adapter (source URL, revision from git or CI env vars)
-└── ocibuild_sbom.erl     → SPDX 2.2 SBOM generation for supply chain security
+├── ocibuild.erl              → Public API (from, copy, push, save, annotation, etc.)
+│
+├── http/                     → HTTP/Registry operations
+│   ├── ocibuild_http.erl         → Public facade for HTTP operations
+│   ├── ocibuild_http_sup.erl     → OTP supervisor for HTTP workers
+│   ├── ocibuild_http_pool.erl    → Coordinates parallel HTTP operations
+│   ├── ocibuild_http_worker.erl  → Single-use worker (owns its httpc)
+│   ├── ocibuild_registry.erl     → Registry client (pull/push, retry)
+│   └── ocibuild_cache.erl        → Layer caching for base images
+│
+├── oci/                      → OCI image building
+│   ├── ocibuild_layer.erl        → OCI layer creation (tar + gzip + SHA256)
+│   ├── ocibuild_manifest.erl     → OCI manifest generation
+│   ├── ocibuild_index.erl        → OCI image index for multi-platform
+│   ├── ocibuild_layout.erl       → Export to directory/tarball
+│   ├── ocibuild_tar.erl          → In-memory TAR builder (POSIX ustar)
+│   └── ocibuild_sbom.erl         → SPDX 2.2 SBOM generation
+│
+├── adapters/                 → Build system adapters
+│   ├── ocibuild_adapter.erl      → Behaviour for adapters
+│   ├── ocibuild_release.erl      → Shared release handling
+│   ├── ocibuild_rebar3.erl       → Rebar3 provider
+│   └── ocibuild_mix.erl          → Mix adapter
+│
+├── vcs/                      → Version control
+│   ├── ocibuild_vcs.erl          → VCS behaviour
+│   └── ocibuild_vcs_git.erl      → Git adapter
+│
+└── util/                     → Utilities
+    ├── ocibuild_digest.erl       → SHA256 utilities
+    ├── ocibuild_json.erl         → JSON encode/decode
+    ├── ocibuild_time.erl         → Timestamp utilities
+    └── ocibuild_progress.erl     → Progress reporting
 
 lib/
-├── mix/tasks/ocibuild.ex → Mix task (mix ocibuild command)
-└── ocibuild/mix_release.ex → Mix release step integration
+├── mix/tasks/ocibuild.ex     → Mix task (mix ocibuild command)
+└── ocibuild/mix_release.ex   → Mix release step integration
 ```
 
 **Adapter Pattern:**
@@ -84,12 +97,21 @@ ocibuild_rebar3    ocibuild_mix         (Future adapters)
 **Data Flow:**
 ```
 User API (ocibuild.erl)
-    ├─► ocibuild_registry.erl ──► Pull base image manifest + config + layers
-    │       └─► ocibuild_cache.erl ──► Cache layers locally
+    ├─► ocibuild_http.erl ────► Parallel HTTP operations via supervised workers
+    │       └─► ocibuild_registry.erl ──► Pull base image manifest + config + layers
+    │           └─► ocibuild_cache.erl ──► Cache layers locally
     ├─► ocibuild_layer.erl ─────► Create layers (uses ocibuild_tar + zlib + ocibuild_digest)
     ├─► ocibuild_manifest.erl ──► Generate manifest JSON (with annotations)
     └─► ocibuild_layout.erl ────► Export to directory/tarball
         OR ocibuild_registry.erl ► Push to registry
+```
+
+**HTTP Supervision Tree:**
+```
+ocibuild_http_sup (one_for_one)
+├── ocibuild_http_pool (transient) ─── Coordinates parallel operations
+└── [Dynamic workers via start_child]
+    ocibuild_http_worker (temporary) ── Single-use, owns its httpc profile
 ```
 
 ## Key Design Decisions
@@ -100,7 +122,7 @@ User API (ocibuild.erl)
 4. **Zero Dependencies**: Only OTP stdlib (crypto, zlib, inets, ssl).
 5. **Layer Caching**: Base image layers cached in `_build/ocibuild_cache/` for faster rebuilds.
 6. **Adapter Pattern**: Build system integrations implement `ocibuild_adapter` behaviour to onboard new BEAM build systems (Gleam, LFE, etc.) with minimal effort.
-7. **Dedicated httpc Profile**: Uses a dedicated `ocibuild` httpc profile to isolate HTTP connections and allow clean VM shutdown.
+7. **OTP-supervised HTTP**: Each HTTP worker owns its own httpc profile for isolation; clean shutdown via OTP supervision cascade.
 
 ## Current Status
 
@@ -263,7 +285,8 @@ file:write_file("/tmp/test.tar", Tar).
 
 1. `AGENTS.md` - Comprehensive development guide with OCI spec details
 2. `src/ocibuild.erl` - Public API
-3. `src/ocibuild_adapter.erl` - Adapter behaviour definition
-4. `src/ocibuild_release.erl` - Shared release handling functions
-5. `src/ocibuild_tar.erl` - Core tar implementation
-6. `test/ocibuild_tests.erl` - Usage examples
+3. `src/adapters/ocibuild_adapter.erl` - Adapter behaviour definition
+4. `src/adapters/ocibuild_release.erl` - Shared release handling functions
+5. `src/http/ocibuild_http.erl` - HTTP supervision facade
+6. `src/oci/ocibuild_tar.erl` - Core tar implementation
+7. `test/ocibuild_tests.erl` - Usage examples
