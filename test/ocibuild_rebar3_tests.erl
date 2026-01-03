@@ -620,7 +620,7 @@ get_base_image_from_args_test() ->
 
 get_base_image_from_config_test() ->
     Args = [],
-    Config = [{base_image, ~"ubuntu:22.04"}],
+    Config = [{base_image, "ubuntu:22.04"}],
     ?assertEqual(~"ubuntu:22.04", ocibuild_rebar3:get_base_image(Args, Config)).
 
 get_base_image_default_test() ->
