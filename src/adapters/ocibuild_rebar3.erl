@@ -185,11 +185,13 @@ find_relx_release([_ | Rest]) ->
 
 %% @private Get base image from args or config (used by get_config)
 get_base_image(Args, Config) ->
-    case proplists:get_value(base, Args) of
+    case proplists:get_value(base, Args, proplists:get_value(base_image, Config)) of
         undefined ->
-            proplists:get_value(base_image, Config, ?DEFAULT_BASE_IMAGE);
-        Base ->
-            list_to_binary(Base)
+            ?DEFAULT_BASE_IMAGE;
+        BaseImage when is_list(BaseImage) ->
+            list_to_binary(BaseImage);
+        BaseImage when is_binary(BaseImage) ->
+            BaseImage
     end.
 
 %%%===================================================================

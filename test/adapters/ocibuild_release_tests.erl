@@ -537,6 +537,52 @@ strip_prefix_partial_match_test() ->
     ).
 
 %%%===================================================================
+%%% find_relx_release tests
+%%%===================================================================
+
+find_relx_release_simple_test() ->
+    Config = [{release, {myapp, "1.0.0"}, [kernel, stdlib]}],
+    ?assertEqual({ok, "myapp"}, ocibuild_rebar3:find_relx_release(Config)).
+
+find_relx_release_with_opts_test() ->
+    Config = [{release, {myapp, "1.0.0"}, [kernel], [{dev_mode, true}]}],
+    ?assertEqual({ok, "myapp"}, ocibuild_rebar3:find_relx_release(Config)).
+
+find_relx_release_empty_test() ->
+    ?assertEqual(error, ocibuild_rebar3:find_relx_release([])).
+
+find_relx_release_no_release_test() ->
+    Config = [{profiles, [{prod, []}]}, {deps, []}],
+    ?assertEqual(error, ocibuild_rebar3:find_relx_release(Config)).
+
+find_relx_release_multiple_test() ->
+    %% Should return the first release found
+    Config = [
+        {release, {app1, "1.0"}, [kernel]},
+        {release, {app2, "2.0"}, [stdlib]}
+    ],
+    ?assertEqual({ok, "app1"}, ocibuild_rebar3:find_relx_release(Config)).
+
+%%%===================================================================
+%%% get_base_image tests
+%%%===================================================================
+
+get_base_image_from_args_test() ->
+    Args = [{base, "alpine:3.19"}],
+    Config = [{base_image, ~"debian:stable-slim"}],
+    ?assertEqual(~"alpine:3.19", ocibuild_rebar3:get_base_image(Args, Config)).
+
+get_base_image_from_config_test() ->
+    Args = [],
+    Config = [{base_image, "ubuntu:22.04"}],
+    ?assertEqual(~"ubuntu:22.04", ocibuild_rebar3:get_base_image(Args, Config)).
+
+get_base_image_default_test() ->
+    Args = [],
+    Config = [],
+    ?assertEqual(~"debian:stable-slim", ocibuild_rebar3:get_base_image(Args, Config)).
+
+%%%===================================================================
 %%% make_relative_path tests
 %%%===================================================================
 

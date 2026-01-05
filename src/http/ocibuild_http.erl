@@ -66,10 +66,17 @@ stop() ->
         SupPid ->
             %% Unlink to avoid getting exit signal
             unlink(SupPid),
+            %% Try to stop pool first for cleaner shutdown
+            case whereis(ocibuild_http_pool) of
+                undefined -> ok;
+                PoolPid ->
+                    catch gen_server:stop(PoolPid, shutdown, 1000)
+            end,
             %% Stop the supervisor - this will stop pool and all workers
             exit(SupPid, shutdown),
-            %% Wait for shutdown to complete
-            wait_for_shutdown(100),
+            %% Wait for graceful shutdown (up to 3 seconds)
+            %% This is longer than child shutdown timeouts to allow clean cascade
+            _ = wait_for_shutdown(300),
             ok
     end.
 
@@ -111,7 +118,8 @@ pmap(Fun, Items, MaxWorkers) ->
 %%% Internal functions
 %%%===================================================================
 
-%% Wait for supervisor to shut down
+%% Wait for supervisor to shut down (up to Retries * 10ms)
+-spec wait_for_shutdown(non_neg_integer()) -> ok.
 wait_for_shutdown(0) ->
     ok;
 wait_for_shutdown(Retries) ->

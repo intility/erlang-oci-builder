@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.1 - 2026-01-05
+
+### Bugfixes
+
+- **Fixed rebar3 plugin usage** ([#28](https://github.com/intility/erlang-oci-builder/pull/28)): The rebar3 plugin now works correctly when used as a project plugin.
+  - Added `init/1` dispatch function to `ocibuild.erl` for proper plugin initialization
+  - Fixed `get_base_image/2` to handle both binary and list base image values from config
+  - Updated README to recommend `{project_plugins, [{ocibuild, "~> 0.6"}]}` instead of `{deps, ...}`
+
+### Improvements
+
+- **Improved HTTP shutdown reliability**: Extended graceful shutdown timeout and added explicit pool termination to prevent VM hangs on exit.
+  - Pool is now explicitly stopped with `gen_server:stop/3` before supervisor shutdown
+  - Graceful shutdown timeout increased from 1 second to 3 seconds
+  - Prevents the ~10 minute delay seen in CI when HTTP connections weren't cleaning up properly
+
 ## 0.6.0 - 2026-01-02
 
 ### Breaking Changes
