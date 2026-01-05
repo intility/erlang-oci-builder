@@ -177,11 +177,18 @@ jobs:
         working-directory: test_app
         run: MIX_ENV=prod mix release
 
-      - name: Build and push OCI image
+      - name: Generate signing key
+        run: |
+          openssl ecparam -genkey -name prime256v1 -noout -out /tmp/cosign.key
+          openssl ec -in /tmp/cosign.key -pubout -out /tmp/cosign.pub
+          echo "Generated ECDSA P-256 signing key pair"
+
+      - name: Build, sign, and push OCI image
         working-directory: test_app
         env:
           OCIBUILD_PUSH_USERNAME: ${{ github.actor }}
           OCIBUILD_PUSH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          OCIBUILD_SIGN_KEY: /tmp/cosign.key
           # Use exact repository name for package (auto-links to repo, required for GITHUB_TOKEN)
           IMAGE_NAME: ${{ github.repository }}
         run: |
@@ -190,6 +197,18 @@ jobs:
             -t "${IMAGE_NAME_LOWER}:integration" \
             -d "CI workflow test image" \
             --push ghcr.io
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
+      - name: Verify image signature
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+        run: |
+          IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          echo "Verifying signature for ghcr.io/${IMAGE_NAME_LOWER}:integration"
+          cosign verify --key /tmp/cosign.pub "ghcr.io/${IMAGE_NAME_LOWER}:integration"
+          echo "Signature verification passed - safe to run container"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
