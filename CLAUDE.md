@@ -149,7 +149,22 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--no-vcs-annotations` | | Disable automatic VCS annotations            |
 | `--sbom`       |       | Export SBOM to file path (SBOM always in image)   |
 
-Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
+### Push Existing Tarball
+
+You can push a pre-built OCI tarball without rebuilding by providing a tarball path after `--push`:
+
+```bash
+# Push existing tarball (uses embedded tag)
+rebar3 ocibuild --push ghcr.io/myorg myimage.tar.gz
+mix ocibuild --push ghcr.io/myorg myimage.tar.gz
+
+# Push with tag override
+rebar3 ocibuild --push ghcr.io/myorg --tag myapp:2.0.0 myimage.tar.gz
+```
+
+This is useful for CI/CD pipelines where build and push are separate steps.
+
+Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex`
 files to support the new functionality.
 
 ## Configuration

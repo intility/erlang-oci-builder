@@ -23,6 +23,9 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
 -export([export_directory/2, save_tarball/2, save_tarball/3]).
 
+%% Load tarball for push (without rebuilding)
+-export([load_tarball_for_push/1, load_tarball_for_push/2]).
+
 %% Parallel utilities (exported for potential reuse)
 -export([pmap_bounded/3]).
 
@@ -31,11 +34,14 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
 %% Exports for testing
 -ifdef(TEST).
--export([blob_path/1, build_index/3]).
+-export([blob_path/1, build_index/3, extract_tarball/1, parse_index/1]).
 -endif.
 
 %% Default max concurrent downloads/uploads
 -define(DEFAULT_MAX_CONCURRENCY, 4).
+
+%% Memory threshold for hybrid load (100MB)
+-define(DEFAULT_MEMORY_THRESHOLD, 100 * 1024 * 1024).
 
 %% Common file permission modes
 
@@ -232,6 +238,335 @@ save_tarball_multi(Images, Path, Opts) ->
         error:Reason ->
             {error, Reason}
     end.
+
+%%%===================================================================
+%%% Load tarball for push
+%%%===================================================================
+
+-doc """
+Load an OCI image tarball for pushing to a registry.
+
+Parses the OCI Image Layout tarball and extracts all necessary data
+for pushing: manifests, configs, and layer blobs.
+
+Supports both single-image and multi-platform tarballs.
+The tag is extracted from index.json annotations if present.
+
+Uses hybrid memory/disk loading: small images (<100MB) are loaded
+into memory, larger images are extracted to a temp directory.
+
+```
+{ok, Result} = ocibuild_layout:load_tarball_for_push("myimage.tar.gz"),
+%% Result = #{
+%%     images := [loaded_image()],
+%%     tag := binary() | undefined,
+%%     is_multi_platform := boolean(),
+%%     cleanup := fun(() -> ok)
+%% }
+```
+""".
+-spec load_tarball_for_push(file:filename()) ->
+    {ok, #{
+        images := [loaded_image()],
+        tag := binary() | undefined,
+        is_multi_platform := boolean(),
+        cleanup := fun(() -> ok)
+    }}
+    | {error, term()}.
+load_tarball_for_push(Path) ->
+    load_tarball_for_push(Path, #{}).
+
+-doc """
+Load an OCI image tarball with options.
+
+Options:
+- `memory_threshold`: File size threshold for in-memory loading (default: 100MB).
+  Files smaller than this are loaded entirely into memory for speed.
+  Larger files are extracted to a temp directory for memory efficiency.
+""".
+-spec load_tarball_for_push(file:filename(), #{memory_threshold => pos_integer()}) ->
+    {ok, #{
+        images := [loaded_image()],
+        tag := binary() | undefined,
+        is_multi_platform := boolean(),
+        cleanup := fun(() -> ok)
+    }}
+    | {error, term()}.
+load_tarball_for_push(Path, Opts) ->
+    MemoryThreshold = maps:get(memory_threshold, Opts, ?DEFAULT_MEMORY_THRESHOLD),
+    case filelib:file_size(Path) of
+        0 ->
+            {error, {tarball_not_found, Path}};
+        FileSize when FileSize < MemoryThreshold ->
+            %% Small image: extract to memory (fast)
+            load_tarball_to_memory(Path);
+        _ ->
+            %% Large image: extract to temp directory (memory-efficient)
+            load_tarball_to_disk(Path)
+    end.
+
+%% Type for loaded images (ready for push)
+-type loaded_image() :: #{
+    manifest := binary(),
+    manifest_digest := binary(),
+    config := binary(),
+    config_digest := binary(),
+    layers := [#{
+        digest := binary(),
+        size := non_neg_integer(),
+        get_data := fun(() -> {ok, binary()} | {error, term()})
+    }],
+    platform => ocibuild:platform(),
+    annotations => map()
+}.
+
+%% Load tarball entirely into memory
+-spec load_tarball_to_memory(file:filename()) ->
+    {ok, #{images := [loaded_image()], tag := binary() | undefined,
+           is_multi_platform := boolean(), cleanup := fun(() -> ok)}} |
+    {error, term()}.
+load_tarball_to_memory(Path) ->
+    case erl_tar:extract(Path, [memory, compressed]) of
+        {ok, FileList} ->
+            %% Normalize paths: remove leading "./" if present
+            Files = maps:from_list([{normalize_tar_path(Name), Data} || {Name, Data} <- FileList]),
+            GetBlob = fun(Digest) ->
+                BlobPath = <<"blobs/sha256/", (ocibuild_digest:encoded(Digest))/binary>>,
+                case maps:find(BlobPath, Files) of
+                    {ok, Data} -> {ok, Data};
+                    error -> {error, {missing_blob, Digest}}
+                end
+            end,
+            parse_tarball_contents(Files, GetBlob, fun() -> ok end);
+        {error, Reason} ->
+            {error, {invalid_tarball, Reason}}
+    end.
+
+%% Normalize tar paths by removing leading "./" prefix
+-spec normalize_tar_path(string()) -> binary().
+normalize_tar_path("./" ++ Rest) ->
+    list_to_binary(Rest);
+normalize_tar_path(Path) ->
+    list_to_binary(Path).
+
+%% Load tarball to temp directory for memory efficiency
+-spec load_tarball_to_disk(file:filename()) ->
+    {ok, #{images := [loaded_image()], tag := binary() | undefined,
+           is_multi_platform := boolean(), cleanup := fun(() -> ok)}} |
+    {error, term()}.
+load_tarball_to_disk(Path) ->
+    TempDir = make_temp_dir(),
+    case erl_tar:extract(Path, [{cwd, TempDir}, compressed]) of
+        ok ->
+            GetBlob = fun(Digest) ->
+                BlobPath = filename:join([TempDir, "blobs", "sha256",
+                                          binary_to_list(ocibuild_digest:encoded(Digest))]),
+                file:read_file(BlobPath)
+            end,
+            %% Read index.json and oci-layout from disk
+            case read_disk_files(TempDir) of
+                {ok, Files} ->
+                    Cleanup = fun() -> delete_temp_dir(TempDir) end,
+                    parse_tarball_contents(Files, GetBlob, Cleanup);
+                {error, _} = Err ->
+                    delete_temp_dir(TempDir),
+                    Err
+            end;
+        {error, Reason} ->
+            delete_temp_dir(TempDir),
+            {error, {invalid_tarball, Reason}}
+    end.
+
+%% Read metadata files from disk-extracted tarball
+-spec read_disk_files(file:filename()) -> {ok, #{binary() => binary()}} | {error, term()}.
+read_disk_files(TempDir) ->
+    maybe
+        {ok, IndexJson} ?= file:read_file(filename:join(TempDir, "index.json")),
+        {ok, OciLayout} ?= file:read_file(filename:join(TempDir, "oci-layout")),
+        {ok, #{~"index.json" => IndexJson, ~"oci-layout" => OciLayout}}
+    end.
+
+%% Parse tarball contents and build loaded images
+-spec parse_tarball_contents(
+    #{binary() => binary()},
+    fun((binary()) -> {ok, binary()} | {error, term()}),
+    fun(() -> ok)
+) ->
+    {ok, #{images := [loaded_image()], tag := binary() | undefined,
+           is_multi_platform := boolean(), cleanup := fun(() -> ok)}} |
+    {error, term()}.
+parse_tarball_contents(Files, GetBlob, Cleanup) ->
+    maybe
+        %% Validate oci-layout
+        ok ?= validate_oci_layout(Files),
+        %% Parse index.json
+        {ok, Index} ?= parse_index(Files),
+        %% Extract tag from annotations
+        Tag = extract_tag_from_index(Index),
+        %% Get manifest entries
+        Manifests = maps:get(~"manifests", Index, []),
+        IsMultiPlatform = length(Manifests) > 1,
+        %% Load each image
+        {ok, Images} ?= load_images_from_manifests(Manifests, GetBlob),
+        {ok, #{
+            images => Images,
+            tag => Tag,
+            is_multi_platform => IsMultiPlatform,
+            cleanup => Cleanup
+        }}
+    else
+        {error, Reason} ->
+            Cleanup(),
+            {error, Reason}
+    end.
+
+%% Validate oci-layout file
+-spec validate_oci_layout(#{binary() => binary()}) -> ok | {error, term()}.
+validate_oci_layout(Files) ->
+    case maps:find(~"oci-layout", Files) of
+        {ok, OciLayoutJson} ->
+            case ocibuild_json:decode(OciLayoutJson) of
+                #{~"imageLayoutVersion" := ~"1.0.0"} -> ok;
+                #{~"imageLayoutVersion" := Version} -> {error, {unsupported_layout_version, Version}};
+                _ -> {error, {invalid_oci_layout, missing_version}}
+            end;
+        error ->
+            {error, {invalid_oci_layout, missing_oci_layout}}
+    end.
+
+%% Parse index.json
+-spec parse_index(#{binary() => binary()}) -> {ok, map()} | {error, term()}.
+parse_index(Files) ->
+    case maps:find(~"index.json", Files) of
+        {ok, IndexJson} ->
+            Index = ocibuild_json:decode(IndexJson),
+            {ok, Index};
+        error ->
+            {error, {invalid_oci_layout, missing_index}}
+    end.
+
+%% Extract tag from index annotations (various locations)
+-spec extract_tag_from_index(map()) -> binary() | undefined.
+extract_tag_from_index(Index) ->
+    %% Try top-level annotations first (multi-platform images)
+    case maps:find(~"annotations", Index) of
+        {ok, Annotations} ->
+            case maps:find(~"org.opencontainers.image.ref.name", Annotations) of
+                {ok, Tag} -> Tag;
+                error -> extract_tag_from_manifests(Index)
+            end;
+        error ->
+            extract_tag_from_manifests(Index)
+    end.
+
+%% Extract tag from manifest-level annotations
+-spec extract_tag_from_manifests(map()) -> binary() | undefined.
+extract_tag_from_manifests(#{~"manifests" := [#{~"annotations" := Ann} | _]}) ->
+    maps:get(~"org.opencontainers.image.ref.name", Ann, undefined);
+extract_tag_from_manifests(_) ->
+    undefined.
+
+%% Load images from manifest entries
+-spec load_images_from_manifests(
+    [map()],
+    fun((binary()) -> {ok, binary()} | {error, term()})
+) -> {ok, [loaded_image()]} | {error, term()}.
+load_images_from_manifests(ManifestEntries, GetBlob) ->
+    load_images_from_manifests(ManifestEntries, GetBlob, []).
+
+load_images_from_manifests([], _GetBlob, Acc) ->
+    {ok, lists:reverse(Acc)};
+load_images_from_manifests([Entry | Rest], GetBlob, Acc) ->
+    case load_single_image(Entry, GetBlob) of
+        {ok, Image} ->
+            load_images_from_manifests(Rest, GetBlob, [Image | Acc]);
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Load a single image from manifest entry
+-spec load_single_image(map(), fun((binary()) -> {ok, binary()} | {error, term()})) ->
+    {ok, loaded_image()} | {error, term()}.
+load_single_image(#{~"digest" := ManifestDigest} = Entry, GetBlob) ->
+    maybe
+        %% Load manifest
+        {ok, ManifestJson} ?= GetBlob(ManifestDigest),
+        Manifest = ocibuild_json:decode(ManifestJson),
+        %% Load config
+        #{~"digest" := ConfigDigest} = maps:get(~"config", Manifest),
+        {ok, ConfigJson} ?= GetBlob(ConfigDigest),
+        %% Build layer list with lazy loaders
+        ManifestLayers = maps:get(~"layers", Manifest, []),
+        Layers = [
+            #{
+                digest => LayerDigest,
+                size => Size,
+                get_data => fun() -> GetBlob(LayerDigest) end
+            }
+         || #{~"digest" := LayerDigest, ~"size" := Size} <- ManifestLayers
+        ],
+        %% Extract platform if present
+        Platform = extract_platform(Entry),
+        Annotations = maps:get(~"annotations", Manifest, #{}),
+        {ok, #{
+            manifest => ManifestJson,
+            manifest_digest => ManifestDigest,
+            config => ConfigJson,
+            config_digest => ConfigDigest,
+            layers => Layers,
+            platform => Platform,
+            annotations => Annotations
+        }}
+    end.
+
+%% Extract platform from manifest entry
+-spec extract_platform(map()) -> ocibuild:platform() | undefined.
+extract_platform(#{~"platform" := #{~"os" := Os, ~"architecture" := Arch} = P}) ->
+    Base = #{os => Os, architecture => Arch},
+    case maps:find(~"variant", P) of
+        {ok, Variant} -> Base#{variant => Variant};
+        error -> Base
+    end;
+extract_platform(_) ->
+    undefined.
+
+%% Create a temporary directory
+-spec make_temp_dir() -> file:filename().
+make_temp_dir() ->
+    TempBase = filename:join([filename:basedir(user_cache, "ocibuild"), "tmp"]),
+    ok = filelib:ensure_dir(filename:join(TempBase, "dummy")),
+    Unique = integer_to_list(erlang:unique_integer([positive])),
+    TempDir = filename:join(TempBase, "load_" ++ Unique),
+    ok = file:make_dir(TempDir),
+    TempDir.
+
+%% Delete temporary directory recursively
+-spec delete_temp_dir(file:filename()) -> ok.
+delete_temp_dir(Dir) ->
+    case file:list_dir(Dir) of
+        {ok, Files} ->
+            lists:foreach(
+                fun(File) ->
+                    Path = filename:join(Dir, File),
+                    case filelib:is_dir(Path) of
+                        true -> delete_temp_dir(Path);
+                        false -> file:delete(Path)
+                    end
+                end,
+                Files
+            ),
+            file:del_dir(Dir),
+            ok;
+        {error, _} ->
+            ok
+    end.
+
+-ifdef(TEST).
+%% Extract tarball contents (for testing)
+-spec extract_tarball(file:filename()) -> {ok, [{string(), binary()}]} | {error, term()}.
+extract_tarball(Path) ->
+    erl_tar:extract(Path, [memory, compressed]).
+-endif.
 
 %% Build manifests for each platform and collect all blob files
 %% Processes platforms in parallel for better performance

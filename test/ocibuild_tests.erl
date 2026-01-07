@@ -1106,6 +1106,133 @@ export_with_config_test(TmpDir) ->
     ?assert(filelib:is_file(filename:join(TmpDir, "index.json"))).
 
 %%%===================================================================
+%%% Load tarball for push tests
+%%%===================================================================
+
+load_tarball_for_push_test() ->
+    %% Create and save an image
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/test.txt", ~"hello world", 8#644}]),
+    Image2 = ocibuild:entrypoint(Image1, [~"/bin/sh"]),
+
+    TmpFile = make_temp_file("ocibuild_load_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image2, TmpFile, #{tag => ~"testapp:1.0.0"}),
+
+        %% Load the tarball
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+
+        %% Verify result structure
+        ?assertMatch(#{images := _, tag := _, is_multi_platform := _, cleanup := _}, Result),
+        ?assertEqual(~"testapp:1.0.0", maps:get(tag, Result)),
+        ?assertEqual(false, maps:get(is_multi_platform, Result)),
+
+        %% Verify we got one image
+        [LoadedImage] = maps:get(images, Result),
+        ?assertMatch(#{manifest := _, manifest_digest := _, config := _, config_digest := _,
+                       layers := _, annotations := _}, LoadedImage),
+
+        %% Verify layers have correct structure
+        Layers = maps:get(layers, LoadedImage),
+        ?assertEqual(1, length(Layers)),
+        [Layer] = Layers,
+        ?assertMatch(#{digest := _, size := _, get_data := _}, Layer),
+
+        %% Test blob accessor (lazy loading)
+        GetData = maps:get(get_data, Layer),
+        {ok, LayerData} = GetData(),
+        ?assert(is_binary(LayerData)),
+        ?assert(byte_size(LayerData) > 0),
+
+        %% Cleanup
+        Cleanup = maps:get(cleanup, Result),
+        ?assertEqual(ok, Cleanup())
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_tag_extraction_test() ->
+    %% Test that tag is correctly extracted from manifest annotations
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/file.txt", ~"data", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_tag_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image1, TmpFile, #{tag => ~"myregistry/myapp:v2.3.4"}),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertEqual(~"myregistry/myapp:v2.3.4", maps:get(tag, Result)),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_no_tag_test() ->
+    %% Test tarball without tag annotation (saved without tag option)
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/file.txt", ~"data", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_notag_test", ".tar.gz"),
+    try
+        %% Save without explicit tag - uses "latest"
+        ok = ocibuild:save(Image1, TmpFile),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+        %% Should get "latest" as tag
+        ?assertEqual(~"latest", maps:get(tag, Result)),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_invalid_file_test() ->
+    %% Test error handling for non-existent file
+    Result = ocibuild_layout:load_tarball_for_push("/nonexistent/path/image.tar.gz"),
+    ?assertMatch({error, {tarball_not_found, _}}, Result).
+
+load_tarball_manifest_parsing_test() ->
+    %% Test that manifest and config are correctly parsed
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/app/main", ~"#!/bin/sh\necho hello", 8#755}]),
+    Image2 = ocibuild:entrypoint(Image1, [~"/app/main"]),
+    Image3 = ocibuild:env(Image2, #{~"TEST_VAR" => ~"test_value"}),
+
+    TmpFile = make_temp_file("ocibuild_manifest_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image3, TmpFile, #{tag => ~"parsetest:1.0"}),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+        [LoadedImage] = maps:get(images, Result),
+
+        %% Verify manifest is valid JSON that can be parsed
+        ManifestJson = maps:get(manifest, LoadedImage),
+        Manifest = ocibuild_json:decode(ManifestJson),
+        ?assertMatch(#{~"schemaVersion" := 2}, Manifest),
+        ?assertMatch(#{~"layers" := _}, Manifest),
+
+        %% Verify config is valid JSON
+        ConfigJson = maps:get(config, LoadedImage),
+        Config = ocibuild_json:decode(ConfigJson),
+        ?assertMatch(#{~"architecture" := _}, Config),
+        ?assertMatch(#{~"os" := _}, Config),
+
+        %% Verify digests are correct format
+        ManifestDigest = maps:get(manifest_digest, LoadedImage),
+        ?assertMatch(<<"sha256:", _/binary>>, ManifestDigest),
+        ConfigDigest = maps:get(config_digest, LoadedImage),
+        ?assertMatch(<<"sha256:", _/binary>>, ConfigDigest),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+%%%===================================================================
 %%% Registry retry tests
 %%%===================================================================
 

@@ -122,15 +122,68 @@ init(State) ->
 -doc "Execute the provider - build OCI image from release.".
 -spec do(rebar_state:t()) -> {ok, rebar_state:t()} | {error, term()}.
 do(State) ->
-    {Args, _} = rebar_state:command_parsed_args(State),
+    {Args, Rest} = rebar_state:command_parsed_args(State),
     Config = rebar_state:get(State, ocibuild, []),
 
-    %% Get tag (required)
-    case proplists:get_value(tag, Args) of
-        undefined ->
-            {error, {?MODULE, missing_tag}};
-        Tag ->
-            do_build(State, Args, Config, list_to_binary(Tag))
+    %% Check for tarball argument (push existing image mode)
+    PushRegistry = get_push_registry(Args),
+    TarballPath = detect_tarball_arg(Rest),
+
+    case {PushRegistry, TarballPath} of
+        {undefined, _} ->
+            %% No push registry - normal build mode (tag required)
+            case proplists:get_value(tag, Args) of
+                undefined ->
+                    {error, {?MODULE, missing_tag}};
+                Tag ->
+                    do_build(State, Args, Config, list_to_binary(Tag))
+            end;
+        {_Registry, {ok, Path}} ->
+            %% Push tarball mode (standalone, no release needed)
+            do_push_tarball(State, Args, Path);
+        {_Registry, undefined} ->
+            %% Build and push mode (tag required)
+            case proplists:get_value(tag, Args) of
+                undefined ->
+                    {error, {?MODULE, missing_tag}};
+                Tag ->
+                    do_build(State, Args, Config, list_to_binary(Tag))
+            end
+    end.
+
+%% Detect tarball path from positional arguments
+-spec detect_tarball_arg([string()]) -> {ok, string()} | undefined.
+detect_tarball_arg([Path | _]) when is_list(Path) ->
+    Ext = filename:extension(Path),
+    case lists:member(Ext, [".gz", ".tar", ".tgz"]) of
+        true -> {ok, Path};
+        false -> undefined
+    end;
+detect_tarball_arg(_) ->
+    undefined.
+
+%% Push existing tarball to registry
+-spec do_push_tarball(rebar_state:t(), list(), string()) ->
+    {ok, rebar_state:t()} | {error, term()}.
+do_push_tarball(State, Args, TarballPath) ->
+    PushRegistry = get_push_registry(Args),
+    Tag = case proplists:get_value(tag, Args) of
+        undefined -> undefined;
+        T -> list_to_binary(T)
+    end,
+    ChunkSize = get_chunk_size(Args),
+
+    Opts = #{
+        registry => PushRegistry,
+        tag => Tag,
+        chunk_size => ChunkSize
+    },
+
+    case ocibuild_release:push_tarball(?MODULE, State, TarballPath, Opts) of
+        {ok, NewState} ->
+            {ok, NewState};
+        {error, Reason} ->
+            {error, {?MODULE, Reason}}
     end.
 
 -doc "Format error messages for display.".

@@ -12,6 +12,10 @@ defmodule Mix.Tasks.Ocibuild do
 
       MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 
+  Or push an existing tarball:
+
+      MIX_ENV=prod mix ocibuild --push ghcr.io/myorg myimage.tar.gz
+
   ## Options
 
     * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Defaults to release_name:version
@@ -65,7 +69,7 @@ defmodule Mix.Tasks.Ocibuild do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _remaining, _invalid} =
+    {opts, remaining, _invalid} =
       OptionParser.parse(args,
         aliases: [t: :tag, p: :push, o: :output, c: :cmd, d: :desc, P: :platform],
         switches: [
@@ -84,6 +88,61 @@ defmodule Mix.Tasks.Ocibuild do
         ]
       )
 
+    # Check for tarball argument (push existing image mode)
+    tarball_path = detect_tarball_arg(remaining)
+
+    case {opts[:push], tarball_path} do
+      {nil, _} ->
+        # No push registry - normal build mode
+        do_build(opts)
+
+      {_registry, path} when is_binary(path) ->
+        # Push tarball mode (standalone, no release needed)
+        do_push_tarball(opts, path)
+
+      {_registry, nil} ->
+        # Build and push mode
+        do_build(opts)
+    end
+  end
+
+  # Detect tarball path from positional arguments
+  defp detect_tarball_arg([path | _]) when is_binary(path) do
+    ext = Path.extname(path)
+
+    if ext in [".gz", ".tar", ".tgz"] do
+      path
+    else
+      nil
+    end
+  end
+
+  defp detect_tarball_arg(_), do: nil
+
+  # Push existing tarball to registry
+  defp do_push_tarball(opts, tarball_path) do
+    # Minimal state for adapter callbacks
+    state = %{
+      push: to_binary(opts[:push])
+    }
+
+    push_opts = %{
+      registry: to_binary(opts[:push]),
+      tag: if(opts[:tag], do: to_binary(opts[:tag]), else: nil),
+      chunk_size: get_chunk_size(opts)
+    }
+
+    case :ocibuild_release.push_tarball(:ocibuild_mix, state, to_charlist(tarball_path), push_opts) do
+      {:ok, _state} ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise(format_error(reason))
+    end
+  end
+
+  # Normal build mode
+  defp do_build(opts) do
     # Ensure the project is compiled
     Mix.Task.run("compile", [])
 
@@ -270,6 +329,9 @@ defmodule Mix.Tasks.Ocibuild do
 
   defp format_error({:nif_warning, files}),
     do: "Warning: Native code detected that may not be portable: #{inspect(files)}"
+
+  defp format_error({:no_tag_specified, msg}),
+    do: "No image tag specified: #{msg}"
 
   defp format_error(reason), do: "OCI build error: #{inspect(reason)}"
 
