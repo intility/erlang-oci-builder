@@ -1233,6 +1233,114 @@ load_tarball_manifest_parsing_test() ->
     end.
 
 %%%===================================================================
+%%% Security tests for tarball loading
+%%%===================================================================
+
+load_tarball_path_traversal_test() ->
+    %% Create a tarball with path traversal attempt
+    TmpFile = make_temp_file("ocibuild_traversal_test", ".tar.gz"),
+    try
+        %% Create tarball with malicious path using erl_tar directly
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        %% Add a file with path traversal
+        ok = erl_tar:add(Handle, <<"malicious content">>, "../../../etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Force disk mode with small threshold to test path validation
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+        ?assertMatch({error, {path_traversal, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_absolute_path_test() ->
+    %% Create a tarball with absolute path
+    TmpFile = make_temp_file("ocibuild_abspath_test", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, <<"malicious">>, "/etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Force disk mode with small threshold to test path validation
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+        ?assertMatch({error, {absolute_path, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+%% Note: Null byte validation exists in validate_tar_path/1 as defense-in-depth,
+%% but erl_tar:table/2 sanitizes paths before we see them (null bytes cause
+%% truncation or rejection). We don't have a separate test for null bytes since:
+%% 1. erl_tar provides first-line defense
+%% 2. Creating a tarball with null bytes in names requires raw binary construction
+%% 3. The validation code exists and would catch any that slip through
+
+load_tarball_empty_manifests_test() ->
+    %% Create a tarball with valid OCI layout but empty manifests
+    TmpFile = make_temp_file("ocibuild_empty_manifests", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        %% Valid oci-layout
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+        ok = erl_tar:add(Handle, OciLayout, "oci-layout", []),
+        %% Index with empty manifests array
+        Index = ocibuild_json:encode(#{~"schemaVersion" => 2, ~"manifests" => []}),
+        ok = erl_tar:add(Handle, Index, "index.json", []),
+        ok = erl_tar:close(Handle),
+
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertMatch({error, {invalid_oci_layout, no_manifests}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_invalid_schema_version_test() ->
+    %% Create a tarball with wrong schema version
+    TmpFile = make_temp_file("ocibuild_schema_test", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+        ok = erl_tar:add(Handle, OciLayout, "oci-layout", []),
+        %% Index with unsupported schema version
+        Index = ocibuild_json:encode(#{~"schemaVersion" => 999, ~"manifests" => [#{}]}),
+        ok = erl_tar:add(Handle, Index, "index.json", []),
+        ok = erl_tar:close(Handle),
+
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertMatch({error, {unsupported_index_version, 999}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_missing_schema_version_test() ->
+    %% Create a tarball without schemaVersion field
+    TmpFile = make_temp_file("ocibuild_no_schema", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+        ok = erl_tar:add(Handle, OciLayout, "oci-layout", []),
+        %% Index without schemaVersion
+        Index = ocibuild_json:encode(#{~"manifests" => [#{}]}),
+        ok = erl_tar:add(Handle, Index, "index.json", []),
+        ok = erl_tar:close(Handle),
+
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertMatch({error, {invalid_index_schema, missing_required_fields}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_not_a_file_test() ->
+    %% Test error handling when path is a directory
+    TmpDir = make_temp_dir("ocibuild_dir_test"),
+    try
+        Result = ocibuild_layout:load_tarball_for_push(TmpDir),
+        ?assertMatch({error, {not_a_file, _, directory}}, Result)
+    after
+        file:del_dir(TmpDir)
+    end.
+
+%%%===================================================================
 %%% Registry retry tests
 %%%===================================================================
 

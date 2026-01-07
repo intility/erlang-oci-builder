@@ -43,6 +43,9 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 %% Memory threshold for hybrid load (100MB)
 -define(DEFAULT_MEMORY_THRESHOLD, 100 * 1024 * 1024).
 
+%% Include for file:read_file_info/1 record
+-include_lib("kernel/include/file.hrl").
+
 %% Common file permission modes
 
 % rw-r--r-- (regular files)
@@ -294,15 +297,19 @@ Options:
     | {error, term()}.
 load_tarball_for_push(Path, Opts) ->
     MemoryThreshold = maps:get(memory_threshold, Opts, ?DEFAULT_MEMORY_THRESHOLD),
-    case filelib:file_size(Path) of
-        0 ->
-            {error, {tarball_not_found, Path}};
-        FileSize when FileSize < MemoryThreshold ->
+    case file:read_file_info(Path) of
+        {ok, #file_info{type = regular, size = FileSize}} when FileSize < MemoryThreshold ->
             %% Small image: extract to memory (fast)
             load_tarball_to_memory(Path);
-        _ ->
+        {ok, #file_info{type = regular}} ->
             %% Large image: extract to temp directory (memory-efficient)
-            load_tarball_to_disk(Path)
+            load_tarball_to_disk(Path);
+        {ok, #file_info{type = Type}} ->
+            {error, {not_a_file, Path, Type}};
+        {error, enoent} ->
+            {error, {tarball_not_found, Path}};
+        {error, Reason} ->
+            {error, {file_access_error, Path, Reason}}
     end.
 
 %% Type for loaded images (ready for push)
@@ -356,7 +363,7 @@ normalize_tar_path(Path) ->
     {error, term()}.
 load_tarball_to_disk(Path) ->
     TempDir = make_temp_dir(),
-    case erl_tar:extract(Path, [{cwd, TempDir}, compressed]) of
+    case safe_extract_tarball(Path, TempDir) of
         ok ->
             GetBlob = fun(Digest) ->
                 BlobPath = filename:join([TempDir, "blobs", "sha256",
@@ -374,7 +381,68 @@ load_tarball_to_disk(Path) ->
             end;
         {error, Reason} ->
             delete_temp_dir(TempDir),
-            {error, {invalid_tarball, Reason}}
+            {error, Reason}
+    end.
+
+%% Two-phase extraction: validate paths first, then extract (prevents path traversal)
+-spec safe_extract_tarball(file:filename(), file:filename()) -> ok | {error, term()}.
+safe_extract_tarball(TarPath, DestDir) ->
+    maybe
+        %% Phase 1: Read table of contents and validate all paths
+        {ok, Entries} ?= wrap_tar_error(erl_tar:table(TarPath, [compressed])),
+        ok ?= validate_all_paths(Entries),
+        %% Phase 2: Extract (paths already validated)
+        ok ?= wrap_tar_error(erl_tar:extract(TarPath, [{cwd, DestDir}, compressed]))
+    end.
+
+%% Wrap erl_tar errors with more descriptive tuple
+-spec wrap_tar_error(ok | {ok, term()} | {error, term()}) -> ok | {ok, term()} | {error, term()}.
+wrap_tar_error(ok) -> ok;
+wrap_tar_error({ok, _} = Ok) -> Ok;
+wrap_tar_error({error, Reason}) -> {error, {invalid_tarball, Reason}}.
+
+%% Validate all tar entry paths for safety
+-spec validate_all_paths([string() | tuple()]) -> ok | {error, term()}.
+validate_all_paths([]) -> ok;
+validate_all_paths([Entry | Rest]) ->
+    Path = case Entry of
+        %% verbose format: {Name, Type, Size, MTime, Mode, Uid, Gid}
+        {Name, _Type, _Size, _MTime, _Mode, _Uid, _Gid} -> Name;
+        Name when is_list(Name) -> Name
+    end,
+    case validate_tar_path(Path) of
+        ok -> validate_all_paths(Rest);
+        {error, _} = Err -> Err
+    end.
+
+%% Validate a single tar path for traversal attempts
+-spec validate_tar_path(string() | binary()) -> ok | {error, term()}.
+validate_tar_path(Path) when is_list(Path) ->
+    validate_tar_path(list_to_binary(Path));
+validate_tar_path(Path) ->
+    maybe
+        %% Check for null bytes (injection attack)
+        ok ?= check_no_null_bytes(Path),
+        %% Check for absolute paths
+        ok ?= check_not_absolute(Path),
+        %% Check for parent directory traversal
+        ok ?= check_no_traversal(Path)
+    end.
+
+check_no_null_bytes(Path) ->
+    case binary:match(Path, <<0>>) of
+        {_, _} -> {error, {null_byte_in_path, Path}};
+        nomatch -> ok
+    end.
+
+check_not_absolute(<<$/, _/binary>> = Path) -> {error, {absolute_path, Path}};
+check_not_absolute(_) -> ok.
+
+check_no_traversal(Path) ->
+    Components = binary:split(Path, [~"/", ~"\\"], [global]),
+    case lists:member(~"..", Components) of
+        true -> {error, {path_traversal, Path}};
+        false -> ok
     end.
 
 %% Read metadata files from disk-extracted tarball
@@ -434,16 +502,27 @@ validate_oci_layout(Files) ->
             {error, {invalid_oci_layout, missing_oci_layout}}
     end.
 
-%% Parse index.json
+%% Parse index.json with schema validation
 -spec parse_index(#{binary() => binary()}) -> {ok, map()} | {error, term()}.
 parse_index(Files) ->
     case maps:find(~"index.json", Files) of
         {ok, IndexJson} ->
             Index = ocibuild_json:decode(IndexJson),
-            {ok, Index};
+            validate_index_schema(Index);
         error ->
             {error, {invalid_oci_layout, missing_index}}
     end.
+
+%% Validate index.json schema (OCI Image Index spec)
+-spec validate_index_schema(map()) -> {ok, map()} | {error, term()}.
+validate_index_schema(#{~"schemaVersion" := 2, ~"manifests" := [_ | _]} = Index) ->
+    {ok, Index};
+validate_index_schema(#{~"schemaVersion" := 2, ~"manifests" := []}) ->
+    {error, {invalid_oci_layout, no_manifests}};
+validate_index_schema(#{~"schemaVersion" := Version}) when is_integer(Version), Version =/= 2 ->
+    {error, {unsupported_index_version, Version}};
+validate_index_schema(_) ->
+    {error, {invalid_index_schema, missing_required_fields}}.
 
 %% Extract tag from index annotations (various locations)
 -spec extract_tag_from_index(map()) -> binary() | undefined.

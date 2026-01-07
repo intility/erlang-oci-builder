@@ -1177,6 +1177,9 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
 
         %% Push
         Result = case {IsMulti, BlobsList} of
+            {_, []} ->
+                %% Defensive: should be caught earlier by validate_index_schema
+                {error, {no_images_in_tarball}};
             {true, _} ->
                 ocibuild_registry:push_blobs_multi(
                     RegistryHost, Repo, ImageTag, BlobsList, Auth, PushOpts
