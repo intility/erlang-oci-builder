@@ -39,7 +39,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ```erlang
 {deps, [
-    {ocibuild, "~> 0.7"}
+    {ocibuild, "~> 0.8"}
 ]}.
 ```
 
@@ -48,7 +48,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 ```elixir
 def deps do
   [
-    {:ocibuild, "~> 0.7"}
+    {:ocibuild, "~> 0.8"}
   ]
 end
 ```
@@ -62,7 +62,7 @@ The easiest way to use `ocibuild` with Elixir:
 ```elixir
 # mix.exs
 def deps do
-  [{:ocibuild, "~> 0.7"}]
+  [{:ocibuild, "~> 0.8"}]
 end
 
 def project do
@@ -115,7 +115,7 @@ The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
-{project_plugin, [{ocibuild, "~> 0.7"}]}.
+{project_plugin, [{ocibuild, "~> 0.8"}]}.
 
 {ocibuild, [
     {base_image, "debian:stable-slim"},
