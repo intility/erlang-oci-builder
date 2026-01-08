@@ -2342,8 +2342,6 @@ push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) w
             %% File read error - path is in the error tuple
             AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [KeyPath, KeyError]);
         {error, {invalid_pem, _} = KeyError} ->
-            %% PEM parsing errors - SignKeyPath is guaranteed to be binary here
-            %% (we only get here if is_binary(SignKeyPath) succeeded)
             AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {pem_decode_failed, _} = KeyError} ->
             AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);

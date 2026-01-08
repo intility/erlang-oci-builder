@@ -1308,12 +1308,33 @@ load_tarball_absolute_path_test() ->
         file:delete(TmpFile)
     end.
 
-%% Note: Null byte validation exists in validate_tar_path/1 as defense-in-depth,
-%% but erl_tar:table/2 sanitizes paths before we see them (null bytes cause
-%% truncation or rejection). We don't have a separate test for null bytes since:
-%% 1. erl_tar provides first-line defense
-%% 2. Creating a tarball with null bytes in names requires raw binary construction
-%% 3. The validation code exists and would catch any that slip through
+%% Note: Null byte validation exists in validate_tar_path/1 as defense-in-depth.
+%% At the time of writing, erl_tar:table/2 and erl_tar:add/4 appear to sanitize or
+%% reject paths containing null bytes before we see them, but this behavior is not
+%% documented and may change in future OTP versions.
+%% We:
+%% 1. Rely on validate_tar_path/1 as the authoritative safeguard if erl_tar behavior
+%%    changes in a future release.
+%% 2. Avoid constructing raw tar archives with null bytes in names outside of tests.
+%% 3. Document the current erl_tar behavior in load_tarball_null_byte_name_test/0
+%%    so that regressions or OTP changes are visible.
+
+load_tarball_null_byte_name_test() ->
+    %% Attempt to create a tarball entry with a null byte in the name to document
+    %% current erl_tar behavior. We do not depend on the exact error shape here,
+    %% only that such an entry is not successfully added.
+    TmpFile = make_temp_file("ocibuild_nullbyte_test", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        NameWithNull = <<"null", 0, "byte">>,
+        Result = (catch erl_tar:add(Handle, <<"content">>, NameWithNull, [])),
+        %% Regardless of whether erl_tar returns {error, _} or exits, the operation
+        %% should not succeed with 'ok'.
+        ?assert(Result =/= ok),
+        _ = (catch erl_tar:close(Handle))
+    after
+        file:delete(TmpFile)
+    end.
 
 load_tarball_symlink_test() ->
     %% Create a tarball with a symlink (potential escape vector)
@@ -1353,7 +1374,7 @@ load_tarball_hardlink_test() ->
             ok ->
                 {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
                 ok = erl_tar:add(Handle, OriginalPath, "original.txt", []),
-                ok = erl_tar:add(Handle, HardlinkPath, "hardlink.txt", [dereference]),
+                ok = erl_tar:add(Handle, HardlinkPath, "hardlink.txt", []),
                 ok = erl_tar:close(Handle),
 
                 %% Check if tar contains a hardlink entry

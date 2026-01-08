@@ -317,15 +317,16 @@ get_description(Args, Config) ->
             list_to_binary(Descr)
     end.
 
-%% @private Get tags from args (supports multiple -t flags) or config
-%% Config `tag` can be a single string or a list of strings
+%% @private Get tags as a list of binaries from args or config
+%% Args: collects all values for `tag` (supports one or many -t flags)
+%% Config: `tag` can be a single string/binary or a list of such values
 get_tags(Args, Config) ->
     case proplists:get_all_values(tag, Args) of
         [] ->
-            %% No CLI tags, check config
+            %% No CLI tags, check config (and normalize to binary list)
             normalize_tags(proplists:get_value(tag, Config, []));
         TagStrs ->
-            %% CLI tags override config
+            %% CLI tags (all -t occurrences) override config
             [list_to_binary(T) || T <- TagStrs]
     end.
 
