@@ -148,8 +148,12 @@ defmodule Ocibuild.MixRelease do
       nil ->
         [to_binary("#{release_name}:#{version}")]
 
+      # Empty list falls back to default
+      [] ->
+        [to_binary("#{release_name}:#{version}")]
+
       # List of tags (but not a charlist - charlists are lists of integers)
-      tags when is_list(tags) and (tags == [] or not is_integer(hd(tags))) ->
+      tags when is_list(tags) and not is_integer(hd(tags)) ->
         Enum.map(tags, &to_binary/1)
 
       # Single tag (binary, charlist, or other)
