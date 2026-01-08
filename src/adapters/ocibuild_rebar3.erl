@@ -36,7 +36,8 @@ Add to your `rebar.config`:
     {env, #{~"LANG" => ~"C.UTF-8"}},
     {expose, [8080]},
     {labels, #{}},
-    {description, "My awesome application"}
+    {description, "My awesome application"},
+    {tag, ["myapp:1.0.0", "myapp:latest"]}  % or a single string: "myapp:1.0.0"
 ]}.
 ```
 
@@ -129,7 +130,7 @@ do(State) ->
     PushRegistry = get_push_registry(Args),
     TarballPath = detect_tarball_arg(Rest),
 
-    Tags = get_tags(Args),
+    Tags = get_tags(Args, Config),
     case {PushRegistry, TarballPath} of
         {undefined, _} ->
             %% No push registry - normal build mode (at least one tag required)
@@ -167,8 +168,9 @@ detect_tarball_arg(_) ->
 -spec do_push_tarball(rebar_state:t(), list(), string()) ->
     {ok, rebar_state:t()} | {error, term()}.
 do_push_tarball(State, Args, TarballPath) ->
+    Config = rebar_state:get(State, ocibuild, []),
     PushRegistry = get_push_registry(Args),
-    Tags = get_tags(Args),
+    Tags = get_tags(Args, Config),
     ChunkSize = get_chunk_size(Args),
 
     Opts = #{
@@ -260,7 +262,7 @@ get_config(State) ->
         labels => proplists:get_value(labels, Config, #{}),
         cmd => ~"foreground",
         description => get_description(Args, Config),
-        tags => get_tags(Args),
+        tags => get_tags(Args, Config),
         output => get_output(Args),
         push => get_push_registry(Args),
         chunk_size => get_chunk_size(Args),
@@ -311,12 +313,38 @@ get_description(Args, Config) ->
             list_to_binary(Descr)
     end.
 
-%% @private Get tags from args (supports multiple -t flags)
-get_tags(Args) ->
+%% @private Get tags from args (supports multiple -t flags) or config
+%% Config `tag` can be a single string or a list of strings
+get_tags(Args, Config) ->
     case proplists:get_all_values(tag, Args) of
-        [] -> [];
-        TagStrs -> [list_to_binary(T) || T <- TagStrs]
+        [] ->
+            %% No CLI tags, check config
+            normalize_tags(proplists:get_value(tag, Config, []));
+        TagStrs ->
+            %% CLI tags override config
+            [list_to_binary(T) || T <- TagStrs]
     end.
+
+%% @private Normalize tags from config to binary list
+%% Handles both single tag (string) and list of tags
+normalize_tags(Tag) when is_binary(Tag) ->
+    [Tag];
+normalize_tags(Tag) when is_list(Tag) ->
+    case io_lib:char_list(Tag) of
+        true ->
+            %% Single string tag
+            [list_to_binary(Tag)];
+        false ->
+            %% List of tags
+            [normalize_tag(T) || T <- Tag]
+    end;
+normalize_tags(_) ->
+    [].
+
+%% @private Normalize a single tag to binary
+normalize_tag(T) when is_binary(T) -> T;
+normalize_tag(T) when is_list(T) -> list_to_binary(T);
+normalize_tag(T) when is_atom(T) -> atom_to_binary(T, utf8).
 
 %% @private Get output path from args
 get_output(Args) ->

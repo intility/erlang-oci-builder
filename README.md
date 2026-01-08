@@ -263,19 +263,20 @@ push:
 
 ```erlang
 {ocibuild, [
-    {base_image, "debian:stable-slim"},    % Base image (default: debian:stable-slim)
-    {workdir, "/app"},                     % Working directory in container
-    {env, #{                               % Environment variables
+    {base_image, "debian:stable-slim"},        % Base image (default: debian:stable-slim)
+    {tag, "myapp:1.0.0"},                      % Image tag - string or list
+    % {tag, ["myapp:1.0.0", "myapp:latest"]},  % Use a list for multiple tags
+    {workdir, "/app"},                         % Working directory in container
+    {env, #{                                   % Environment variables
         ~"LANG" => ~"C.UTF-8"
     }},
-    {expose, [8080, 443]},                 % Ports to expose
-    {labels, #{                            % Image labels
+    {expose, [8080, 443]},                     % Ports to expose
+    {labels, #{                                % Image labels
         ~"org.opencontainers.image.source" => ~"https://github.com/..."
     }},
-    {uid, 65534},                          % User ID (optional, defaults to 65534)
-    {description, "My application"},       % OCI manifest annotation
-    {vcs_annotations, true}                % Auto VCS annotations (default: true)
-    % Tags are specified via CLI: -t myapp:1.0.0 -t myapp:latest
+    {uid, 65534},                              % User ID (optional, defaults to 65534)
+    {description, "My application"},           % OCI manifest annotation
+    {vcs_annotations, true}                    % Auto VCS annotations (default: true)
 ]}.
 ```
 

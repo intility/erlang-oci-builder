@@ -212,6 +212,7 @@ files to support the new functionality.
 ```erlang
 {ocibuild, [
     {base_image, "debian:stable-slim"},
+    {tag, "myapp:1.0.0"},                   % String or list; or use CLI -t flags
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
