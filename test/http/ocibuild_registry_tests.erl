@@ -262,7 +262,7 @@ make_test_data(Size) ->
 
 %% 1MB test data (small, uses monolithic)
 small_blob() ->
-    make_test_data(1 * 1024 * 1024).
+    make_test_data(1024 * 1024).
 
 %% 8MB test data (larger than 5MB default chunk, uses chunked)
 large_blob() ->
