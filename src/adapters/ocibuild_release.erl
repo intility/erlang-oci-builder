@@ -2211,22 +2211,13 @@ erts_error_message() ->
 %% @private Warn about native code that may not be portable
 -spec warn_about_nifs([#{app := binary(), file := binary(), extension := binary()}]) -> ok.
 warn_about_nifs(NifFiles) ->
-    io:format(
-        standard_error,
-        "~nWarning: Native code detected that may not be portable across platforms:~n",
-        []
-    ),
-    lists:foreach(
-        fun(#{app := App, file := File}) ->
-            io:format(standard_error, "  - ~s: ~s~n", [App, File])
-        end,
-        NifFiles
-    ),
-    io:format(standard_error, "~nNIFs compiled for one architecture won't work on others.~n", []),
-    io:format(
-        standard_error,
-        "Consider using cross-compilation or Rust-based NIFs with multi-target support.~n~n",
-        []
+    NifList = [io_lib:format("  - ~s: ~s", [App, File]) || #{app := App, file := File} <- NifFiles],
+    NifListStr = lists:join("\n", NifList),
+    logger:warning(
+        "Native code detected that may not be portable across platforms:~n~s~n~n"
+        "NIFs compiled for one architecture won't work on others.~n"
+        "Consider using cross-compilation or Rust-based NIFs with multi-target support.",
+        [NifListStr]
     ),
     ok.
 
