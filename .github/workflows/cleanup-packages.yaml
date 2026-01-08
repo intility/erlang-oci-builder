@@ -17,7 +17,7 @@ jobs:
       - name: Delete old untagged versions
         uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
         with:
-          package-name: ocibuild
+          package-name: erlang-oci-builder
           package-type: container
           min-versions-to-keep: 10
           delete-only-untagged-versions: true
@@ -25,7 +25,7 @@ jobs:
       - name: Delete old CI test versions
         uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
         with:
-          package-name: ocibuild
+          package-name: erlang-oci-builder
           package-type: container
           min-versions-to-keep: 10
           # Keep release tags and integration tags
