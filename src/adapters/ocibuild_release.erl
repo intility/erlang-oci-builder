@@ -1189,7 +1189,11 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
                 FinalBlobs = maybe_update_manifest_tag(Blobs, Tag, EmbeddedTag),
                 ocibuild_registry:push_blobs(
                     RegistryHost, Repo, ImageTag, FinalBlobs, Auth, PushOpts
-                )
+                );
+            {false, _MultipleBlobsUnexpected} ->
+                %% Inconsistent state: single-platform flag but multiple images
+                {error, {invalid_tarball_layout,
+                         ~"is_multi_platform is false but tarball contains multiple images"}}
         end,
 
         clear_progress_line(),
@@ -1215,8 +1219,8 @@ convert_loaded_image_to_blobs(#{manifest := Manifest, config := Config, layers :
 
 %% Update manifest annotation if tag was overridden
 -spec maybe_update_manifest_tag(map(), binary(), binary() | undefined) -> map().
-maybe_update_manifest_tag(Blobs, NewTag, OldTag) when NewTag =:= OldTag; OldTag =:= undefined ->
-    %% No change needed
+maybe_update_manifest_tag(Blobs, NewTag, OldTag) when NewTag =:= OldTag ->
+    %% Tags match, no change needed
     Blobs;
 maybe_update_manifest_tag(#{manifest := ManifestJson} = Blobs, NewTag, _OldTag) ->
     %% Update the annotation in the manifest

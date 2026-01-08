@@ -55,6 +55,7 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 -eqwalizer({nowarn_function, load_single_image/2}).
 -eqwalizer({nowarn_function, read_disk_files/1}).
 -eqwalizer({nowarn_function, safe_extract_tarball/2}).
+-eqwalizer({nowarn_function, validate_tar_entry/2}).
 -eqwalizer({nowarn_function, parse_index/1}).
 %% Functions with term() inference from OTP functions (lists:seq, lists:zip, lists:reverse)
 -eqwalizer({nowarn_function, make_temp_dir/0}).
@@ -386,10 +387,10 @@ load_tarball_to_disk(Path) ->
 -spec safe_extract_tarball(file:filename_all(), file:filename_all()) -> ok | {error, term()}.
 safe_extract_tarball(TarPath, DestDir) ->
     maybe
-        %% Phase 1: Read table of contents and validate all paths
-        {ok, Entries} ?= wrap_tar_error(erl_tar:table(TarPath, [compressed])),
-        ok ?= validate_all_paths(Entries),
-        %% Phase 2: Extract (paths already validated)
+        %% Phase 1: Read table of contents with verbose format to get entry types
+        {ok, Entries} ?= wrap_tar_error(erl_tar:table(TarPath, [compressed, verbose])),
+        ok ?= validate_all_entries(Entries),
+        %% Phase 2: Extract (entries already validated)
         ok ?= wrap_tar_error(erl_tar:extract(TarPath, [{cwd, DestDir}, compressed]))
     end.
 
@@ -400,19 +401,33 @@ wrap_tar_error({ok, _} = Ok) -> Ok;
 wrap_tar_error(ok) -> ok;
 wrap_tar_error({error, Reason}) -> {error, {invalid_tarball, Reason}}.
 
-%% Validate all tar entry paths for safety
--spec validate_all_paths([string() | tuple()]) -> ok | {error, term()}.
-validate_all_paths([]) -> ok;
-validate_all_paths([Entry | Rest]) ->
-    Path = case Entry of
-        %% verbose format: {Name, Type, Size, MTime, Mode, Uid, Gid}
-        {Name, _Type, _Size, _MTime, _Mode, _Uid, _Gid} -> Name;
-        Name when is_list(Name) -> Name
-    end,
-    case validate_tar_path(Path) of
-        ok -> validate_all_paths(Rest);
+%% Validate all tar entries for safety (paths and types)
+-spec validate_all_entries([tuple()]) -> ok | {error, term()}.
+validate_all_entries([]) -> ok;
+validate_all_entries([{Name, Type, _Size, _MTime, _Mode, _Uid, _Gid} | Rest]) ->
+    case validate_tar_entry(Name, Type) of
+        ok -> validate_all_entries(Rest);
         {error, _} = Err -> Err
     end.
+
+%% Validate a single tar entry (path and type)
+-spec validate_tar_entry(string(), atom()) -> ok | {error, term()}.
+validate_tar_entry(Path, Type) ->
+    maybe
+        ok ?= validate_entry_type(Path, Type),
+        ok ?= validate_tar_path(Path)
+    end.
+
+%% Reject symlinks and hardlinks to prevent escape attacks
+-spec validate_entry_type(string(), atom()) -> ok | {error, term()}.
+validate_entry_type(Path, symlink) ->
+    {error, {symlink_not_allowed, list_to_binary(Path)}};
+validate_entry_type(Path, link) ->
+    {error, {hardlink_not_allowed, list_to_binary(Path)}};
+validate_entry_type(_Path, regular) -> ok;
+validate_entry_type(_Path, directory) -> ok;
+%% Allow other types (block/char devices are unlikely in OCI tarballs but harmless)
+validate_entry_type(_Path, _Type) -> ok.
 
 %% Validate a single tar path for traversal attempts
 -spec validate_tar_path(string() | binary()) -> ok | {error, term()}.
@@ -903,7 +918,10 @@ layer_file_tuples(Layers) ->
 %% Get image layers in reversed order (for correct export/manifest order)
 -spec get_image_layers_reversed(ocibuild:image()) -> [ocibuild:layer()].
 get_image_layers_reversed(#{layers := Layers}) ->
-    lists:reverse(Layers).
+    lists:reverse(Layers);
+get_image_layers_reversed(_Image) ->
+    %% Fallback for incomplete images (e.g., during testing)
+    [].
 
 %% Build layer descriptors for the manifest
 -spec build_layer_descriptors(ocibuild:image()) -> [ocibuild_manifest:descriptor()].

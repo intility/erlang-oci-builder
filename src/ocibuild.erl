@@ -51,6 +51,10 @@ memory limits.
 %% Platform utilities
 -export([parse_platform/1, parse_platforms/1]).
 
+%% Image type - use API functions to construct and modify.
+%% Note: Changed from -opaque to -type for eqWalizer compatibility.
+%% While this allows direct pattern matching, prefer using the API functions
+%% (from/1, copy/3, env/2, etc.) to ensure consistent image construction.
 -type image() ::
     #{
         base := base_ref() | none,

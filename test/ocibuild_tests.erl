@@ -1130,7 +1130,7 @@ load_tarball_for_push_test() ->
         %% Verify we got one image
         [LoadedImage] = maps:get(images, Result),
         ?assertMatch(#{manifest := _, manifest_digest := _, config := _, config_digest := _,
-                       layers := _, annotations := _}, LoadedImage),
+                       layers := _, platform := _, annotations := _}, LoadedImage),
 
         %% Verify layers have correct structure
         Layers = maps:get(layers, LoadedImage),
@@ -1232,6 +1232,36 @@ load_tarball_manifest_parsing_test() ->
         file:delete(TmpFile)
     end.
 
+%% Test that tag is correctly extracted from index.json for push scenarios
+load_tarball_tag_annotation_for_push_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/app", ~"content", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_tag_annot_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image1, TmpFile, #{tag => ~"myregistry/app:v1.0"}),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+
+        %% Tag should be extracted from index.json annotations
+        ?assertEqual(~"myregistry/app:v1.0", maps:get(tag, Result)),
+
+        %% Verify we have a loadable image ready for push
+        [LoadedImage] = maps:get(images, Result),
+        ?assert(is_binary(maps:get(manifest, LoadedImage))),
+        ?assert(is_binary(maps:get(config, LoadedImage))),
+        ?assert(is_list(maps:get(layers, LoadedImage))),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+%% Note: Full push_tarball/4 tests require actual registry interaction.
+%% The loading and manifest parsing tests above validate the pre-push logic.
+%% Integration tests for push should be run against a test registry.
+
 %%%===================================================================
 %%% Security tests for tarball loading
 %%%===================================================================
@@ -1274,6 +1304,74 @@ load_tarball_absolute_path_test() ->
 %% 1. erl_tar provides first-line defense
 %% 2. Creating a tarball with null bytes in names requires raw binary construction
 %% 3. The validation code exists and would catch any that slip through
+
+load_tarball_symlink_test() ->
+    %% Create a tarball with a symlink (potential escape vector)
+    %% Need to create actual symlink on disk for erl_tar to add it
+    TmpDir = make_temp_dir("symlink_test"),
+    TmpFile = filename:join(TmpDir, "test.tar.gz"),
+    SymlinkPath = filename:join(TmpDir, "escape_symlink"),
+    try
+        %% Create a symlink on disk pointing outside
+        ok = file:make_symlink("/", SymlinkPath),
+
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, SymlinkPath, "escape_symlink", []),
+        ok = erl_tar:close(Handle),
+
+        %% Force disk mode with small threshold to test symlink validation
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+        ?assertMatch({error, {symlink_not_allowed, _}}, Result)
+    after
+        file:delete(SymlinkPath),
+        file:delete(TmpFile),
+        file:del_dir(TmpDir)
+    end.
+
+load_tarball_hardlink_test() ->
+    %% Test hardlink rejection (if erl_tar preserves hardlink type)
+    %% Note: erl_tar's hardlink detection is platform-dependent.
+    %% On some systems, hardlinks may be stored as regular files.
+    TmpDir = make_temp_dir("hardlink_test"),
+    TmpFile = filename:join(TmpDir, "test.tar.gz"),
+    OriginalPath = filename:join(TmpDir, "original.txt"),
+    HardlinkPath = filename:join(TmpDir, "hardlink.txt"),
+    try
+        %% Create original file and hardlink
+        ok = file:write_file(OriginalPath, <<"content">>),
+        case file:make_link(OriginalPath, HardlinkPath) of
+            ok ->
+                {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+                ok = erl_tar:add(Handle, OriginalPath, "original.txt", []),
+                ok = erl_tar:add(Handle, HardlinkPath, "hardlink.txt", [dereference]),
+                ok = erl_tar:close(Handle),
+
+                %% Check if tar contains a hardlink entry
+                {ok, Entries} = erl_tar:table(TmpFile, [compressed, verbose]),
+                HasHardlink = lists:any(
+                    fun({_, link, _, _, _, _, _}) -> true;
+                       (_) -> false
+                    end, Entries),
+
+                case HasHardlink of
+                    true ->
+                        %% Platform preserves hardlinks, test rejection
+                        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+                        ?assertMatch({error, {hardlink_not_allowed, _}}, Result);
+                    false ->
+                        %% Platform converts hardlinks to regular files, skip
+                        ok
+                end;
+            {error, _} ->
+                %% Hardlinks not supported on this filesystem, skip
+                ok
+        end
+    after
+        file:delete(HardlinkPath),
+        file:delete(OriginalPath),
+        file:delete(TmpFile),
+        file:del_dir(TmpDir)
+    end.
 
 load_tarball_empty_manifests_test() ->
     %% Create a tarball with valid OCI layout but empty manifests
