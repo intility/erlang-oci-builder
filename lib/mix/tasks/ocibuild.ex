@@ -312,8 +312,13 @@ defmodule Mix.Tasks.Ocibuild do
       # Check config for tag (may be string or list)
       Keyword.has_key?(ocibuild_config, :tag) ->
         case Keyword.get(ocibuild_config, :tag) do
-          tags when is_list(tags) -> Enum.map(tags, &to_binary/1)
-          tag -> [to_binary(tag)]
+          # List of tags (but not a charlist - charlists are lists of integers)
+          tags when is_list(tags) and (tags == [] or not is_integer(hd(tags))) ->
+            Enum.map(tags, &to_binary/1)
+
+          # Single tag (binary, charlist, or other)
+          tag ->
+            [to_binary(tag)]
         end
 
       # Default to release_name:version

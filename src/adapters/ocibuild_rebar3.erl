@@ -77,6 +77,7 @@ export OCIBUILD_PULL_PASSWORD="pass"
 %% Exports for testing
 -ifdef(TEST).
 -export([find_relx_release/1, get_base_image/2, parse_rebar_lock/1]).
+-export([get_tags/2, normalize_tags/1, normalize_tag/1]).
 -endif.
 
 -define(PROVIDER, ocibuild).
@@ -329,10 +330,12 @@ get_tags(Args, Config) ->
 %% Handles both single tag (string) and list of tags
 normalize_tags(Tag) when is_binary(Tag) ->
     [Tag];
+normalize_tags([]) ->
+    [];
 normalize_tags(Tag) when is_list(Tag) ->
     case io_lib:char_list(Tag) of
         true ->
-            %% Single string tag
+            %% Single string tag (charlist)
             [list_to_binary(Tag)];
         false ->
             %% List of tags

@@ -145,9 +145,16 @@ defmodule Ocibuild.MixRelease do
 
   defp get_tags(ocibuild_config, release_name, version) do
     case Keyword.get(ocibuild_config, :tag) do
-      nil -> [to_binary("#{release_name}:#{version}")]
-      tags when is_list(tags) -> Enum.map(tags, &to_binary/1)
-      tag -> [to_binary(tag)]
+      nil ->
+        [to_binary("#{release_name}:#{version}")]
+
+      # List of tags (but not a charlist - charlists are lists of integers)
+      tags when is_list(tags) and (tags == [] or not is_integer(hd(tags))) ->
+        Enum.map(tags, &to_binary/1)
+
+      # Single tag (binary, charlist, or other)
+      tag ->
+        [to_binary(tag)]
     end
   end
 

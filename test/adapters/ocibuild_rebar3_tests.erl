@@ -165,6 +165,87 @@ parse_rebar_lock_missing_test() ->
     ?assertEqual([], Deps).
 
 %%%===================================================================
+%%% Tag normalization tests
+%%%===================================================================
+
+%% normalize_tag/1 tests
+
+normalize_tag_binary_test() ->
+    ?assertEqual(~"myapp:1.0.0", ocibuild_rebar3:normalize_tag(~"myapp:1.0.0")).
+
+normalize_tag_string_test() ->
+    ?assertEqual(~"myapp:1.0.0", ocibuild_rebar3:normalize_tag("myapp:1.0.0")).
+
+normalize_tag_atom_test() ->
+    ?assertEqual(~"myapp", ocibuild_rebar3:normalize_tag(myapp)).
+
+%% normalize_tags/1 tests
+
+normalize_tags_empty_list_test() ->
+    ?assertEqual([], ocibuild_rebar3:normalize_tags([])).
+
+normalize_tags_single_binary_test() ->
+    ?assertEqual([~"myapp:1.0.0"], ocibuild_rebar3:normalize_tags(~"myapp:1.0.0")).
+
+normalize_tags_single_string_test() ->
+    %% Single string (charlist) should be treated as one tag
+    ?assertEqual([~"myapp:1.0.0"], ocibuild_rebar3:normalize_tags("myapp:1.0.0")).
+
+normalize_tags_list_of_binaries_test() ->
+    Tags = [~"myapp:1.0.0", ~"myapp:latest"],
+    ?assertEqual([~"myapp:1.0.0", ~"myapp:latest"], ocibuild_rebar3:normalize_tags(Tags)).
+
+normalize_tags_list_of_strings_test() ->
+    Tags = ["myapp:1.0.0", "myapp:latest"],
+    ?assertEqual([~"myapp:1.0.0", ~"myapp:latest"], ocibuild_rebar3:normalize_tags(Tags)).
+
+normalize_tags_mixed_types_test() ->
+    Tags = [~"myapp:1.0.0", "myapp:latest", myapp],
+    ?assertEqual([~"myapp:1.0.0", ~"myapp:latest", ~"myapp"], ocibuild_rebar3:normalize_tags(Tags)).
+
+normalize_tags_invalid_type_test() ->
+    %% Non-list, non-binary types return empty list
+    ?assertEqual([], ocibuild_rebar3:normalize_tags(123)),
+    ?assertEqual([], ocibuild_rebar3:normalize_tags(undefined)).
+
+%% get_tags/2 tests
+
+get_tags_from_cli_single_test() ->
+    Args = [{tag, "myapp:1.0.0"}],
+    Config = [],
+    ?assertEqual([~"myapp:1.0.0"], ocibuild_rebar3:get_tags(Args, Config)).
+
+get_tags_from_cli_multiple_test() ->
+    Args = [{tag, "myapp:1.0.0"}, {tag, "myapp:latest"}],
+    Config = [],
+    ?assertEqual([~"myapp:1.0.0", ~"myapp:latest"], ocibuild_rebar3:get_tags(Args, Config)).
+
+get_tags_from_config_single_string_test() ->
+    Args = [],
+    Config = [{tag, "myapp:1.0.0"}],
+    ?assertEqual([~"myapp:1.0.0"], ocibuild_rebar3:get_tags(Args, Config)).
+
+get_tags_from_config_single_binary_test() ->
+    Args = [],
+    Config = [{tag, ~"myapp:1.0.0"}],
+    ?assertEqual([~"myapp:1.0.0"], ocibuild_rebar3:get_tags(Args, Config)).
+
+get_tags_from_config_list_test() ->
+    Args = [],
+    Config = [{tag, ["myapp:1.0.0", "myapp:latest"]}],
+    ?assertEqual([~"myapp:1.0.0", ~"myapp:latest"], ocibuild_rebar3:get_tags(Args, Config)).
+
+get_tags_cli_overrides_config_test() ->
+    Args = [{tag, "cli:tag"}],
+    Config = [{tag, "config:tag"}],
+    ?assertEqual([~"cli:tag"], ocibuild_rebar3:get_tags(Args, Config)).
+
+get_tags_empty_when_none_test() ->
+    Args = [],
+    Config = [],
+    ?assertEqual([], ocibuild_rebar3:get_tags(Args, Config)).
+
+%%%===================================================================
 %%% Helper functions
 %%%===================================================================
 
