@@ -68,6 +68,13 @@ Security features:
     stop_httpc/0
 ]).
 
+%% Exported for testing
+-ifdef(TEST).
+-export([
+    push_signature_referrer/7
+]).
+-endif.
+
 %% Public API - Multi-platform Validation
 -export([
     has_bundled_erts/1,

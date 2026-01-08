@@ -3,6 +3,7 @@
 -moduledoc "Tests for the shared release handling API (ocibuild_release)".
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 -import(ocibuild_test_helpers, [make_temp_dir/1, cleanup_temp_dir/1]).
 
@@ -1420,3 +1421,211 @@ tag_additional_all_failures_test() ->
         {~"myapp:v1.0.0", {error, {http_error, 500, "Internal Server Error"}}},
         {~"myapp:latest", {error, {http_error, 500, "Internal Server Error"}}}
     ], Result).
+
+%%%===================================================================
+%%% push_signature_referrer tests
+%%%===================================================================
+
+%% Setup for push_signature_referrer tests
+setup_signature_referrer() ->
+    %% Start required apps
+    application:ensure_all_started(inets),
+    application:ensure_all_started(ssl),
+    %% Safely unload any existing mocks
+    safe_unload_mock(ocibuild_registry),
+    %% Only mock registry - avoid mocking ocibuild_sign to prevent test leakage
+    meck:new(ocibuild_registry, [unstick, passthrough]),
+    ok.
+
+cleanup_signature_referrer(_) ->
+    safe_unload_mock(ocibuild_registry).
+
+push_signature_referrer_test_() ->
+    {foreach, fun setup_signature_referrer/0, fun cleanup_signature_referrer/1, [
+        {"push_signature_referrer no key configured", fun push_signature_referrer_no_key_test/0},
+        {"push_signature_referrer with undefined key", fun push_signature_referrer_undefined_key_test/0},
+        {"push_signature_referrer success", fun push_signature_referrer_success_test/0},
+        {"push_signature_referrer multi-platform skip", fun push_signature_referrer_multi_platform_test/0},
+        {"push_signature_referrer push failure", fun push_signature_referrer_push_failure_test/0}
+    ]}.
+
+%% Standalone tests that don't require mocking (avoid mock leakage issues)
+push_signature_referrer_error_handling_test_() ->
+    [
+        {"push_signature_referrer key load failure (nonexistent)", fun push_signature_referrer_key_load_failure_test/0}
+    ].
+
+%% Create a minimal test image with config and layers
+create_test_image() ->
+    #{
+        base => none,
+        config => #{
+            ~"architecture" => ~"amd64",
+            ~"os" => ~"linux",
+            ~"config" => #{},
+            ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []}
+        },
+        layers => [],
+        annotations => #{}
+    }.
+
+push_signature_referrer_no_key_test() ->
+    Image = create_test_image(),
+
+    %% No sign_key in opts - should return ok without doing anything
+    Result = ocibuild_release:push_signature_referrer(
+        ?MODULE,
+        Image,
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ~"v1.0.0",
+        #{token => ~"test-token"},
+        #{}  %% No sign_key
+    ),
+
+    ?assertEqual(ok, Result).
+
+push_signature_referrer_undefined_key_test() ->
+    Image = create_test_image(),
+
+    %% sign_key is undefined - should return ok without doing anything
+    Result = ocibuild_release:push_signature_referrer(
+        ?MODULE,
+        Image,
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ~"v1.0.0",
+        #{token => ~"test-token"},
+        #{sign_key => undefined}
+    ),
+
+    ?assertEqual(ok, Result).
+
+push_signature_referrer_success_test() ->
+    Image = create_test_image(),
+    KeyPath = ocibuild_test_helpers:make_temp_file("test_key", ".pem"),
+
+    try
+        %% Create a valid test key using proper record syntax
+        {_PubKey, PrivKey} = crypto:generate_key(ecdh, secp256r1),
+        ECPrivateKey = #'ECPrivateKey'{
+            version = 1,
+            privateKey = PrivKey,
+            parameters = {namedCurve, {1, 2, 840, 10045, 3, 1, 7}},
+            publicKey = asn1_NOVALUE
+        },
+        PemEntry = public_key:pem_entry_encode('ECPrivateKey', ECPrivateKey),
+        PemBin = public_key:pem_encode([PemEntry]),
+        ok = file:write_file(KeyPath, PemBin),
+
+        %% Mock push_signature to succeed
+        meck:expect(ocibuild_registry, push_signature, fun(
+            _PayloadJson, _Signature, _Registry, _Repo, _SubjectDigest, _SubjectSize, _Auth, _Opts
+        ) ->
+            ok
+        end),
+
+        %% Mock digest_to_signature_tag
+        meck:expect(ocibuild_registry, digest_to_signature_tag, fun(Digest) ->
+            case binary:split(Digest, <<":">>) of
+                [Algo, Hex] -> <<Algo/binary, "-", Hex/binary, ".sig">>;
+                _ -> <<Digest/binary, ".sig">>
+            end
+        end),
+
+        Result = ocibuild_release:push_signature_referrer(
+            ?MODULE,
+            Image,
+            ~"registry.example.io",
+            ~"myorg/myapp",
+            ~"v1.0.0",
+            #{token => ~"test-token"},
+            #{sign_key => list_to_binary(KeyPath)}
+        ),
+
+        ?assertEqual(ok, Result),
+
+        %% Verify push_signature was called
+        ?assert(meck:called(ocibuild_registry, push_signature, '_'))
+    after
+        file:delete(KeyPath)
+    end.
+
+push_signature_referrer_key_load_failure_test() ->
+    %% Test without mocking - just use a nonexistent file which will naturally fail
+    Image = create_test_image(),
+
+    %% Use a nonexistent path - the real load_key will fail with enoent
+    Result = ocibuild_release:push_signature_referrer(
+        ?MODULE,
+        Image,
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ~"v1.0.0",
+        #{token => ~"test-token"},
+        #{sign_key => ~"/nonexistent/path/to/key.pem"}
+    ),
+
+    %% Should return ok (warning logged) even when key load fails
+    ?assertEqual(ok, Result).
+
+push_signature_referrer_multi_platform_test() ->
+    %% Multi-platform images (list of multiple images) should skip signing
+    %% The function returns early without calling load_key, so no mocking needed
+    Image1 = create_test_image(),
+    Image2 = create_test_image(),
+
+    %% Don't mock load_key - just verify the function returns ok for multi-platform
+    %% (If it tried to load the key, it would fail with a file not found error)
+
+    Result = ocibuild_release:push_signature_referrer(
+        ?MODULE,
+        [Image1, Image2],  %% Multi-platform: list with more than one image
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ~"v1.0.0",
+        #{token => ~"test-token"},
+        #{sign_key => ~"/path/to/key.pem"}
+    ),
+
+    ?assertEqual(ok, Result).
+
+push_signature_referrer_push_failure_test() ->
+    Image = create_test_image(),
+    KeyPath = ocibuild_test_helpers:make_temp_file("test_key", ".pem"),
+
+    try
+        %% Create a valid test key using proper record syntax
+        {_PubKey, PrivKey} = crypto:generate_key(ecdh, secp256r1),
+        ECPrivateKey = #'ECPrivateKey'{
+            version = 1,
+            privateKey = PrivKey,
+            parameters = {namedCurve, {1, 2, 840, 10045, 3, 1, 7}},
+            publicKey = asn1_NOVALUE
+        },
+        PemEntry = public_key:pem_entry_encode('ECPrivateKey', ECPrivateKey),
+        PemBin = public_key:pem_encode([PemEntry]),
+        ok = file:write_file(KeyPath, PemBin),
+
+        %% Mock push_signature to fail
+        meck:expect(ocibuild_registry, push_signature, fun(
+            _PayloadJson, _Signature, _Registry, _Repo, _SubjectDigest, _SubjectSize, _Auth, _Opts
+        ) ->
+            {error, {http_error, 403, "Forbidden"}}
+        end),
+
+        Result = ocibuild_release:push_signature_referrer(
+            ?MODULE,
+            Image,
+            ~"registry.example.io",
+            ~"myorg/myapp",
+            ~"v1.0.0",
+            #{token => ~"test-token"},
+            #{sign_key => list_to_binary(KeyPath)}
+        ),
+
+        %% Should return ok (warning logged) even when push fails
+        ?assertEqual(ok, Result)
+    after
+        file:delete(KeyPath)
+    end.

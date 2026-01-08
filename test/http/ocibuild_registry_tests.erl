@@ -692,3 +692,168 @@ chunked_upload_416_fallback_test() ->
     Calls = lists:reverse(get(CallRef)),
     ?assertEqual([post, patch, post, put], Calls),
     ?assertEqual(ok, Result).
+
+%%%===================================================================
+%%% Signature tests
+%%%===================================================================
+
+%% Test generator for signature tests
+signature_test_() ->
+    {foreach, fun setup/0, fun cleanup/1, [
+        {"push_signature success", fun push_signature_success_test/0},
+        {"push_signature blob push failure", fun push_signature_blob_failure_test/0},
+        {"push_signature manifest push failure", fun push_signature_manifest_failure_test/0}
+    ]}.
+
+%% Non-mocked tests for helper functions
+signature_helper_test_() ->
+    [
+        {"digest_to_signature_tag sha256", fun digest_to_signature_tag_sha256_test/0},
+        {"digest_to_signature_tag sha512", fun digest_to_signature_tag_sha512_test/0},
+        {"digest_to_signature_tag fallback", fun digest_to_signature_tag_fallback_test/0}
+    ].
+
+push_signature_success_test() ->
+    PayloadJson = ~"{\"critical\":{\"type\":\"cosign container image signature\"}}",
+    Signature = <<1, 2, 3, 4, 5>>,
+    SubjectDigest = ~"sha256:abcdef1234567890",
+    SubjectSize = 1024,
+
+    %% Mock discover_auth to skip HTTP calls
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    %% Mock http_head to say blob doesn't exist
+    meck:expect(ocibuild_registry, http_head, fun(_Url, _Headers) ->
+        {error, {http_error, 404, "Not Found"}}
+    end),
+
+    %% Mock http_post for upload session
+    meck:expect(ocibuild_registry, http_post, fun(_Url, _Headers, <<>>) ->
+        {ok, <<>>, [{"location", "/v2/test/blobs/uploads/uuid-sig"}]}
+    end),
+
+    %% Mock http_put for blob upload and manifest push
+    meck:expect(ocibuild_registry, http_put, fun(Url, Headers, _Body) ->
+        case string:find(Url, "manifests/sha256-") of
+            nomatch ->
+                %% Blob upload (http_put/4 returns {ok, <<>>})
+                {ok, <<>>};
+            _ ->
+                %% Manifest push - verify content type
+                ContentType = proplists:get_value("Content-Type", Headers),
+                ?assertEqual("application/vnd.oci.image.manifest.v1+json", ContentType),
+                {ok, <<>>}
+        end
+    end),
+
+    %% Also mock http_put/4 for blob upload with timeout
+    meck:expect(ocibuild_registry, http_put, 4, fun(_Url, _Headers, _Body, _Timeout) ->
+        {ok, <<>>}
+    end),
+
+    Result = ocibuild_registry:push_signature(
+        PayloadJson, Signature,
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        SubjectDigest, SubjectSize,
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual(ok, Result).
+
+push_signature_blob_failure_test() ->
+    PayloadJson = ~"{\"critical\":{\"type\":\"cosign container image signature\"}}",
+    Signature = <<1, 2, 3, 4, 5>>,
+    SubjectDigest = ~"sha256:abcdef1234567890",
+    SubjectSize = 1024,
+
+    %% Mock discover_auth
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    %% Mock http_head to say blob doesn't exist
+    meck:expect(ocibuild_registry, http_head, fun(_Url, _Headers) ->
+        {error, {http_error, 404, "Not Found"}}
+    end),
+
+    %% Mock http_post to fail (simulating blob upload failure)
+    meck:expect(ocibuild_registry, http_post, fun(_Url, _Headers, <<>>) ->
+        {error, {http_error, 500, "Internal Server Error"}}
+    end),
+
+    Result = ocibuild_registry:push_signature(
+        PayloadJson, Signature,
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        SubjectDigest, SubjectSize,
+        #{token => ~"test-token"}
+    ),
+
+    ?assertMatch({error, {http_error, 500, _}}, Result).
+
+push_signature_manifest_failure_test() ->
+    PayloadJson = ~"{\"critical\":{\"type\":\"cosign container image signature\"}}",
+    Signature = <<1, 2, 3, 4, 5>>,
+    SubjectDigest = ~"sha256:abcdef1234567890",
+    SubjectSize = 1024,
+
+    %% Mock discover_auth
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    %% Mock http_head to say blob doesn't exist
+    meck:expect(ocibuild_registry, http_head, fun(_Url, _Headers) ->
+        {error, {http_error, 404, "Not Found"}}
+    end),
+
+    %% Mock http_post for upload session
+    meck:expect(ocibuild_registry, http_post, fun(_Url, _Headers, <<>>) ->
+        {ok, <<>>, [{"location", "/v2/test/blobs/uploads/uuid-sig"}]}
+    end),
+
+    %% Mock http_put - succeed for blob, fail for manifest
+    meck:expect(ocibuild_registry, http_put, fun(Url, _Headers, _Body) ->
+        case string:find(Url, "manifests/sha256-") of
+            nomatch -> {ok, <<>>};  % blob succeeds
+            _ -> {error, {http_error, 403, "Forbidden"}}  % manifest fails
+        end
+    end),
+
+    %% Also mock http_put/4 for blob upload
+    meck:expect(ocibuild_registry, http_put, 4, fun(_Url, _Headers, _Body, _Timeout) ->
+        {ok, <<>>}
+    end),
+
+    Result = ocibuild_registry:push_signature(
+        PayloadJson, Signature,
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        SubjectDigest, SubjectSize,
+        #{token => ~"test-token"}
+    ),
+
+    ?assertMatch({error, {http_error, 403, _}}, Result).
+
+%%%===================================================================
+%%% digest_to_signature_tag tests
+%%%===================================================================
+
+digest_to_signature_tag_sha256_test() ->
+    Digest = ~"sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+    Expected = ~"sha256-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890.sig",
+    ?assertEqual(Expected, ocibuild_registry:digest_to_signature_tag(Digest)).
+
+digest_to_signature_tag_sha512_test() ->
+    Digest = ~"sha512:abcdef1234567890",
+    Expected = ~"sha512-abcdef1234567890.sig",
+    ?assertEqual(Expected, ocibuild_registry:digest_to_signature_tag(Digest)).
+
+digest_to_signature_tag_fallback_test() ->
+    %% Invalid format without colon should just append .sig
+    Digest = ~"invalid_digest_format",
+    Expected = ~"invalid_digest_format.sig",
+    ?assertEqual(Expected, ocibuild_registry:digest_to_signature_tag(Digest)).
