@@ -857,3 +857,77 @@ digest_to_signature_tag_fallback_test() ->
     Digest = ~"invalid_digest_format",
     Expected = ~"invalid_digest_format.sig",
     ?assertEqual(Expected, ocibuild_registry:digest_to_signature_tag(Digest)).
+
+%%%===================================================================
+%%% Security tests - Error body sanitization
+%%%===================================================================
+
+%% Test that OCI-formatted errors are properly parsed
+sanitize_oci_error_format_test() ->
+    Body = ocibuild_json:encode(#{
+        ~"errors" => [
+            #{~"code" => ~"DENIED", ~"message" => ~"access denied"}
+        ]
+    }),
+    Result = ocibuild_registry:sanitize_error_body(Body),
+    Decoded = ocibuild_json:decode(Result),
+    [Error] = maps:get(~"errors", Decoded),
+    ?assertEqual(~"DENIED", maps:get(~"code", Error)),
+    ?assertEqual(~"access denied", maps:get(~"message", Error)).
+
+%% Test that simple error format is extracted
+sanitize_simple_error_test() ->
+    Body = ocibuild_json:encode(#{~"error" => ~"something went wrong"}),
+    Result = ocibuild_registry:sanitize_error_body(Body),
+    Decoded = ocibuild_json:decode(Result),
+    ?assertEqual(~"something went wrong", maps:get(~"error", Decoded)).
+
+%% Test that sensitive fields are removed from OCI errors
+sanitize_removes_extra_fields_test() ->
+    Body = ocibuild_json:encode(#{
+        ~"errors" => [
+            #{
+                ~"code" => ~"DENIED",
+                ~"message" => ~"denied",
+                ~"extra_sensitive" => ~"should be removed"
+            }
+        ]
+    }),
+    Result = ocibuild_registry:sanitize_error_body(Body),
+    Decoded = ocibuild_json:decode(Result),
+    [Error] = maps:get(~"errors", Decoded),
+    ?assertNot(maps:is_key(~"extra_sensitive", Error)).
+
+%% Test that large bodies are truncated
+sanitize_truncates_large_body_test() ->
+    LargeBody = binary:copy(~"x", 1000),
+    Result = ocibuild_registry:sanitize_error_body(LargeBody),
+    ?assert(byte_size(Result) < byte_size(LargeBody)).
+
+%% Test that Basic auth is redacted
+redact_basic_auth_test() ->
+    Input = ~"Authorization: Basic dXNlcjpwYXNzd29yZA== failed",
+    Result = ocibuild_registry:redact_sensitive(Input),
+    ?assertNot(binary:match(Result, ~"dXNlcjpwYXNzd29yZA==") =/= nomatch),
+    ?assert(binary:match(Result, ~"[REDACTED]") =/= nomatch).
+
+%% Test that Bearer tokens are redacted
+redact_bearer_token_test() ->
+    Input = ~"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
+    Result = ocibuild_registry:redact_sensitive(Input),
+    ?assertNot(binary:match(Result, ~"eyJhbGci") =/= nomatch),
+    ?assert(binary:match(Result, ~"[REDACTED]") =/= nomatch).
+
+%% Test that JSON token fields are redacted
+redact_json_token_test() ->
+    Input = ~"{\"token\":\"secret-value-here\"}",
+    Result = ocibuild_registry:redact_sensitive(Input),
+    ?assertNot(binary:match(Result, ~"secret-value-here") =/= nomatch),
+    ?assert(binary:match(Result, ~"[REDACTED]") =/= nomatch).
+
+%% Test that password fields are redacted
+redact_json_password_test() ->
+    Input = ~"{\"password\":\"mysecretpassword\"}",
+    Result = ocibuild_registry:redact_sensitive(Input),
+    ?assertNot(binary:match(Result, ~"mysecretpassword") =/= nomatch),
+    ?assert(binary:match(Result, ~"[REDACTED]") =/= nomatch).

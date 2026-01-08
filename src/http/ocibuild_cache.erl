@@ -55,26 +55,34 @@ Get a cached blob by digest.
 Returns `{ok, Data}` if the blob is found and its digest matches.
 Returns `{error, not_found}` if the blob is not in the cache.
 Returns `{error, corrupted}` if the cached blob doesn't match its digest.
+Returns `{error, {invalid_digest, Digest}}` if the digest format is invalid.
 """.
--spec get(binary()) -> {ok, binary()} | {error, not_found | corrupted}.
+-spec get(binary()) -> {ok, binary()} | {error, not_found | corrupted | {invalid_digest, binary()}}.
 get(Digest) ->
-    Path = blob_path(Digest),
-    case file:read_file(Path) of
-        {ok, Data} ->
-            %% Verify digest to protect against cache corruption
-            ActualDigest = ocibuild_digest:sha256(Data),
-            case ActualDigest =:= Digest of
-                true ->
-                    {ok, Data};
-                false ->
-                    %% Cache is corrupted, delete the bad file
-                    _ = file:delete(Path),
-                    {error, corrupted}
+    %% Validate digest format to prevent path traversal attacks.
+    %% A malicious digest like "sha256:../../etc/passwd" could escape the cache directory.
+    case validate_digest_for_path(Digest) of
+        {ok, _SafeEncoded} ->
+            Path = blob_path(Digest),
+            case file:read_file(Path) of
+                {ok, Data} ->
+                    %% Verify digest to protect against cache corruption
+                    ActualDigest = ocibuild_digest:sha256(Data),
+                    case ActualDigest =:= Digest of
+                        true ->
+                            {ok, Data};
+                        false ->
+                            %% Cache is corrupted, delete the bad file
+                            _ = file:delete(Path),
+                            {error, corrupted}
+                    end;
+                {error, enoent} ->
+                    {error, not_found};
+                {error, _} ->
+                    {error, not_found}
             end;
-        {error, enoent} ->
-            {error, not_found};
         {error, _} ->
-            {error, not_found}
+            {error, {invalid_digest, Digest}}
     end.
 
 -doc """
@@ -83,26 +91,35 @@ Store a blob in the cache.
 The blob is stored under its digest, so it can be retrieved later with `get/1`.
 The digest is computed from the data, not provided as a parameter, to ensure
 that only valid data is cached.
+
+Returns `{error, {invalid_digest, Digest}}` if the digest format is invalid.
 """.
 -spec put(binary(), binary()) -> ok | {error, term()}.
 put(Digest, Data) ->
-    Path = blob_path(Digest),
-    %% Ensure directory exists
-    ok = filelib:ensure_dir(Path),
-    %% Write atomically using a temp file + rename to prevent partial writes
-    TmpPath = Path ++ ".tmp." ++ integer_to_list(erlang:unique_integer([positive])),
-    case file:write_file(TmpPath, Data) of
-        ok ->
-            case file:rename(TmpPath, Path) of
+    %% Validate digest format to prevent path traversal attacks.
+    %% A malicious digest like "sha256:../../etc/passwd" could write to arbitrary paths.
+    case validate_digest_for_path(Digest) of
+        {ok, _SafeEncoded} ->
+            Path = blob_path(Digest),
+            %% Ensure directory exists
+            ok = filelib:ensure_dir(Path),
+            %% Write atomically using a temp file + rename to prevent partial writes
+            TmpPath = Path ++ ".tmp." ++ integer_to_list(erlang:unique_integer([positive])),
+            case file:write_file(TmpPath, Data) of
                 ok ->
-                    ok;
+                    case file:rename(TmpPath, Path) of
+                        ok ->
+                            ok;
+                        {error, Reason} ->
+                            _ = file:delete(TmpPath),
+                            {error, Reason}
+                    end;
                 {error, Reason} ->
                     _ = file:delete(TmpPath),
                     {error, Reason}
             end;
-        {error, Reason} ->
-            _ = file:delete(TmpPath),
-            {error, Reason}
+        {error, _} ->
+            {error, {invalid_digest, Digest}}
     end.
 
 -doc """
@@ -215,3 +232,29 @@ delete_dir_recursive(Dir) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+%% Validate digest format before using it to construct file paths.
+%% Prevents path traversal attacks via malicious digests like "sha256:../../etc/passwd".
+%% Valid digests must be in format "algorithm:hexstring" where hexstring contains only [0-9a-f].
+-spec validate_digest_for_path(binary()) -> {ok, binary()} | {error, term()}.
+validate_digest_for_path(Digest) when is_binary(Digest) ->
+    case binary:split(Digest, ~":") of
+        [_Algorithm, Encoded] ->
+            case is_valid_hex(Encoded) of
+                true -> {ok, Encoded};
+                false -> {error, {invalid_digest_format, Digest}}
+            end;
+        _ ->
+            {error, {invalid_digest_format, Digest}}
+    end.
+
+%% Check if a binary contains only lowercase hex characters [0-9a-f]
+-spec is_valid_hex(binary()) -> boolean().
+is_valid_hex(<<>>) -> false;  % Empty digest is invalid
+is_valid_hex(Bin) -> is_valid_hex_chars(Bin).
+
+-spec is_valid_hex_chars(binary()) -> boolean().
+is_valid_hex_chars(<<>>) -> true;
+is_valid_hex_chars(<<C, Rest/binary>>) when C >= $0, C =< $9 -> is_valid_hex_chars(Rest);
+is_valid_hex_chars(<<C, Rest/binary>>) when C >= $a, C =< $f -> is_valid_hex_chars(Rest);
+is_valid_hex_chars(_) -> false.

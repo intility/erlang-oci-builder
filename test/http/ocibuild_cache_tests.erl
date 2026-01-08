@@ -274,3 +274,48 @@ project_markers_test() ->
     ?assert(lists:member(~"rebar.config", Markers)),
     ?assert(lists:member(~"mix.exs", Markers)),
     ?assert(lists:member(~"gleam.toml", Markers)).
+
+%%%===================================================================
+%%% Security tests - Path traversal prevention
+%%%===================================================================
+
+%% Test that malicious digests with path traversal are rejected
+path_traversal_get_test_() ->
+    {foreach, fun setup/0, fun cleanup/1, [
+        {"get rejects path traversal digest", fun get_rejects_traversal_test/0},
+        {"get rejects uppercase hex in digest", fun get_rejects_uppercase_test/0},
+        {"get rejects empty encoded digest", fun get_rejects_empty_test/0}
+    ]}.
+
+path_traversal_put_test_() ->
+    {foreach, fun setup/0, fun cleanup/1, [
+        {"put rejects path traversal digest", fun put_rejects_traversal_test/0},
+        {"put rejects non-hex characters", fun put_rejects_nonhex_test/0}
+    ]}.
+
+get_rejects_traversal_test() ->
+    %% A malicious digest with path traversal components
+    MaliciousDigest = ~"sha256:../../etc/passwd",
+    ?assertMatch({error, {invalid_digest, _}}, ocibuild_cache:get(MaliciousDigest)).
+
+get_rejects_uppercase_test() ->
+    %% Uppercase hex should be rejected (OCI spec requires lowercase)
+    MaliciousDigest = ~"sha256:ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890",
+    ?assertMatch({error, {invalid_digest, _}}, ocibuild_cache:get(MaliciousDigest)).
+
+get_rejects_empty_test() ->
+    %% Empty encoded part should be rejected
+    MaliciousDigest = ~"sha256:",
+    ?assertMatch({error, {invalid_digest, _}}, ocibuild_cache:get(MaliciousDigest)).
+
+put_rejects_traversal_test() ->
+    %% A malicious digest with path traversal
+    MaliciousDigest = ~"sha256:../../../tmp/evil",
+    Data = ~"malicious data",
+    ?assertMatch({error, {invalid_digest, _}}, ocibuild_cache:put(MaliciousDigest, Data)).
+
+put_rejects_nonhex_test() ->
+    %% Non-hex characters should be rejected
+    MaliciousDigest = ~"sha256:xyz123notvalidhex",
+    Data = ~"some data",
+    ?assertMatch({error, {invalid_digest, _}}, ocibuild_cache:put(MaliciousDigest, Data)).

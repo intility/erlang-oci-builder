@@ -39,6 +39,11 @@ See: https://github.com/opencontainers/distribution-spec
 -export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
 -export([discover_auth/3]).
 
+%% Security functions - exported for testing
+-ifdef(TEST).
+-export([sanitize_error_body/1, redact_sensitive/1]).
+-endif.
+
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer | uploading.
 -type progress_info() :: #{
@@ -647,7 +652,8 @@ http_get_with_content_type(Url, Headers) ->
                                               "application/vnd.oci.image.manifest.v1+json"),
             {ok, Body, ContentType};
         {ok, {{_, Code, Reason}, _, Body}} ->
-            {error, {http_error, Code, Reason, Body}};
+            %% Sanitize error body to prevent credential leakage
+            {error, {http_error, Code, Reason, sanitize_error_body(Body)}};
         {error, Reason} ->
             {error, {request_failed, Reason}}
     end.
@@ -2818,3 +2824,66 @@ get_content_length([{Key, Value} | Rest]) ->
         _ ->
             get_content_length(Rest)
     end.
+
+%% Sanitize HTTP error bodies to prevent credential leakage in logs/errors.
+%% Registry error responses could potentially echo back credentials from requests.
+%% This function extracts only safe, structured error information.
+-spec sanitize_error_body(binary()) -> binary().
+sanitize_error_body(Body) when is_binary(Body) ->
+    %% Limit body size to prevent large payloads in error terms
+    MaxSize = 500,
+    TruncatedBody = case byte_size(Body) > MaxSize of
+        true -> <<(binary:part(Body, 0, MaxSize))/binary, "... (truncated)">>;
+        false -> Body
+    end,
+    %% Try to extract just the error message if it's JSON
+    try
+        case ocibuild_json:decode(TruncatedBody) of
+            #{~"errors" := Errors} when is_list(Errors) ->
+                %% OCI error format: {"errors": [{"code": "...", "message": "..."}]}
+                SafeErrors = [extract_safe_error(E) || E <- Errors],
+                ocibuild_json:encode(#{~"errors" => SafeErrors});
+            #{~"error" := Error} when is_binary(Error) ->
+                %% Simple error format
+                ocibuild_json:encode(#{~"error" => Error});
+            #{~"message" := Msg} when is_binary(Msg) ->
+                ocibuild_json:encode(#{~"message" => Msg});
+            _ ->
+                %% Unknown JSON structure, redact potentially sensitive content
+                redact_sensitive(TruncatedBody)
+        end
+    catch
+        _:_ ->
+            %% Not valid JSON, redact sensitive patterns
+            redact_sensitive(TruncatedBody)
+    end;
+sanitize_error_body(Other) ->
+    iolist_to_binary(io_lib:format("~p", [Other])).
+
+%% Extract safe fields from an OCI error object
+-spec extract_safe_error(map()) -> map().
+extract_safe_error(Error) when is_map(Error) ->
+    SafeFields = [~"code", ~"message", ~"detail"],
+    maps:filter(fun(K, _V) -> lists:member(K, SafeFields) end, Error);
+extract_safe_error(_) ->
+    #{}.
+
+%% Redact strings that look like credentials
+-spec redact_sensitive(binary()) -> binary().
+redact_sensitive(Bin) ->
+    %% Redact base64-encoded credentials (Authorization: Basic/Bearer patterns)
+    %% and anything that looks like a token
+    Patterns = [
+        {<<"Basic [A-Za-z0-9+/=]+">>, <<"Basic [REDACTED]">>},
+        {<<"Bearer [A-Za-z0-9._-]+">>, <<"Bearer [REDACTED]">>},
+        {<<"token\":\"[^\"]+">>, <<"token\":\"[REDACTED]">>},
+        {<<"password\":\"[^\"]+">>, <<"password\":\"[REDACTED]">>},
+        {<<"secret\":\"[^\"]+">>, <<"secret\":\"[REDACTED]">>}
+    ],
+    lists:foldl(
+        fun({Pattern, Replacement}, Acc) ->
+            re:replace(Acc, Pattern, Replacement, [global, {return, binary}])
+        end,
+        Bin,
+        Patterns
+    ).

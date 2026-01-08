@@ -5,6 +5,26 @@ Digest utilities for OCI content addressing.
 
 OCI uses SHA256 digests in the format `sha256:<hex>` to identify
 content-addressable blobs.
+
+## Security Note
+
+The `encoded/1` function extracts the hash portion from a digest WITHOUT
+validation. When using digests from untrusted sources (registry manifests,
+tarballs) to construct file paths, callers MUST validate the digest format
+first to prevent path traversal attacks.
+
+A malicious digest like `sha256:../../etc/passwd` would return `../../etc/passwd`
+from `encoded/1`, which could escape intended directories when used in file paths.
+
+Safe pattern:
+```erlang
+case validate_digest_format(Digest) of
+    {ok, _} ->
+        Path = filename:join(Dir, binary_to_list(ocibuild_digest:encoded(Digest)));
+    {error, _} ->
+        {error, invalid_digest}
+end.
+```
 """.
 
 -export([sha256/1, sha256_hex/1, from_hex/1, to_hex/1, algorithm/1, encoded/1]).
