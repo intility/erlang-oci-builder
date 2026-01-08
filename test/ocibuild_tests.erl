@@ -1106,6 +1106,395 @@ export_with_config_test(TmpDir) ->
     ?assert(filelib:is_file(filename:join(TmpDir, "index.json"))).
 
 %%%===================================================================
+%%% Load tarball for push tests
+%%%===================================================================
+
+load_tarball_for_push_test() ->
+    %% Create and save an image
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/test.txt", ~"hello world", 8#644}]),
+    Image2 = ocibuild:entrypoint(Image1, [~"/bin/sh"]),
+
+    TmpFile = make_temp_file("ocibuild_load_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image2, TmpFile, #{tag => ~"testapp:1.0.0"}),
+
+        %% Load the tarball
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+
+        %% Verify result structure
+        ?assertMatch(#{images := _, tag := _, is_multi_platform := _, cleanup := _}, Result),
+        ?assertEqual(~"testapp:1.0.0", maps:get(tag, Result)),
+        ?assertEqual(false, maps:get(is_multi_platform, Result)),
+
+        %% Verify we got one image
+        [LoadedImage] = maps:get(images, Result),
+        ?assertMatch(#{manifest := _, manifest_digest := _, config := _, config_digest := _,
+                       layers := _, platform := _, annotations := _}, LoadedImage),
+
+        %% Verify layers have correct structure
+        Layers = maps:get(layers, LoadedImage),
+        ?assertEqual(1, length(Layers)),
+        [Layer] = Layers,
+        ?assertMatch(#{digest := _, size := _, get_data := _}, Layer),
+
+        %% Test blob accessor (lazy loading)
+        GetData = maps:get(get_data, Layer),
+        {ok, LayerData} = GetData(),
+        ?assert(is_binary(LayerData)),
+        ?assert(byte_size(LayerData) > 0),
+
+        %% Cleanup
+        Cleanup = maps:get(cleanup, Result),
+        ?assertEqual(ok, Cleanup())
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_tag_extraction_test() ->
+    %% Test that tag is correctly extracted from manifest annotations
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/file.txt", ~"data", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_tag_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image1, TmpFile, #{tag => ~"myregistry/myapp:v2.3.4"}),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertEqual(~"myregistry/myapp:v2.3.4", maps:get(tag, Result)),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_no_tag_test() ->
+    %% Test tarball without tag annotation (saved without tag option)
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/file.txt", ~"data", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_notag_test", ".tar.gz"),
+    try
+        %% Save without explicit tag - uses "latest"
+        ok = ocibuild:save(Image1, TmpFile),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+        %% Should get "latest" as tag
+        ?assertEqual(~"latest", maps:get(tag, Result)),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_invalid_file_test() ->
+    %% Test error handling for non-existent file
+    Result = ocibuild_layout:load_tarball_for_push("/nonexistent/path/image.tar.gz"),
+    ?assertMatch({error, {tarball_not_found, _}}, Result).
+
+load_tarball_manifest_parsing_test() ->
+    %% Test that manifest and config are correctly parsed
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/app/main", ~"#!/bin/sh\necho hello", 8#755}]),
+    Image2 = ocibuild:entrypoint(Image1, [~"/app/main"]),
+    Image3 = ocibuild:env(Image2, #{~"TEST_VAR" => ~"test_value"}),
+
+    TmpFile = make_temp_file("ocibuild_manifest_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image3, TmpFile, #{tag => ~"parsetest:1.0"}),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+        [LoadedImage] = maps:get(images, Result),
+
+        %% Verify manifest is valid JSON that can be parsed
+        ManifestJson = maps:get(manifest, LoadedImage),
+        Manifest = ocibuild_json:decode(ManifestJson),
+        ?assertMatch(#{~"schemaVersion" := 2}, Manifest),
+        ?assertMatch(#{~"layers" := _}, Manifest),
+
+        %% Verify config is valid JSON
+        ConfigJson = maps:get(config, LoadedImage),
+        Config = ocibuild_json:decode(ConfigJson),
+        ?assertMatch(#{~"architecture" := _}, Config),
+        ?assertMatch(#{~"os" := _}, Config),
+
+        %% Verify digests are correct format
+        ManifestDigest = maps:get(manifest_digest, LoadedImage),
+        ?assertMatch(<<"sha256:", _/binary>>, ManifestDigest),
+        ConfigDigest = maps:get(config_digest, LoadedImage),
+        ?assertMatch(<<"sha256:", _/binary>>, ConfigDigest),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+%% Test that tag is correctly extracted from index.json for push scenarios
+load_tarball_tag_annotation_for_push_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/app", ~"content", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_tag_annot_test", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image1, TmpFile, #{tag => ~"myregistry/app:v1.0"}),
+
+        {ok, Result} = ocibuild_layout:load_tarball_for_push(TmpFile),
+
+        %% Tag should be extracted from index.json annotations
+        ?assertEqual(~"myregistry/app:v1.0", maps:get(tag, Result)),
+
+        %% Verify we have a loadable image ready for push
+        [LoadedImage] = maps:get(images, Result),
+        ?assert(is_binary(maps:get(manifest, LoadedImage))),
+        ?assert(is_binary(maps:get(config, LoadedImage))),
+        ?assert(is_list(maps:get(layers, LoadedImage))),
+
+        Cleanup = maps:get(cleanup, Result),
+        Cleanup()
+    after
+        file:delete(TmpFile)
+    end.
+
+%% Note: Full push_tarball/4 tests require actual registry interaction.
+%% The loading and manifest parsing tests above validate the pre-push logic.
+%% Integration tests for push should be run against a test registry.
+
+%%%===================================================================
+%%% Security tests for tarball loading
+%%%===================================================================
+
+load_tarball_path_traversal_test() ->
+    %% Create a tarball with path traversal attempt
+    TmpFile = make_temp_file("ocibuild_traversal_test", ".tar.gz"),
+    try
+        %% Create tarball with malicious path using erl_tar directly
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        %% Add a file with path traversal
+        ok = erl_tar:add(Handle, <<"malicious content">>, "../../../etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Force disk mode with small threshold to test path validation
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+        ?assertMatch({error, {path_traversal, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_absolute_path_test() ->
+    %% Create a tarball with absolute path
+    TmpFile = make_temp_file("ocibuild_abspath_test", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, <<"malicious">>, "/etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Force disk mode with small threshold to test path validation
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+        ?assertMatch({error, {absolute_path, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+%% Note: Null byte validation exists in validate_tar_path/1 as defense-in-depth,
+%% but erl_tar:table/2 sanitizes paths before we see them (null bytes cause
+%% truncation or rejection). We don't have a separate test for null bytes since:
+%% 1. erl_tar provides first-line defense
+%% 2. Creating a tarball with null bytes in names requires raw binary construction
+%% 3. The validation code exists and would catch any that slip through
+
+load_tarball_symlink_test() ->
+    %% Create a tarball with a symlink (potential escape vector)
+    %% Need to create actual symlink on disk for erl_tar to add it
+    TmpDir = make_temp_dir("symlink_test"),
+    TmpFile = filename:join(TmpDir, "test.tar.gz"),
+    SymlinkPath = filename:join(TmpDir, "escape_symlink"),
+    try
+        %% Create a symlink on disk pointing outside
+        ok = file:make_symlink("/", SymlinkPath),
+
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, SymlinkPath, "escape_symlink", []),
+        ok = erl_tar:close(Handle),
+
+        %% Force disk mode with small threshold to test symlink validation
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+        ?assertMatch({error, {symlink_not_allowed, _}}, Result)
+    after
+        file:delete(SymlinkPath),
+        file:delete(TmpFile),
+        file:del_dir(TmpDir)
+    end.
+
+load_tarball_hardlink_test() ->
+    %% Test hardlink rejection (if erl_tar preserves hardlink type)
+    %% Note: erl_tar's hardlink detection is platform-dependent.
+    %% On some systems, hardlinks may be stored as regular files.
+    TmpDir = make_temp_dir("hardlink_test"),
+    TmpFile = filename:join(TmpDir, "test.tar.gz"),
+    OriginalPath = filename:join(TmpDir, "original.txt"),
+    HardlinkPath = filename:join(TmpDir, "hardlink.txt"),
+    try
+        %% Create original file and hardlink
+        ok = file:write_file(OriginalPath, <<"content">>),
+        case file:make_link(OriginalPath, HardlinkPath) of
+            ok ->
+                {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+                ok = erl_tar:add(Handle, OriginalPath, "original.txt", []),
+                ok = erl_tar:add(Handle, HardlinkPath, "hardlink.txt", [dereference]),
+                ok = erl_tar:close(Handle),
+
+                %% Check if tar contains a hardlink entry
+                {ok, Entries} = erl_tar:table(TmpFile, [compressed, verbose]),
+                HasHardlink = lists:any(
+                    fun({_, link, _, _, _, _, _}) -> true;
+                       (_) -> false
+                    end, Entries),
+
+                case HasHardlink of
+                    true ->
+                        %% Platform preserves hardlinks, test rejection
+                        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+                        ?assertMatch({error, {hardlink_not_allowed, _}}, Result);
+                    false ->
+                        %% Platform converts hardlinks to regular files, skip
+                        ok
+                end;
+            {error, _} ->
+                %% Hardlinks not supported on this filesystem, skip
+                ok
+        end
+    after
+        file:delete(HardlinkPath),
+        file:delete(OriginalPath),
+        file:delete(TmpFile),
+        file:del_dir(TmpDir)
+    end.
+
+load_tarball_empty_manifests_test() ->
+    %% Create a tarball with valid OCI layout but empty manifests
+    TmpFile = make_temp_file("ocibuild_empty_manifests", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        %% Valid oci-layout
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+        ok = erl_tar:add(Handle, OciLayout, "oci-layout", []),
+        %% Index with empty manifests array
+        Index = ocibuild_json:encode(#{~"schemaVersion" => 2, ~"manifests" => []}),
+        ok = erl_tar:add(Handle, Index, "index.json", []),
+        ok = erl_tar:close(Handle),
+
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertMatch({error, {invalid_oci_layout, no_manifests}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_invalid_schema_version_test() ->
+    %% Create a tarball with wrong schema version
+    TmpFile = make_temp_file("ocibuild_schema_test", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+        ok = erl_tar:add(Handle, OciLayout, "oci-layout", []),
+        %% Index with unsupported schema version
+        Index = ocibuild_json:encode(#{~"schemaVersion" => 999, ~"manifests" => [#{}]}),
+        ok = erl_tar:add(Handle, Index, "index.json", []),
+        ok = erl_tar:close(Handle),
+
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertMatch({error, {unsupported_index_version, 999}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_missing_schema_version_test() ->
+    %% Create a tarball without schemaVersion field
+    TmpFile = make_temp_file("ocibuild_no_schema", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
+        ok = erl_tar:add(Handle, OciLayout, "oci-layout", []),
+        %% Index without schemaVersion
+        Index = ocibuild_json:encode(#{~"manifests" => [#{}]}),
+        ok = erl_tar:add(Handle, Index, "index.json", []),
+        ok = erl_tar:close(Handle),
+
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile),
+        ?assertMatch({error, {invalid_index_schema, missing_required_fields}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_not_a_file_test() ->
+    %% Test error handling when path is a directory
+    TmpDir = make_temp_dir("ocibuild_dir_test"),
+    try
+        Result = ocibuild_layout:load_tarball_for_push(TmpDir),
+        ?assertMatch({error, {not_a_file, _, directory}}, Result)
+    after
+        file:del_dir(TmpDir)
+    end.
+
+%%%===================================================================
+%%% Memory mode security tests
+%%% These tests verify that security validation works in memory mode
+%%% (the default for small tarballs under 100MB threshold).
+%%%===================================================================
+
+load_tarball_path_traversal_memory_mode_test() ->
+    %% Test path traversal validation in memory mode
+    TmpFile = make_temp_file("ocibuild_traversal_mem", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, <<"malicious content">>, "../../../etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Use high threshold to ensure memory mode is used
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        ?assertMatch({error, {path_traversal, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_absolute_path_memory_mode_test() ->
+    %% Test absolute path validation in memory mode
+    TmpFile = make_temp_file("ocibuild_abspath_mem", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, <<"malicious">>, "/etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Use high threshold to ensure memory mode is used
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        ?assertMatch({error, {absolute_path, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_symlink_memory_mode_test() ->
+    %% Test symlink validation in memory mode
+    TmpDir = make_temp_dir("symlink_mem_test"),
+    TmpFile = filename:join(TmpDir, "test.tar.gz"),
+    SymlinkPath = filename:join(TmpDir, "escape_symlink"),
+    try
+        ok = file:make_symlink("/", SymlinkPath),
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, SymlinkPath, "escape_symlink", []),
+        ok = erl_tar:close(Handle),
+
+        %% Use high threshold to ensure memory mode is used
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        ?assertMatch({error, {symlink_not_allowed, _}}, Result)
+    after
+        file:delete(SymlinkPath),
+        file:delete(TmpFile),
+        file:del_dir(TmpDir)
+    end.
+
+%%%===================================================================
 %%% Registry retry tests
 %%%===================================================================
 

@@ -201,6 +201,41 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 - `--cmd` options (Elixir): `start`, `start_iex`, `daemon`, `daemon_iex`
 - Multi-platform builds require `include_erts: false` and a base image with ERTS
 
+### Push Existing Tarball
+
+You can also push a pre-built OCI tarball to a registry without rebuilding. This is useful for CI/CD pipelines where build and push are separate steps:
+
+```bash
+# Push existing tarball (uses embedded tag from image)
+rebar3 ocibuild --push ghcr.io/myorg myimage.tar.gz
+mix ocibuild --push ghcr.io/myorg myimage.tar.gz
+
+# Push with tag override
+rebar3 ocibuild --push ghcr.io/myorg --tag myapp:2.0.0 myimage.tar.gz
+mix ocibuild --push ghcr.io/myorg -t myapp:2.0.0 myimage.tar.gz
+```
+
+**How it works:**
+- Provide a tarball path (`.tar.gz`, `.tar`, or `.tgz`) as a positional argument after `--push`
+- By default, the tag embedded in the tarball's `org.opencontainers.image.ref.name` annotation is used
+- Use `--tag` to override the target tag (the manifest annotation is updated to match)
+- Works in standalone mode — no release context required
+
+**Typical CI/CD workflow:**
+```yaml
+# Build stage (on runner with source code)
+build:
+  script:
+    - export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+    - mix release
+    - mix ocibuild -t myapp:$CI_COMMIT_SHA
+
+# Push stage (can be separate job/runner)
+push:
+  script:
+    - mix ocibuild --push ghcr.io/myorg myapp.tar.gz
+```
+
 ## Configuration
 
 ### rebar.config (Erlang)

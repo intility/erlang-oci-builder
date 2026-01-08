@@ -1,6 +1,10 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_release).
 -feature(maybe_expr, enable).
+
+%% eqWalizer has limited support for maybe expressions
+-eqwalizer({nowarn_function, push_tarball_impl/8}).
+
 -moduledoc """
 Shared release handling for OCI image building.
 
@@ -35,6 +39,7 @@ Security features:
 -export([
     save_image/3,
     push_image/5,
+    push_tarball/4,
     parse_tag/1,
     add_description/2
 ]).
@@ -1112,6 +1117,137 @@ push_image(Image, Registry, RepoTag, Auth, Opts) ->
     clear_progress_line(),
     %% Note: Don't stop httpc here - it may be needed for SBOM referrer push
     Result.
+
+-doc """
+Push a pre-built OCI tarball to a registry.
+
+This function loads an existing OCI image tarball and pushes it to a registry
+without rebuilding. Useful for CI/CD pipelines where build and push are
+separate steps.
+
+Options:
+- `registry` - Target registry (e.g., `<<"ghcr.io/myorg">>`)
+- `tag` - Optional tag override (uses embedded tag from tarball if not specified)
+- `chunk_size` - Chunk size for uploads in bytes
+
+Returns `{ok, AdapterState}` on success with the pushed digest printed.
+""".
+-spec push_tarball(module(), term(), file:filename(), map()) ->
+    {ok, term()} | {error, term()}.
+push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
+    Registry = maps:get(registry, Opts),
+    TagOverride = maps:get(tag, Opts, undefined),
+    ChunkSize = maps:get(chunk_size, Opts, undefined),
+
+    AdapterModule:info("Loading tarball: ~s", [TarballPath]),
+
+    case ocibuild_layout:load_tarball_for_push(TarballPath) of
+        {ok, #{images := Images, tag := EmbeddedTag, is_multi_platform := IsMulti, cleanup := Cleanup}} ->
+            %% Wrap in try-after to ensure cleanup is always called
+            try
+                push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
+                                  ChunkSize, Images, EmbeddedTag, IsMulti)
+            after
+                Cleanup()
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Internal implementation of push_tarball, separated to ensure cleanup in caller
+-spec push_tarball_impl(module(), term(), binary(), binary() | undefined,
+                        non_neg_integer() | undefined, [map()], binary() | undefined, boolean()) ->
+    {ok, term()} | {error, term()}.
+push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
+                  ChunkSize, Images, EmbeddedTag, IsMulti) ->
+    maybe
+        %% Determine tag: override takes precedence, then embedded, else error
+        Tag = case TagOverride of
+            undefined when EmbeddedTag =/= undefined -> EmbeddedTag;
+            undefined -> undefined;
+            _ -> TagOverride
+        end,
+
+        %% Validate tag is specified
+        ok ?= case Tag of
+            undefined ->
+                {error, {no_tag_specified, "Use --tag to specify image tag"}};
+            _ ->
+                ok
+        end,
+
+        %% Parse tag and registry
+        {ImageName, ImageTag} = parse_tag(Tag),
+        {RegistryHost, Namespace} = parse_push_destination(Registry),
+        Repo = case Namespace of
+            <<>> -> ImageName;
+            _ -> <<Namespace/binary, "/", ImageName/binary>>
+        end,
+
+        AdapterModule:info("Pushing to ~s/~s:~s", [RegistryHost, Repo, ImageTag]),
+
+        %% Get auth and progress
+        Auth = get_push_auth(),
+        ProgressFn = make_progress_callback(),
+        PushOpts = #{progress => ProgressFn, chunk_size => ChunkSize},
+
+        %% Convert loaded images to push_blobs_input format
+        BlobsList = [convert_loaded_image_to_blobs(Img) || Img <- Images],
+
+        %% Push
+        Result = case {IsMulti, BlobsList} of
+            {_, []} ->
+                %% Defensive: should be caught earlier by validate_index_schema
+                {error, {no_images_in_tarball}};
+            {true, _} ->
+                ocibuild_registry:push_blobs_multi(
+                    RegistryHost, Repo, ImageTag, BlobsList, Auth, PushOpts
+                );
+            {false, [Blobs]} ->
+                %% Check if tag override requires manifest update
+                FinalBlobs = maybe_update_manifest_tag(Blobs, Tag, EmbeddedTag),
+                ocibuild_registry:push_blobs(
+                    RegistryHost, Repo, ImageTag, FinalBlobs, Auth, PushOpts
+                );
+            {false, _MultipleBlobsUnexpected} ->
+                %% Inconsistent state: single-platform flag but multiple images
+                {error, {invalid_tarball_layout,
+                         ~"is_multi_platform is false but tarball contains multiple images"}}
+        end,
+
+        clear_progress_line(),
+        stop_httpc(),
+
+        {ok, Digest} ?= Result,
+        FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", ImageTag/binary>>,
+        AdapterModule:console("Pushed: ~s@~s~n", [FullRef, Digest]),
+        {ok, AdapterState}
+    else
+        {error, _} = Err -> Err
+    end.
+
+%% Convert loaded_image to push_blobs_input format
+-spec convert_loaded_image_to_blobs(map()) -> map().
+convert_loaded_image_to_blobs(#{manifest := Manifest, config := Config, layers := Layers}) ->
+    #{
+        manifest => Manifest,
+        config => Config,
+        layers => Layers
+    }.
+
+%% Update manifest annotation if tag was overridden
+-spec maybe_update_manifest_tag(map(), binary(), binary() | undefined) -> map().
+maybe_update_manifest_tag(Blobs, NewTag, OldTag) when NewTag =:= OldTag ->
+    %% Tags match, no change needed
+    Blobs;
+maybe_update_manifest_tag(#{manifest := ManifestJson} = Blobs, NewTag, _OldTag) ->
+    %% Update the annotation in the manifest
+    Manifest = ocibuild_json:decode(ManifestJson),
+    OldAnnotations = maps:get(~"annotations", Manifest, #{}),
+    NewAnnotations = OldAnnotations#{~"org.opencontainers.image.ref.name" => NewTag},
+    UpdatedManifest = Manifest#{~"annotations" => NewAnnotations},
+    UpdatedManifestJson = ocibuild_json:encode(UpdatedManifest),
+    Blobs#{manifest => UpdatedManifestJson}.
 
 -doc """
 Parse a tag into repository and tag parts.

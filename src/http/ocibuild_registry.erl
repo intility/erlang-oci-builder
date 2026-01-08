@@ -15,6 +15,8 @@ See: https://github.com/opencontainers/distribution-spec
     pull_blob/3, pull_blob/4, pull_blob/5,
     push/5, push/6,
     push_multi/6,
+    push_blobs/5, push_blobs/6,
+    push_blobs_multi/5, push_blobs_multi/6,
     push_referrer/7, push_referrer/8,
     check_blob_exists/4,
     stop_httpc/0
@@ -567,6 +569,217 @@ push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
             {ok, IndexDigest};
         {error, _} = Err ->
             Err
+    end.
+
+%%%===================================================================
+%%% Push pre-built blobs (for pushing existing tarballs)
+%%%===================================================================
+
+%% Type for push_blobs input
+-type push_blobs_input() :: #{
+    manifest := binary(),
+    config := binary(),
+    layers := [#{
+        digest := binary(),
+        size := non_neg_integer(),
+        get_data := fun(() -> {ok, binary()} | {error, term()})
+    }]
+}.
+
+-doc """
+Push a pre-built image from raw blobs to a registry.
+
+This function is used to push images loaded from tarballs without
+rebuilding. It reuses all existing push infrastructure (authentication,
+progress callbacks, chunked uploads, etc.).
+
+Blobs contains:
+- manifest: Raw manifest JSON
+- config: Raw config JSON
+- layers: List of layer info with lazy `get_data` functions
+
+Returns the manifest digest on success.
+""".
+-spec push_blobs(binary(), binary(), binary(), push_blobs_input(), map()) ->
+    {ok, Digest :: binary()} | {error, term()}.
+push_blobs(Registry, Repo, Tag, Blobs, Auth) ->
+    push_blobs(Registry, Repo, Tag, Blobs, Auth, #{}).
+
+-spec push_blobs(binary(), binary(), binary(), push_blobs_input(), map(), push_opts()) ->
+    {ok, Digest :: binary()} | {error, term()}.
+push_blobs(Registry, Repo, Tag, Blobs, Auth, Opts) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+    ConfigData = maps:get(config, Blobs),
+    ConfigDigest = ocibuild_digest:sha256(ConfigData),
+    ManifestData = maps:get(manifest, Blobs),
+
+    maybe
+        {ok, Token} ?= get_auth_token(Registry, NormalizedRepo, Auth),
+        ok ?= push_blob_list(maps:get(layers, Blobs), BaseUrl, NormalizedRepo, Token, Opts),
+        ok ?= push_blob(BaseUrl, NormalizedRepo, ConfigDigest, ConfigData, Token),
+        push_manifest_raw(ManifestData, BaseUrl, NormalizedRepo, Tag, Token)
+    end.
+
+-doc """
+Push multiple pre-built images as a multi-platform image.
+
+Each image in the list should have platform information.
+Creates an image index referencing all platform manifests.
+""".
+-spec push_blobs_multi(binary(), binary(), binary(), [push_blobs_input()], map()) ->
+    {ok, Digest :: binary()} | {error, term()}.
+push_blobs_multi(Registry, Repo, Tag, BlobsList, Auth) ->
+    push_blobs_multi(Registry, Repo, Tag, BlobsList, Auth, #{}).
+
+-spec push_blobs_multi(binary(), binary(), binary(), [push_blobs_input()], map(), push_opts()) ->
+    {ok, Digest :: binary()} | {error, term()}.
+push_blobs_multi(_Registry, _Repo, _Tag, [], _Auth, _Opts) ->
+    {error, no_images_to_push};
+push_blobs_multi(Registry, Repo, Tag, BlobsList, Auth, Opts) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+
+    maybe
+        {ok, Token} ?= get_auth_token(Registry, NormalizedRepo, Auth),
+        {ok, ManifestDescriptors} ?= push_blobs_platforms(BlobsList, BaseUrl, NormalizedRepo, Token, Opts),
+        push_image_index(BaseUrl, NormalizedRepo, Tag, Token, ManifestDescriptors)
+    end.
+
+%% Push all platform images and collect manifest descriptors
+-spec push_blobs_platforms([push_blobs_input()], string(), binary(), term(), push_opts()) ->
+    {ok, [{ocibuild:platform(), binary(), non_neg_integer()}]} | {error, term()}.
+push_blobs_platforms(BlobsList, BaseUrl, Repo, Token, Opts) ->
+    PushFn = fun(Blobs) ->
+        push_single_blobs_platform(Blobs, BaseUrl, Repo, Token, Opts)
+    end,
+    try
+        Results = ocibuild_http:pmap(PushFn, BlobsList, ?MAX_CONCURRENT_UPLOADS),
+        {ok, Results}
+    catch
+        error:{platform_push_failed, Reason} ->
+            {error, Reason}
+    end.
+
+%% Push a single platform's blobs and return descriptor
+-spec push_single_blobs_platform(push_blobs_input(), string(), binary(), term(), push_opts()) ->
+    {ocibuild:platform(), binary(), non_neg_integer()}.
+push_single_blobs_platform(Blobs, BaseUrl, Repo, Token, Opts) ->
+    ManifestData = maps:get(manifest, Blobs),
+    ConfigData = maps:get(config, Blobs),
+    ConfigDigest = ocibuild_digest:sha256(ConfigData),
+
+    %% Extract platform from config
+    Config = ocibuild_json:decode(ConfigData),
+    Platform = #{
+        os => maps:get(~"os", Config, ~"linux"),
+        architecture => maps:get(~"architecture", Config, ~"amd64")
+    },
+
+    %% Push layers
+    case push_blob_list(maps:get(layers, Blobs), BaseUrl, Repo, Token, Opts) of
+        ok ->
+            %% Push config
+            case push_blob(BaseUrl, Repo, ConfigDigest, ConfigData, Token) of
+                ok ->
+                    %% Push manifest by digest
+                    ManifestDigest = ocibuild_digest:sha256(ManifestData),
+                    ManifestSize = byte_size(ManifestData),
+                    Url = io_lib:format(
+                        "~s/v2/~s/manifests/~s",
+                        [BaseUrl, binary_to_list(Repo), binary_to_list(ManifestDigest)]
+                    ),
+                    Headers =
+                        auth_headers(Token) ++
+                            [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+                    case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestData) of
+                        {ok, _} ->
+                            {Platform, ManifestDigest, ManifestSize};
+                        {error, Err} ->
+                            error({platform_push_failed, {manifest_failed, Platform, Err}})
+                    end;
+                {error, Err} ->
+                    error({platform_push_failed, {config_failed, Platform, Err}})
+            end;
+        {error, Err} ->
+            error({platform_push_failed, {layers_failed, Platform, Err}})
+    end.
+
+%% Push a list of layers with lazy loading
+-spec push_blob_list(
+    [#{digest := binary(), size := non_neg_integer(),
+       get_data := fun(() -> {ok, binary()} | {error, term()})}],
+    string(), binary(), term(), push_opts()
+) -> ok | {error, term()}.
+push_blob_list([], _BaseUrl, _Repo, _Token, _Opts) ->
+    ok;
+push_blob_list(Layers, BaseUrl, Repo, Token, Opts) ->
+    TotalLayers = length(Layers),
+    IndexedLayers = lists:zip(lists:seq(1, TotalLayers), Layers),
+
+    PushFn = fun({Index, #{digest := Digest, size := _Size, get_data := GetData}}) ->
+        %% Check if blob already exists
+        case blob_exists_with_token(BaseUrl, Repo, Digest, Token) of
+            true ->
+                ok;
+            false ->
+                %% Load data lazily and push
+                case GetData() of
+                    {ok, Data} ->
+                        LayerOpts = Opts#{
+                            layer_index => Index,
+                            total_layers => TotalLayers
+                        },
+                        case push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts) of
+                            ok -> ok;
+                            {error, _} = Err -> error(Err)
+                        end;
+                    {error, _} = Err ->
+                        error(Err)
+                end
+        end
+    end,
+
+    try
+        %% Push layers in parallel
+        _ = ocibuild_http:pmap(PushFn, IndexedLayers, ?MAX_CONCURRENT_UPLOADS),
+        ok
+    catch
+        error:{error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Push raw manifest JSON to registry
+-spec push_manifest_raw(binary(), string(), binary(), binary(), term()) ->
+    {ok, Digest :: binary()} | {error, term()}.
+push_manifest_raw(ManifestData, BaseUrl, Repo, Tag, Token) ->
+    ManifestDigest = ocibuild_digest:sha256(ManifestData),
+    Url = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
+    ),
+    Headers =
+        auth_headers(Token) ++
+            [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+
+    case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestData) of
+        {ok, _} ->
+            {ok, ManifestDigest};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Check if blob exists (internal - uses pre-authenticated token)
+-spec blob_exists_with_token(string(), binary(), binary(), term()) -> boolean().
+blob_exists_with_token(BaseUrl, Repo, Digest, Token) ->
+    Url = io_lib:format(
+        "~s/v2/~s/blobs/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+    ),
+    Headers = auth_headers(Token),
+    case ?MODULE:http_head(lists:flatten(Url), Headers) of
+        {ok, _} -> true;
+        {error, _} -> false
     end.
 
 %%%===================================================================

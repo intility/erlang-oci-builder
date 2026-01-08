@@ -12,19 +12,25 @@ See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 -export([build/2, build/3]).
 -export([media_type/0, config_media_type/0, layer_media_type/0, layer_media_type/1]).
 
+%% OCI descriptor type (keys: mediaType, digest, size, annotations)
+%% Note: Using binary() keys for eqWalizer compatibility (doesn't support ~"literal" in specs)
+%% Actual keys: ~"mediaType" (binary), ~"digest" (binary), ~"size" (non_neg_integer)
 -type descriptor() ::
     #{
-        mediaType := binary(),
-        digest := binary(),
-        size := non_neg_integer()
+        binary() := binary() | non_neg_integer()
     }.
+
+%% OCI manifest type (keys: schemaVersion, mediaType, config, layers, annotations)
+%% Note: Using binary() keys for eqWalizer compatibility
+%% Actual structure:
+%%   ~"schemaVersion" => 2
+%%   ~"mediaType" => binary()
+%%   ~"config" => descriptor()
+%%   ~"layers" => [descriptor()]
+%%   ~"annotations" => map() (optional)
 -type manifest() ::
     #{
-        schemaVersion := integer(),
-        mediaType := binary(),
-        config := descriptor(),
-        layers := [descriptor()],
-        annotations => map()
+        binary() := integer() | binary() | descriptor() | [descriptor()] | map()
     }.
 
 -export_type([manifest/0, descriptor/0]).

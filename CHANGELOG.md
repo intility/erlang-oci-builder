@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 - 2026-01-07
+
+### Features
+
+- **Push existing OCI tarballs**: 
+  - Push pre-built OCI tarballs to registries without rebuilding.
+  - Works with both single-platform and multi-platform images
+  - Tag extracted from `org.opencontainers.image.ref.name` annotation by default
+  - Use `--tag` to override; manifest annotation is updated to match
+  - Hybrid loading: small images (<100MB) loaded to memory, larger images extracted to temp directory
+
+### New Functions
+
+- `ocibuild_layout:load_tarball_for_push/1,2` - Load OCI tarball for pushing without rebuilding
+- `ocibuild_registry:push_blobs/6` - Push pre-loaded blobs to registry
+- `ocibuild_registry:push_blobs_multi/6` - Push pre-loaded multi-platform blobs with index
+
 ## 0.6.1 - 2026-01-05
 
 ### Bugfixes
