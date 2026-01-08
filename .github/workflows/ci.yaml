@@ -204,8 +204,8 @@ jobs:
           IMAGE_NAME: ${{ github.repository }}
         run: |
           IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
-          docker pull "ghcr.io/${IMAGE_NAME_LOWER}:integration"
-          docker images "ghcr.io/${IMAGE_NAME_LOWER}:integration"
+          docker pull "ghcr.io/${IMAGE_NAME_LOWER}:${{ github.sha }}"
+          docker images "ghcr.io/${IMAGE_NAME_LOWER}:${{ github.sha }}"
 
       - name: Run container
         working-directory: test_app
@@ -220,7 +220,7 @@ jobs:
             -e SECRET_KEY_BASE="$(mix phx.gen.secret)" \
             -e PHX_HOST=localhost \
             -e PHX_SERVER=true \
-            "ghcr.io/${IMAGE_NAME_LOWER}:integration"
+            "ghcr.io/${IMAGE_NAME_LOWER}:${{ github.sha }}"
 
           # Wait for app to start
           sleep 5
@@ -238,25 +238,36 @@ jobs:
           # Cleanup
           docker stop test-app
 
-      - name: Delete test image from GHCR
+      - name: Delete test tag from GHCR
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ github.repository }}
         run: |
-          # Get package name (repo name, lowercase)
-          PACKAGE_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
 
-          # Find version ID for the integration tag
-          VERSION_ID=$(gh api \
-            "/orgs/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions" \
-            --jq '.[] | select(.metadata.container.tags | index("integration")) | .id' \
-            2>/dev/null || echo "")
+          # Get a token for the registry API
+          TOKEN=$(echo "$GH_TOKEN" | base64)
+          AUTH_RESP=$(curl -s "https://ghcr.io/token?scope=repository:${IMAGE_NAME_LOWER}:delete" \
+            -H "Authorization: Basic ${TOKEN}")
+          REGISTRY_TOKEN=$(echo "$AUTH_RESP" | jq -r '.token // empty')
 
-          if [ -n "$VERSION_ID" ]; then
-            echo "Deleting package version $VERSION_ID (tag: integration)"
-            gh api --method DELETE \
-              "/orgs/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions/${VERSION_ID}" \
-              || echo "Failed to delete package (may require admin permissions)"
+          if [ -z "$REGISTRY_TOKEN" ]; then
+            echo "Failed to get registry token, skipping cleanup"
+            exit 0
+          fi
+
+          # Delete the SHA tag via OCI distribution API
+          echo "Deleting tag ${{ github.sha }} from ghcr.io/${IMAGE_NAME_LOWER}"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X DELETE \
+            -H "Authorization: Bearer ${REGISTRY_TOKEN}" \
+            "https://ghcr.io/v2/${IMAGE_NAME_LOWER}/manifests/${{ github.sha }}")
+
+          if [ "$HTTP_CODE" = "202" ] || [ "$HTTP_CODE" = "200" ]; then
+            echo "Successfully deleted tag"
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "Tag not found (may have already been deleted)"
           else
-            echo "No integration image found to delete"
+            echo "Failed to delete tag (HTTP $HTTP_CODE) - may require additional permissions"
           fi
