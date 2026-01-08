@@ -1,6 +1,10 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_release).
 -feature(maybe_expr, enable).
+
+%% eqWalizer has limited support for maybe expressions
+-eqwalizer({nowarn_function, push_tarball_impl/8}).
+
 -moduledoc """
 Shared release handling for OCI image building.
 
@@ -1137,10 +1141,26 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
 
     AdapterModule:info("Loading tarball: ~s", [TarballPath]),
 
-    maybe
-        {ok, #{images := Images, tag := EmbeddedTag, is_multi_platform := IsMulti, cleanup := Cleanup}} ?=
-            ocibuild_layout:load_tarball_for_push(TarballPath),
+    case ocibuild_layout:load_tarball_for_push(TarballPath) of
+        {ok, #{images := Images, tag := EmbeddedTag, is_multi_platform := IsMulti, cleanup := Cleanup}} ->
+            %% Wrap in try-after to ensure cleanup is always called
+            try
+                push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
+                                  ChunkSize, Images, EmbeddedTag, IsMulti)
+            after
+                Cleanup()
+            end;
+        {error, _} = Err ->
+            Err
+    end.
 
+%% Internal implementation of push_tarball, separated to ensure cleanup in caller
+-spec push_tarball_impl(module(), term(), binary(), binary() | undefined,
+                        non_neg_integer() | undefined, [map()], binary() | undefined, boolean()) ->
+    {ok, term()} | {error, term()}.
+push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
+                  ChunkSize, Images, EmbeddedTag, IsMulti) ->
+    maybe
         %% Determine tag: override takes precedence, then embedded, else error
         Tag = case TagOverride of
             undefined when EmbeddedTag =/= undefined -> EmbeddedTag;
@@ -1151,7 +1171,6 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
         %% Validate tag is specified
         ok ?= case Tag of
             undefined ->
-                Cleanup(),
                 {error, {no_tag_specified, "Use --tag to specify image tag"}};
             _ ->
                 ok
@@ -1198,7 +1217,6 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
 
         clear_progress_line(),
         stop_httpc(),
-        Cleanup(),
 
         {ok, Digest} ?= Result,
         FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", ImageTag/binary>>,
