@@ -14,17 +14,11 @@ See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 
 -type descriptor() ::
     #{
-        mediaType := binary(),
-        digest := binary(),
-        size := non_neg_integer()
+        binary() := binary() | non_neg_integer()
     }.
 -type manifest() ::
     #{
-        schemaVersion := integer(),
-        mediaType := binary(),
-        config := descriptor(),
-        layers := [descriptor()],
-        annotations => map()
+        binary() := integer() | binary() | descriptor() | [descriptor()] | map()
     }.
 
 -export_type([manifest/0, descriptor/0]).

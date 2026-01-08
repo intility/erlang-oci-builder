@@ -31,6 +31,33 @@ rebar3 fmt -w
 
 - Always use the `~` sigil for binary literals.
 - Always prefer markdown style docs for docstrings.
+- **Prefer `maybe` expressions** over nested `case` statements for sequential fallible operations.
+
+### Maybe Expressions and eqWalizer
+
+eqWalizer has [limited support for `maybe` expressions](https://github.com/WhatsApp/eqwalizer/issues/55) and produces false-positive type errors. When writing functions that use `maybe`:
+
+1. Add `-feature(maybe_expr, enable).` at the top of the module (after `-module`).
+2. Add `-eqwalizer({nowarn_function, function_name/arity}).` for each function using `maybe`.
+
+Example:
+```erlang
+-module(mymodule).
+-feature(maybe_expr, enable).
+
+%% eqWalizer has limited support for maybe expressions
+-eqwalizer({nowarn_function, my_function/1}).
+
+-spec my_function(map()) -> {ok, term()} | {error, term()}.
+my_function(Input) ->
+    maybe
+        {ok, A} ?= step_one(Input),
+        {ok, B} ?= step_two(A),
+        {ok, B}
+    end.
+```
+
+See `src/oci/ocibuild_layout.erl` for examples of this pattern.
 
 ## Architecture
 

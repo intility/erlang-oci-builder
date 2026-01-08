@@ -51,7 +51,7 @@ memory limits.
 %% Platform utilities
 -export([parse_platform/1, parse_platforms/1]).
 
--opaque image() ::
+-type image() ::
     #{
         base := base_ref() | none,
         base_manifest => map(),

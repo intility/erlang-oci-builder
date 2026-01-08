@@ -1,5 +1,9 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_layout).
+
+%% Enable maybe expressions (OTP 25+, default in OTP 27)
+-feature(maybe_expr, enable).
+
 -moduledoc """
 OCI image layout handling.
 
@@ -46,6 +50,24 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 %% Include for file:read_file_info/1 record
 -include_lib("kernel/include/file.hrl").
 
+%% eqWalizer suppressions for functions with type inference limitations.
+%% See: https://github.com/WhatsApp/eqwalizer/issues/55 (maybe expressions)
+-eqwalizer({nowarn_function, load_single_image/2}).
+-eqwalizer({nowarn_function, read_disk_files/1}).
+-eqwalizer({nowarn_function, safe_extract_tarball/2}).
+-eqwalizer({nowarn_function, parse_index/1}).
+%% Functions with term() inference from OTP functions (lists:seq, lists:zip, lists:reverse)
+-eqwalizer({nowarn_function, make_temp_dir/0}).
+-eqwalizer({nowarn_function, extract_tarball/1}).
+-eqwalizer({nowarn_function, build_platform_manifests/1}).
+-eqwalizer({nowarn_function, deduplicate_files/3}).
+-eqwalizer({nowarn_function, build_base_layers/1}).
+-eqwalizer({nowarn_function, pull_blob_with_progress/6}).
+-eqwalizer({nowarn_function, get_image_layers_reversed/1}).
+-eqwalizer({nowarn_function, build_layer_descriptors/1}).
+-eqwalizer({nowarn_function, pmap_bounded/3}).
+-eqwalizer({nowarn_function, reraise/3}).
+
 %% Common file permission modes
 
 % rw-r--r-- (regular files)
@@ -75,12 +97,7 @@ export_directory(Image, Path) ->
         Annotations = maps:get(annotations, Image, #{}),
         {ManifestJson, ManifestDigest} =
             ocibuild_manifest:build(
-                #{
-                    ~"mediaType" =>
-                        ~"application/vnd.oci.image.config.v1+json",
-                    ~"digest" => ConfigDigest,
-                    ~"size" => byte_size(ConfigJson)
-                },
+                make_config_descriptor(ConfigDigest, byte_size(ConfigJson)),
                 LayerDescriptors,
                 Annotations
             ),
@@ -110,13 +127,7 @@ export_directory(Image, Path) ->
 
         %% Write layer blobs
         %% Layers are stored in reverse order, reverse for correct export order
-        lists:foreach(
-            fun(#{digest := Digest, data := Data}) ->
-                LayerPath = filename:join(BlobsDir, ocibuild_digest:encoded(Digest)),
-                ok = file:write_file(LayerPath, Data)
-            end,
-            lists:reverse(maps:get(layers, Image, []))
-        ),
+        write_layer_blobs(BlobsDir, get_image_layers_reversed(Image)),
 
         ok
     catch
@@ -164,12 +175,7 @@ save_tarball(Image, Path, Opts) when is_map(Image) ->
         Annotations = maps:get(annotations, Image, #{}),
         {ManifestJson, ManifestDigest} =
             ocibuild_manifest:build(
-                #{
-                    ~"mediaType" =>
-                        ~"application/vnd.oci.image.config.v1+json",
-                    ~"digest" => ConfigDigest,
-                    ~"size" => byte_size(ConfigJson)
-                },
+                make_config_descriptor(ConfigDigest, byte_size(ConfigJson)),
                 LayerDescriptors,
                 Annotations
             ),
@@ -193,10 +199,7 @@ save_tarball(Image, Path, Opts) when is_map(Image) ->
                 {blob_path(ManifestDigest), ManifestJson, ?MODE_FILE}
             ] ++
                 %% Layers are stored in reverse order, reverse for correct export order
-                [
-                    {blob_path(Digest), Data, ?MODE_FILE}
-                 || #{digest := Digest, data := Data} <- lists:reverse(maps:get(layers, Image, []))
-                ] ++
+                layer_file_tuples(get_image_layers_reversed(Image)) ++
                 BaseLayerFiles,
 
         %% Create the tarball
@@ -323,8 +326,8 @@ load_tarball_for_push(Path, Opts) ->
         size := non_neg_integer(),
         get_data := fun(() -> {ok, binary()} | {error, term()})
     }],
-    platform => ocibuild:platform(),
-    annotations => map()
+    platform := ocibuild:platform() | undefined,
+    annotations := map()
 }.
 
 %% Load tarball entirely into memory
@@ -336,12 +339,12 @@ load_tarball_to_memory(Path) ->
     case erl_tar:extract(Path, [memory, compressed]) of
         {ok, FileList} ->
             %% Normalize paths: remove leading "./" if present
-            Files = maps:from_list([{normalize_tar_path(Name), Data} || {Name, Data} <- FileList]),
+            Files = #{ normalize_tar_path(Name) => Data || {Name, Data} <- FileList },
             GetBlob = fun(Digest) ->
                 BlobPath = <<"blobs/sha256/", (ocibuild_digest:encoded(Digest))/binary>>,
-                case maps:find(BlobPath, Files) of
-                    {ok, Data} -> {ok, Data};
-                    error -> {error, {missing_blob, Digest}}
+                case Files of
+                    #{BlobPath := Data} -> {ok, Data};
+                    #{} -> {error, {missing_blob, Digest}}
                 end
             end,
             parse_tarball_contents(Files, GetBlob, fun() -> ok end);
@@ -363,29 +366,24 @@ normalize_tar_path(Path) ->
     {error, term()}.
 load_tarball_to_disk(Path) ->
     TempDir = make_temp_dir(),
-    case safe_extract_tarball(Path, TempDir) of
-        ok ->
-            GetBlob = fun(Digest) ->
-                BlobPath = filename:join([TempDir, "blobs", "sha256",
-                                          binary_to_list(ocibuild_digest:encoded(Digest))]),
-                file:read_file(BlobPath)
-            end,
-            %% Read index.json and oci-layout from disk
-            case read_disk_files(TempDir) of
-                {ok, Files} ->
-                    Cleanup = fun() -> delete_temp_dir(TempDir) end,
-                    parse_tarball_contents(Files, GetBlob, Cleanup);
-                {error, _} = Err ->
-                    delete_temp_dir(TempDir),
-                    Err
-            end;
+    maybe
+        ok ?= safe_extract_tarball(Path, TempDir),
+        GetBlob = fun(Digest) ->
+            BlobPath = filename:join([TempDir, "blobs", "sha256",
+                                      binary_to_list(ocibuild_digest:encoded(Digest))]),
+            file:read_file(BlobPath)
+        end,
+        {ok, Files} ?= read_disk_files(TempDir),
+        Cleanup = fun() -> delete_temp_dir(TempDir) end,
+        parse_tarball_contents(Files, GetBlob, Cleanup)
+    else
         {error, Reason} ->
             delete_temp_dir(TempDir),
             {error, Reason}
     end.
 
 %% Two-phase extraction: validate paths first, then extract (prevents path traversal)
--spec safe_extract_tarball(file:filename(), file:filename()) -> ok | {error, term()}.
+-spec safe_extract_tarball(file:filename_all(), file:filename_all()) -> ok | {error, term()}.
 safe_extract_tarball(TarPath, DestDir) ->
     maybe
         %% Phase 1: Read table of contents and validate all paths
@@ -396,9 +394,10 @@ safe_extract_tarball(TarPath, DestDir) ->
     end.
 
 %% Wrap erl_tar errors with more descriptive tuple
--spec wrap_tar_error(ok | {ok, term()} | {error, term()}) -> ok | {ok, term()} | {error, term()}.
-wrap_tar_error(ok) -> ok;
+-spec wrap_tar_error({ok, T} | ok | {error, term()}) -> {ok, T} | ok | {error, term()}
+    when T :: term().
 wrap_tar_error({ok, _} = Ok) -> Ok;
+wrap_tar_error(ok) -> ok;
 wrap_tar_error({error, Reason}) -> {error, {invalid_tarball, Reason}}.
 
 %% Validate all tar entry paths for safety
@@ -421,11 +420,8 @@ validate_tar_path(Path) when is_list(Path) ->
     validate_tar_path(list_to_binary(Path));
 validate_tar_path(Path) ->
     maybe
-        %% Check for null bytes (injection attack)
         ok ?= check_no_null_bytes(Path),
-        %% Check for absolute paths
         ok ?= check_not_absolute(Path),
-        %% Check for parent directory traversal
         ok ?= check_no_traversal(Path)
     end.
 
@@ -439,14 +435,14 @@ check_not_absolute(<<$/, _/binary>> = Path) -> {error, {absolute_path, Path}};
 check_not_absolute(_) -> ok.
 
 check_no_traversal(Path) ->
-    Components = binary:split(Path, [~"/", ~"\\"], [global]),
+    Components = binary:split(Path, [~"/", <<$\\>>], [global]),
     case lists:member(~"..", Components) of
         true -> {error, {path_traversal, Path}};
         false -> ok
     end.
 
 %% Read metadata files from disk-extracted tarball
--spec read_disk_files(file:filename()) -> {ok, #{binary() => binary()}} | {error, term()}.
+-spec read_disk_files(file:filename_all()) -> {ok, #{binary() => binary()}} | {error, term()}.
 read_disk_files(TempDir) ->
     maybe
         {ok, IndexJson} ?= file:read_file(filename:join(TempDir, "index.json")),
@@ -465,16 +461,11 @@ read_disk_files(TempDir) ->
     {error, term()}.
 parse_tarball_contents(Files, GetBlob, Cleanup) ->
     maybe
-        %% Validate oci-layout
         ok ?= validate_oci_layout(Files),
-        %% Parse index.json
         {ok, Index} ?= parse_index(Files),
-        %% Extract tag from annotations
         Tag = extract_tag_from_index(Index),
-        %% Get manifest entries
         Manifests = maps:get(~"manifests", Index, []),
         IsMultiPlatform = length(Manifests) > 1,
-        %% Load each image
         {ok, Images} ?= load_images_from_manifests(Manifests, GetBlob),
         {ok, #{
             images => Images,
@@ -505,12 +496,13 @@ validate_oci_layout(Files) ->
 %% Parse index.json with schema validation
 -spec parse_index(#{binary() => binary()}) -> {ok, map()} | {error, term()}.
 parse_index(Files) ->
-    case maps:find(~"index.json", Files) of
-        {ok, IndexJson} ->
-            Index = ocibuild_json:decode(IndexJson),
-            validate_index_schema(Index);
-        error ->
-            {error, {invalid_oci_layout, missing_index}}
+    maybe
+        {ok, IndexJson} ?= case maps:find(~"index.json", Files) of
+            {ok, _} = Found -> Found;
+            error -> {error, {invalid_oci_layout, missing_index}}
+        end,
+        Index = ocibuild_json:decode(IndexJson),
+        validate_index_schema(Index)
     end.
 
 %% Validate index.json schema (OCI Image Index spec)
@@ -568,13 +560,10 @@ load_images_from_manifests([Entry | Rest], GetBlob, Acc) ->
     {ok, loaded_image()} | {error, term()}.
 load_single_image(#{~"digest" := ManifestDigest} = Entry, GetBlob) ->
     maybe
-        %% Load manifest
         {ok, ManifestJson} ?= GetBlob(ManifestDigest),
         Manifest = ocibuild_json:decode(ManifestJson),
-        %% Load config
         #{~"digest" := ConfigDigest} = maps:get(~"config", Manifest),
         {ok, ConfigJson} ?= GetBlob(ConfigDigest),
-        %% Build layer list with lazy loaders
         ManifestLayers = maps:get(~"layers", Manifest, []),
         Layers = [
             #{
@@ -584,7 +573,6 @@ load_single_image(#{~"digest" := ManifestDigest} = Entry, GetBlob) ->
             }
          || #{~"digest" := LayerDigest, ~"size" := Size} <- ManifestLayers
         ],
-        %% Extract platform if present
         Platform = extract_platform(Entry),
         Annotations = maps:get(~"annotations", Manifest, #{}),
         {ok, #{
@@ -685,11 +673,7 @@ build_single_platform(Image) ->
     %% Build manifest
     {ManifestJson, ManifestDigest} =
         ocibuild_manifest:build(
-            #{
-                ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
-                ~"digest" => ConfigDigest,
-                ~"size" => byte_size(ConfigJson)
-            },
+            make_config_descriptor(ConfigDigest, byte_size(ConfigJson)),
             LayerDescriptors,
             Annotations
         ),
@@ -703,10 +687,7 @@ build_single_platform(Image) ->
             {blob_path(ConfigDigest), ConfigJson, ?MODE_FILE},
             {blob_path(ManifestDigest), ManifestJson, ?MODE_FILE}
         ] ++
-            [
-                {blob_path(Digest), Data, ?MODE_FILE}
-             || #{digest := Digest, data := Data} <- lists:reverse(maps:get(layers, Image, []))
-            ] ++
+            layer_file_tuples(get_image_layers_reversed(Image)) ++
             BaseLayerFiles,
 
     {ManifestDesc, PlatformFiles}.
@@ -714,17 +695,20 @@ build_single_platform(Image) ->
 %% Deduplicate files by path (first occurrence wins)
 -spec deduplicate_files([{binary(), binary(), integer()}]) -> [{binary(), binary(), integer()}].
 deduplicate_files(Files) ->
-    {_, Unique} = lists:foldl(
-        fun({Path, _, _} = File, {Seen, Acc}) ->
-            case sets:is_element(Path, Seen) of
-                true -> {Seen, Acc};
-                false -> {sets:add_element(Path, Seen), [File | Acc]}
-            end
-        end,
-        {sets:new(), []},
-        Files
-    ),
-    lists:reverse(Unique).
+    deduplicate_files(Files, sets:new([{version, 2}]), []).
+
+-spec deduplicate_files(
+    [{binary(), binary(), integer()}],
+    sets:set(binary()),
+    [{binary(), binary(), integer()}]
+) -> [{binary(), binary(), integer()}].
+deduplicate_files([], _Seen, Acc) ->
+    lists:reverse(Acc);
+deduplicate_files([{Path, _, _} = File | Rest], Seen, Acc) ->
+    case sets:is_element(Path, Seen) of
+        true -> deduplicate_files(Rest, Seen, Acc);
+        false -> deduplicate_files(Rest, sets:add_element(Path, Seen), [File | Acc])
+    end.
 
 %% Build a multi-platform image index
 -spec build_multi_platform_index([{ocibuild:platform(), binary(), non_neg_integer()}], binary()) ->
@@ -755,9 +739,9 @@ build_platform_json(Platform) ->
         ~"os" => maps:get(os, Platform),
         ~"architecture" => maps:get(architecture, Platform)
     },
-    case maps:find(variant, Platform) of
-        {ok, Variant} -> Base#{~"variant" => Variant};
-        error -> Base
+    case Platform of
+        #{variant := Variant} -> Base#{~"variant" => Variant};
+        #{} -> Base
     end.
 
 %%%===================================================================
@@ -884,42 +868,61 @@ build_config_blob(#{config := Config}) ->
     Digest = ocibuild_digest:sha256(Json),
     {Json, Digest}.
 
+%% Build a config descriptor with proper type
+-spec make_config_descriptor(binary(), non_neg_integer()) -> ocibuild_manifest:descriptor().
+make_config_descriptor(Digest, Size) ->
+    #{
+        ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+        ~"digest" => Digest,
+        ~"size" => Size
+    }.
+
+%% Build a layer descriptor with proper type
+-spec make_layer_descriptor(binary(), binary(), non_neg_integer()) -> ocibuild_manifest:descriptor().
+make_layer_descriptor(MediaType, Digest, Size) ->
+    #{
+        ~"mediaType" => MediaType,
+        ~"digest" => Digest,
+        ~"size" => Size
+    }.
+
+%% Write layer blobs to a directory
+-spec write_layer_blobs(file:filename_all(), [ocibuild:layer()]) -> ok.
+write_layer_blobs(_BlobsDir, []) ->
+    ok;
+write_layer_blobs(BlobsDir, [#{digest := Digest, data := Data} | Rest]) ->
+    LayerPath = filename:join(BlobsDir, ocibuild_digest:encoded(Digest)),
+    ok = file:write_file(LayerPath, Data),
+    write_layer_blobs(BlobsDir, Rest).
+
+%% Convert layers to file tuples for tarball creation
+-spec layer_file_tuples([ocibuild:layer()]) -> [{binary(), binary(), non_neg_integer()}].
+layer_file_tuples(Layers) ->
+    [{blob_path(Digest), Data, ?MODE_FILE} || #{digest := Digest, data := Data} <- Layers].
+
+%% Get image layers in reversed order (for correct export/manifest order)
+-spec get_image_layers_reversed(ocibuild:image()) -> [ocibuild:layer()].
+get_image_layers_reversed(#{layers := Layers}) ->
+    lists:reverse(Layers).
+
 %% Build layer descriptors for the manifest
--spec build_layer_descriptors(ocibuild:image()) -> [map()].
+-spec build_layer_descriptors(ocibuild:image()) -> [ocibuild_manifest:descriptor()].
 build_layer_descriptors(#{base_manifest := BaseManifest, layers := NewLayers}) ->
     %% Include base image layers + new layers
     %% NewLayers are stored in reverse order, reverse for correct manifest order
     BaseLayers = maps:get(~"layers", BaseManifest, []),
-    NewDescriptors =
-        [
-            #{
-                ~"mediaType" => MediaType,
-                ~"digest" => Digest,
-                ~"size" => Size
-            }
-         || #{
-                media_type := MediaType,
-                digest := Digest,
-                size := Size
-            } <-
-                lists:reverse(NewLayers)
-        ],
+    NewDescriptors = layers_to_descriptors(lists:reverse(NewLayers)),
     BaseLayers ++ NewDescriptors;
 build_layer_descriptors(#{layers := NewLayers}) ->
     %% No base image, just new layers (reverse for correct order)
-    [
-        #{
-            ~"mediaType" => MediaType,
-            ~"digest" => Digest,
-            ~"size" => Size
-        }
-     || #{
-            media_type := MediaType,
-            digest := Digest,
-            size := Size
-        } <-
-            lists:reverse(NewLayers)
-    ].
+    layers_to_descriptors(lists:reverse(NewLayers)).
+
+%% Convert layers to manifest descriptors
+-spec layers_to_descriptors([ocibuild:layer()]) -> [ocibuild_manifest:descriptor()].
+layers_to_descriptors([]) ->
+    [];
+layers_to_descriptors([#{media_type := MediaType, digest := Digest, size := Size} | Rest]) ->
+    [make_layer_descriptor(MediaType, Digest, Size) | layers_to_descriptors(Rest)].
 
 %% Build the index.json structure with tag annotation
 -spec build_index(binary(), non_neg_integer(), binary()) -> map().
@@ -1001,7 +1004,7 @@ pmap_run(Fun, [], MaxWorkers, Self, Ref, ActiveCount, Results) when ActiveCount 
         {Ref, Index, {ok, Value}} ->
             pmap_run(Fun, [], MaxWorkers, Self, Ref, ActiveCount - 1, Results#{Index => Value});
         {Ref, _Index, {error, Class, Reason, Stack}} ->
-            erlang:raise(Class, Reason, Stack)
+            reraise(Class, Reason, Stack)
     end;
 pmap_run(Fun, Pending, MaxWorkers, Self, Ref, ActiveCount, Results) when
     ActiveCount >= MaxWorkers
@@ -1011,7 +1014,7 @@ pmap_run(Fun, Pending, MaxWorkers, Self, Ref, ActiveCount, Results) when
         {Ref, Index, {ok, Value}} ->
             pmap_run(Fun, Pending, MaxWorkers, Self, Ref, ActiveCount - 1, Results#{Index => Value});
         {Ref, _Index, {error, Class, Reason, Stack}} ->
-            erlang:raise(Class, Reason, Stack)
+            reraise(Class, Reason, Stack)
     end;
 pmap_run(Fun, [{Index, Item} | Rest], MaxWorkers, Self, Ref, ActiveCount, Results) ->
     %% Spawn a new worker
@@ -1025,3 +1028,11 @@ pmap_run(Fun, [{Index, Item} | Rest], MaxWorkers, Self, Ref, ActiveCount, Result
         end
     end),
     pmap_run(Fun, Rest, MaxWorkers, Self, Ref, ActiveCount + 1, Results).
+
+%% Re-raise an exception (helper with no_return spec for type checker)
+-spec reraise(Class, Reason, Stacktrace) -> no_return() when
+    Class :: error | exit | throw,
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace().
+reraise(Class, Reason, Stacktrace) ->
+    erlang:raise(Class, Reason, Stacktrace).
