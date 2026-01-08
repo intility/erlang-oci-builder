@@ -26,7 +26,7 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | Smart dependency layering | ✅                 | N/A         | ✅                | ✅              |
 | Non-root by default       | ✅                 | ✅          | ❌                | ✅              |
 | SBOM generation           | ✅ (SPDX)          | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
-| Image signing             | ⏳ Planned (P7)    | ✅ (cosign) | ❌                | ❌              |
+| Image signing             | ✅ (cosign)        | ✅ (cosign) | ❌                | ❌              |
 | Zstd compression          | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
 
 Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented

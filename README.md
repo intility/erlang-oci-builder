@@ -31,7 +31,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.                                             |
 | **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.                                            |
 | **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.                                   |
-| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
+| **Image signing**             | ✅     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
 
 ## Installation
 
@@ -532,6 +532,8 @@ Native code (NIFs) in the release will trigger a warning since `.so` files may n
 ## Image Signing
 
 Sign images with ECDSA P-256 keys (cosign-compatible format) to prove authenticity and enable verification by Kubernetes admission controllers.
+
+> **Note:** Currently only local key-based signing is supported. Keyless signing via Sigstore/Fulcio may be added in a future release.
 
 ### Key Generation
 

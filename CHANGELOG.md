@@ -1,8 +1,17 @@
 # Changelog
 
-## 0.7.1 - 2026-01-08
+## 0.8.0 - 2026-01-08
 
 ### Features
+
+- **Cosign-compatible image signing** ([#26](https://github.com/intility/erlang-oci-builder/pull/26)):
+  - Sign container images with ECDSA P-256 keys (cosign-compatible)
+  - Signatures attached via OCI referrers API using cosign simplesigning v1 format
+  - New `--sign-key` CLI flag to specify signing key path
+  - New `OCIBUILD_SIGN_KEY` environment variable for CI/CD pipelines
+  - Configure `sign_key` in rebar.config or mix.exs for default signing
+  - Graceful degradation: signing failures log warnings without failing the build
+  - Verify signatures with standard cosign: `cosign verify --key cosign.pub ghcr.io/org/repo:tag`
 
 - **Multiple tag support** ([#30](https://github.com/intility/erlang-oci-builder/issues/30)):
   - Push the same image with multiple tags in a single command: `-t myapp:1.0.0 -t myapp:latest`
@@ -11,8 +20,20 @@
   - Works with both single-platform and multi-platform images
   - All tags report the same digest in output
 
+### Security
+
+- **Digest validation for file paths**: Digests from untrusted sources (manifests, tarballs) are now validated before being used to construct file paths, preventing path traversal attacks via malicious digest values like `sha256:../../etc/passwd`
+
+### New Modules
+
+- `ocibuild_sign` - ECDSA P-256 signing for container images
+  - `load_key/1` - Load PEM-encoded EC private key
+  - `sign/2` - Sign data and return base64-encoded signature
+  - `build_signature_payload/2` - Build cosign simplesigning payload
+
 ### New Functions
 
+- `ocibuild_registry:push_signature/7,8` - Push signature as OCI referrer artifact
 - `ocibuild_registry:tag_from_digest/5` - Tag an existing manifest with a new tag (no blob re-upload)
 
 ## 0.7.0 - 2026-01-08
