@@ -608,7 +608,7 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                     ocibuild_progress:clear(),
                     SignKey = maps:get(sign_key, Opts, undefined),
                     PushOpts = #{chunk_size => ChunkSize, sign_key => SignKey},
-                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
+                    do_push(AdapterModule, AdapterState, Images, Tags, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
             stop_httpc(),
@@ -706,7 +706,7 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
             %% Push signature as referrer artifact (if sign_key configured)
-            push_signature_referrer(AdapterModule, Images, Registry, Repo, ImageTag, Auth, Opts),
+            push_signature_referrer(AdapterModule, Images, Registry, Repo, FirstImageTag, Auth, Opts),
             %% Clean up httpc after all pushes complete
             stop_httpc(),
 
