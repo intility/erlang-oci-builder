@@ -66,6 +66,27 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -behaviour(provider).
 -behaviour(ocibuild_adapter).
 
+%% eqWalizer suppressions - rebar3 internals (provider, rebar_state, rebar_api)
+%% are only available at runtime when loaded as a plugin.
+-eqwalizer({nowarn_function, init/1}).
+-eqwalizer({nowarn_function, do/1}).
+-eqwalizer({nowarn_function, do_push_tarball/3}).
+-eqwalizer({nowarn_function, get_config/1}).
+-eqwalizer({nowarn_function, get_app_version/1}).
+-eqwalizer({nowarn_function, get_dependencies/1}).
+-eqwalizer({nowarn_function, find_release/2}).
+-eqwalizer({nowarn_function, get_base_image/2}).
+-eqwalizer({nowarn_function, get_app_name/2}).
+-eqwalizer({nowarn_function, get_project_app_name/1}).
+-eqwalizer({nowarn_function, get_description/2}).
+-eqwalizer({nowarn_function, get_tags/2}).
+-eqwalizer({nowarn_function, get_output/1}).
+-eqwalizer({nowarn_function, get_sbom_path/1}).
+-eqwalizer({nowarn_function, get_sign_key/2}).
+-eqwalizer({nowarn_function, get_push_registry/1}).
+-eqwalizer({nowarn_function, get_platform/2}).
+-eqwalizer({nowarn_function, parse_rebar_lock/1}).
+
 %% Provider callbacks
 -export([init/1, do/1, format_error/1]).
 
