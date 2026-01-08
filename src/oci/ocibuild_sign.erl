@@ -38,6 +38,7 @@ cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
     load_key/1,
     sign/3,
     build_payload/2,
+    build_signature_manifest/3,
     build_referrer_manifest/5,
     artifact_type/0
 ]).
@@ -152,6 +153,59 @@ sign(ManifestDigest, DockerRef, PrivateKey) ->
     PayloadJson = ocibuild_json:encode(Payload),
     Signature = public_key:sign(PayloadJson, sha256, PrivateKey),
     {ok, PayloadJson, Signature}.
+
+-doc """
+Build a cosign signature manifest for tag-based discovery.
+
+Creates a manifest that cosign will find at the signature tag (sha256-<digest>.sig).
+This is the default discovery mechanism used by cosign verify.
+
+The manifest structure follows the cosign simplesigning format:
+- Config blob contains the simplesigning payload
+- Layer references the same payload with signature in annotation
+
+Note: Unlike `build_referrer_manifest/5`, this does NOT include a `subject` field
+since tag-based discovery doesn't use the OCI referrers API.
+
+Parameters:
+- `PayloadDigest`: SHA256 digest of the payload JSON
+- `PayloadSize`: Size of the payload JSON in bytes
+- `Signature`: The DER-encoded ECDSA signature
+
+Example:
+```erlang
+Manifest = ocibuild_sign:build_signature_manifest(PayloadDigest, PayloadSize, Signature).
+```
+""".
+-spec build_signature_manifest(
+    PayloadDigest :: binary(),
+    PayloadSize :: non_neg_integer(),
+    Signature :: binary()
+) -> map().
+build_signature_manifest(PayloadDigest, PayloadSize, Signature) ->
+    %% Signature is base64-encoded in the layer annotation
+    SignatureB64 = base64:encode(Signature),
+    ArtifactType = artifact_type(),
+
+    #{
+        ~"schemaVersion" => 2,
+        ~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
+        ~"config" => #{
+            ~"mediaType" => ArtifactType,
+            ~"digest" => PayloadDigest,
+            ~"size" => PayloadSize
+        },
+        ~"layers" => [
+            #{
+                ~"mediaType" => ArtifactType,
+                ~"digest" => PayloadDigest,
+                ~"size" => PayloadSize,
+                ~"annotations" => #{
+                    ~"dev.cosignproject.cosign/signature" => SignatureB64
+                }
+            }
+        ]
+    }.
 
 -doc """
 Build an OCI referrer manifest for a cosign signature.

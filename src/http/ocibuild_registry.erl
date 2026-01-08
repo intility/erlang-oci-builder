@@ -1070,7 +1070,9 @@ push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSiz
             Err
     end.
 
-%% @private Build and push a cosign signature referrer manifest
+%% @private Build and push a cosign signature manifest using tag scheme.
+%% Cosign uses tag-based discovery by default: sha256-<hex>.sig
+%% See: https://github.com/sigstore/cosign/blob/main/pkg/oci/remote/remote.go
 -spec push_signature_manifest(
     BaseUrl :: string(),
     Repo :: binary(),
@@ -1082,19 +1084,20 @@ push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSiz
     SubjectSize :: non_neg_integer()
 ) -> ok | {error, term()}.
 push_signature_manifest(
-    BaseUrl, Repo, Token, PayloadDigest, PayloadSize, Signature, SubjectDigest, SubjectSize
+    BaseUrl, Repo, Token, PayloadDigest, PayloadSize, Signature, SubjectDigest, _SubjectSize
 ) ->
-    %% Build manifest using ocibuild_sign
-    Manifest = ocibuild_sign:build_referrer_manifest(
-        PayloadDigest, PayloadSize, Signature, SubjectDigest, SubjectSize
-    ),
+    %% Build manifest using ocibuild_sign (for cosign compatibility)
+    Manifest = ocibuild_sign:build_signature_manifest(PayloadDigest, PayloadSize, Signature),
     ManifestJson = ocibuild_json:encode(Manifest),
-    ManifestDigest = ocibuild_digest:sha256(ManifestJson),
 
-    %% Push the manifest (using digest as tag - required for referrers)
+    %% Cosign tag scheme: sha256-<hex>.sig
+    %% SubjectDigest is like "sha256:bb7294..." -> tag is "sha256-bb7294....sig"
+    SignatureTag = digest_to_signature_tag(SubjectDigest),
+
+    %% Push the manifest to the signature tag
     Url = io_lib:format(
         "~s/v2/~s/manifests/~s",
-        [BaseUrl, binary_to_list(Repo), binary_to_list(ManifestDigest)]
+        [BaseUrl, binary_to_list(Repo), binary_to_list(SignatureTag)]
     ),
     Headers =
         auth_headers(Token) ++
@@ -1103,17 +1106,21 @@ push_signature_manifest(
     case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
         {ok, _} ->
             ok;
-        {error, {http_error, 404, _}} ->
-            {error, {referrer_not_supported, SubjectDigest}};
-        {error, {http_error, 405, _}} ->
-            {error, {referrer_not_supported, SubjectDigest}};
-        {error, {http_error, 400, Body}} ->
-            case is_unsupported_manifest_error(Body) of
-                true -> {error, {referrer_not_supported, SubjectDigest}};
-                false -> {error, {push_signature_manifest, Body}}
-            end;
         {error, _} = Err ->
             Err
+    end.
+
+%% @private Convert a digest to cosign signature tag format.
+%% sha256:abc123... -> sha256-abc123....sig
+-spec digest_to_signature_tag(binary()) -> binary().
+digest_to_signature_tag(Digest) ->
+    %% Replace : with - and append .sig
+    case binary:split(Digest, <<":">>) of
+        [Algorithm, Hex] ->
+            <<Algorithm/binary, "-", Hex/binary, ".sig">>;
+        _ ->
+            %% Fallback: just append .sig
+            <<Digest/binary, ".sig">>
     end.
 
 %%%===================================================================
