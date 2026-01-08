@@ -95,7 +95,8 @@ Security features:
     strip_prefix/2,
     normalize_path/1,
     is_path_within/2,
-    validate_symlink_target/2
+    validate_symlink_target/2,
+    tag_additional/6
 ]).
 -endif.
 

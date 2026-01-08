@@ -29,11 +29,13 @@ See: https://github.com/opencontainers/distribution-spec
 %% Platform detection (shared with ocibuild_release)
 -export([get_target_platform/0]).
 
-%% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
+%% Internal HTTP functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3, http_put/4]).
+-export([http_get_with_content_type/2]).
 
-%% Export internal functions for testing
+%% Internal functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
+-export([discover_auth/3]).
 
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer | uploading.
@@ -593,8 +595,8 @@ tag_from_digest(Registry, Repo, Digest, Tag, Auth) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    %% Discover auth token with push scope
-    Token = case discover_auth(Registry, NormalizedRepo, Auth) of
+    %% Discover auth token with push scope (uses ?MODULE: for testability)
+    Token = case ?MODULE:discover_auth(Registry, NormalizedRepo, Auth) of
         {ok, T} -> T;
         {error, _} -> none
     end,
@@ -611,7 +613,7 @@ tag_from_digest(Registry, Repo, Digest, Tag, Auth) ->
                               "application/vnd.docker.distribution.manifest.list.v2+json"},
     FetchHeaders = auth_headers(Token) ++ [AcceptHeader],
 
-    case http_get_with_content_type(lists:flatten(FetchUrl), FetchHeaders) of
+    case ?MODULE:http_get_with_content_type(lists:flatten(FetchUrl), FetchHeaders) of
         {ok, ManifestData, ContentType} ->
             %% Push to new tag with same content type
             PushUrl = io_lib:format(

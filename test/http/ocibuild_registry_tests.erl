@@ -86,7 +86,12 @@ registry_test_() ->
         {"multi-chunk blob has correct Content-Range", fun multi_chunk_content_range_test/0},
         {"progress callback receives updates", fun progress_callback_test/0},
         {"session start failure propagates error", fun session_start_error_test/0},
-        {"chunk upload failure propagates error", fun chunk_upload_error_test/0}
+        {"chunk upload failure propagates error", fun chunk_upload_error_test/0},
+        %% tag_from_digest tests
+        {"tag_from_digest success", fun tag_from_digest_success_test/0},
+        {"tag_from_digest with index manifest", fun tag_from_digest_index_manifest_test/0},
+        {"tag_from_digest fetch error", fun tag_from_digest_fetch_error_test/0},
+        {"tag_from_digest push error", fun tag_from_digest_push_error_test/0}
     ]}.
 
 %% Chunked upload helper function tests (no mocking needed)
@@ -96,6 +101,10 @@ chunked_helper_test_() ->
         {"parse_range_header parses valid input", fun parse_range_header_valid_test/0},
         {"parse_range_header rejects invalid input", fun parse_range_header_invalid_test/0}
     ].
+
+%% Note: http_get_with_content_type is tested indirectly through tag_from_digest tests
+%% Direct testing of http_get_with_content_type would require mocking httpc,
+%% which is difficult due to it being an OTP gen_server-based module.
 
 %%%===================================================================
 %%% Pull manifest tests
@@ -501,6 +510,135 @@ chunk_upload_error_test() ->
         #{}
     ),
     ?assertMatch({error, {http_error, 400, _}}, Result).
+
+%%%===================================================================
+%%% tag_from_digest tests
+%%%===================================================================
+
+tag_from_digest_success_test() ->
+    %% Test successful tagging of manifest by digest to new tag
+    ManifestData = sample_manifest(),
+    ManifestDigest = ocibuild_digest:sha256(ManifestData),
+    ContentType = "application/vnd.oci.image.manifest.v1+json",
+
+    %% Mock discover_auth to skip HTTP calls
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    %% Mock http_get_with_content_type to return manifest
+    meck:expect(ocibuild_registry, http_get_with_content_type, fun(Url, _Headers) ->
+        ?assert(string:find(Url, binary_to_list(ManifestDigest)) =/= nomatch),
+        {ok, ManifestData, ContentType}
+    end),
+
+    %% Mock http_put to verify manifest is pushed with correct content type
+    meck:expect(ocibuild_registry, http_put, fun(Url, Headers, Body) ->
+        ?assert(string:find(Url, "newtag") =/= nomatch),
+        ?assertEqual(ContentType, proplists:get_value("Content-Type", Headers)),
+        ?assertEqual(ManifestData, Body),
+        {ok, <<>>}
+    end),
+
+    Result = ocibuild_registry:tag_from_digest(
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ManifestDigest,
+        ~"newtag",
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual({ok, ManifestDigest}, Result).
+
+tag_from_digest_index_manifest_test() ->
+    %% Test tagging with OCI index manifest (multi-platform)
+    IndexData = ocibuild_json:encode(#{
+        ~"schemaVersion" => 2,
+        ~"mediaType" => ~"application/vnd.oci.image.index.v1+json",
+        ~"manifests" => []
+    }),
+    IndexDigest = ocibuild_digest:sha256(IndexData),
+    ContentType = "application/vnd.oci.image.index.v1+json",
+
+    %% Mock discover_auth to skip HTTP calls
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    meck:expect(ocibuild_registry, http_get_with_content_type, fun(_Url, _Headers) ->
+        {ok, IndexData, ContentType}
+    end),
+
+    meck:expect(ocibuild_registry, http_put, fun(_Url, Headers, _Body) ->
+        %% Verify content type is preserved for index
+        ?assertEqual(ContentType, proplists:get_value("Content-Type", Headers)),
+        {ok, <<>>}
+    end),
+
+    Result = ocibuild_registry:tag_from_digest(
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        IndexDigest,
+        ~"latest",
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual({ok, IndexDigest}, Result).
+
+tag_from_digest_fetch_error_test() ->
+    %% Test error handling when manifest fetch fails
+
+    %% Mock discover_auth to skip HTTP calls
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    meck:expect(ocibuild_registry, http_get_with_content_type, fun(_Url, _Headers) ->
+        {error, {http_error, 404, "Not Found", <<>>}}
+    end),
+
+    Result = ocibuild_registry:tag_from_digest(
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ~"sha256:nonexistent",
+        ~"newtag",
+        #{token => ~"test-token"}
+    ),
+
+    ?assertMatch({error, {http_error, 404, _, _}}, Result).
+
+tag_from_digest_push_error_test() ->
+    %% Test error handling when manifest push fails
+    ManifestData = sample_manifest(),
+    ManifestDigest = ocibuild_digest:sha256(ManifestData),
+
+    %% Mock discover_auth to skip HTTP calls
+    meck:expect(ocibuild_registry, discover_auth, fun(_Registry, _Repo, _Auth) ->
+        {ok, ~"mocked-token"}
+    end),
+
+    meck:expect(ocibuild_registry, http_get_with_content_type, fun(_Url, _Headers) ->
+        {ok, ManifestData, "application/vnd.oci.image.manifest.v1+json"}
+    end),
+
+    meck:expect(ocibuild_registry, http_put, fun(_Url, _Headers, _Body) ->
+        {error, {http_error, 403, "Forbidden"}}
+    end),
+
+    Result = ocibuild_registry:tag_from_digest(
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ManifestDigest,
+        ~"newtag",
+        #{token => ~"test-token"}
+    ),
+
+    ?assertMatch({error, {http_error, 403, _}}, Result).
+
+
+%%%===================================================================
+%%% Chunked upload tests (continued)
+%%%===================================================================
 
 %% Test that 416 error falls back to monolithic upload (for registries like GHCR)
 chunked_upload_416_fallback_test() ->

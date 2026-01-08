@@ -6,6 +6,9 @@
 
 -import(ocibuild_test_helpers, [make_temp_dir/1, cleanup_temp_dir/1]).
 
+%% Fake adapter callbacks for testing tag_additional/6
+-export([info/2, console/2, error/2]).
+
 %%%===================================================================
 %%% Test fixtures - setup/cleanup functions
 %%%===================================================================
@@ -1267,3 +1270,153 @@ create_mock_release() ->
     ok = file:write_file(RelPath, ~"{release, {\"myapp\", \"1.0.0\"}, ...}."),
 
     TmpDir.
+
+%%%===================================================================
+%%% tag_additional tests
+%%%===================================================================
+
+%% Setup for tag_additional tests
+setup_tag_additional() ->
+    %% Start required apps
+    application:ensure_all_started(inets),
+    application:ensure_all_started(ssl),
+    %% Safely unload any existing mocks
+    safe_unload_mock(ocibuild_registry),
+    %% Mock registry module only - we'll use ocibuild_release_tests as adapter
+    %% since this module has info/2 defined below
+    meck:new(ocibuild_registry, [unstick, passthrough]),
+    ok.
+
+cleanup_tag_additional(_) ->
+    safe_unload_mock(ocibuild_registry).
+
+%% Safely unload a mock module
+safe_unload_mock(Module) ->
+    try meck:validate(Module) of
+        _ -> meck:unload(Module)
+    catch
+        error:{not_mocked, _} -> ok
+    end.
+
+%% Fake adapter callbacks for testing tag_additional
+info(_Format, _Args) -> ok.
+console(_Format, _Args) -> ok.
+error(_Format, _Args) -> ok.
+
+tag_additional_test_() ->
+    {foreach, fun setup_tag_additional/0, fun cleanup_tag_additional/1, [
+        {"tag_additional empty list", fun tag_additional_empty_list_test/0},
+        {"tag_additional single tag success", fun tag_additional_single_tag_success_test/0},
+        {"tag_additional multiple tags success", fun tag_additional_multiple_tags_success_test/0},
+        {"tag_additional mixed success and failure", fun tag_additional_mixed_results_test/0},
+        {"tag_additional all failures", fun tag_additional_all_failures_test/0}
+    ]}.
+
+tag_additional_empty_list_test() ->
+    %% Empty tag list should return empty result
+    Result = ocibuild_release:tag_additional(
+        ?MODULE,  %% Use this test module as the adapter
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        ~"sha256:abc123",
+        [],
+        #{token => ~"test-token"}
+    ),
+    ?assertEqual([], Result).
+
+tag_additional_single_tag_success_test() ->
+    Digest = ~"sha256:abc123",
+
+    %% Mock tag_from_digest to succeed
+    meck:expect(ocibuild_registry, tag_from_digest, fun(
+        _Registry, _Repo, D, _Tag, _Auth
+    ) ->
+        {ok, D}
+    end),
+
+    Result = ocibuild_release:tag_additional(
+        ?MODULE,  %% Use this test module as the adapter
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        Digest,
+        [~"myapp:v1.0.0"],
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual([{~"myapp:v1.0.0", ok}], Result).
+
+tag_additional_multiple_tags_success_test() ->
+    Digest = ~"sha256:abc123",
+
+    meck:expect(ocibuild_registry, tag_from_digest, fun(
+        _Registry, _Repo, D, _Tag, _Auth
+    ) ->
+        {ok, D}
+    end),
+
+    Result = ocibuild_release:tag_additional(
+        ?MODULE,  %% Use this test module as the adapter
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        Digest,
+        [~"myapp:v1.0.0", ~"myapp:latest", ~"myapp:stable"],
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual([
+        {~"myapp:v1.0.0", ok},
+        {~"myapp:latest", ok},
+        {~"myapp:stable", ok}
+    ], Result).
+
+tag_additional_mixed_results_test() ->
+    Digest = ~"sha256:abc123",
+
+    %% Mock to succeed for some tags, fail for others
+    meck:expect(ocibuild_registry, tag_from_digest, fun(
+        _Registry, _Repo, D, Tag, _Auth
+    ) ->
+        case Tag of
+            ~"latest" -> {error, {http_error, 403, "Forbidden"}};
+            _ -> {ok, D}
+        end
+    end),
+
+    Result = ocibuild_release:tag_additional(
+        ?MODULE,  %% Use this test module as the adapter
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        Digest,
+        [~"myapp:v1.0.0", ~"myapp:latest", ~"myapp:stable"],
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual([
+        {~"myapp:v1.0.0", ok},
+        {~"myapp:latest", {error, {http_error, 403, "Forbidden"}}},
+        {~"myapp:stable", ok}
+    ], Result).
+
+tag_additional_all_failures_test() ->
+    Digest = ~"sha256:abc123",
+
+    %% Mock to always fail
+    meck:expect(ocibuild_registry, tag_from_digest, fun(
+        _Registry, _Repo, _D, _Tag, _Auth
+    ) ->
+        {error, {http_error, 500, "Internal Server Error"}}
+    end),
+
+    Result = ocibuild_release:tag_additional(
+        ?MODULE,  %% Use this test module as the adapter
+        ~"registry.example.io",
+        ~"myorg/myapp",
+        Digest,
+        [~"myapp:v1.0.0", ~"myapp:latest"],
+        #{token => ~"test-token"}
+    ),
+
+    ?assertEqual([
+        {~"myapp:v1.0.0", {error, {http_error, 500, "Internal Server Error"}}},
+        {~"myapp:latest", {error, {http_error, 500, "Internal Server Error"}}}
+    ], Result).
