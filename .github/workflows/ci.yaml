@@ -237,37 +237,3 @@ jobs:
 
           # Cleanup
           docker stop test-app
-
-      - name: Delete test tag from GHCR
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_NAME: ${{ github.repository }}
-        run: |
-          IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
-
-          # Get a token for the registry API
-          TOKEN=$(echo "$GH_TOKEN" | base64)
-          AUTH_RESP=$(curl -s "https://ghcr.io/token?scope=repository:${IMAGE_NAME_LOWER}:delete" \
-            -H "Authorization: Basic ${TOKEN}")
-          REGISTRY_TOKEN=$(echo "$AUTH_RESP" | jq -r '.token // empty')
-
-          if [ -z "$REGISTRY_TOKEN" ]; then
-            echo "Failed to get registry token, skipping cleanup"
-            exit 0
-          fi
-
-          # Delete the SHA tag via OCI distribution API
-          echo "Deleting tag ${{ github.sha }} from ghcr.io/${IMAGE_NAME_LOWER}"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X DELETE \
-            -H "Authorization: Bearer ${REGISTRY_TOKEN}" \
-            "https://ghcr.io/v2/${IMAGE_NAME_LOWER}/manifests/${{ github.sha }}")
-
-          if [ "$HTTP_CODE" = "202" ] || [ "$HTTP_CODE" = "200" ]; then
-            echo "Successfully deleted tag"
-          elif [ "$HTTP_CODE" = "404" ]; then
-            echo "Tag not found (may have already been deleted)"
-          else
-            echo "Failed to delete tag (HTTP $HTTP_CODE) - may require additional permissions"
-          fi

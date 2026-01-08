@@ -1,0 +1,32 @@
+name: Cleanup old package versions
+
+on:
+  schedule:
+    # Run weekly on Sunday at midnight UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  cleanup:
+    name: Delete old container images
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Delete old untagged versions
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          package-name: ocibuild
+          package-type: container
+          min-versions-to-keep: 10
+          delete-only-untagged-versions: true
+
+      - name: Delete old CI test versions
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          package-name: ocibuild
+          package-type: container
+          min-versions-to-keep: 10
+          # Keep release tags and integration tags
+          ignore-versions: '^(latest|integration-elixir|integration-erlang|v?\\d+\\.\\d+\\.\\d+.*)$'
