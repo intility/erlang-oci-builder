@@ -53,6 +53,7 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 %% eqWalizer suppressions for functions with type inference limitations.
 %% See: https://github.com/WhatsApp/eqwalizer/issues/55 (maybe expressions)
 -eqwalizer({nowarn_function, load_single_image/2}).
+-eqwalizer({nowarn_function, load_tarball_to_memory/1}).
 -eqwalizer({nowarn_function, read_disk_files/1}).
 -eqwalizer({nowarn_function, safe_extract_tarball/2}).
 -eqwalizer({nowarn_function, validate_tar_entry/2}).
@@ -331,26 +332,28 @@ load_tarball_for_push(Path, Opts) ->
     annotations := map()
 }.
 
-%% Load tarball entirely into memory
+%% Load tarball entirely into memory (with security validation)
 -spec load_tarball_to_memory(file:filename()) ->
     {ok, #{images := [loaded_image()], tag := binary() | undefined,
            is_multi_platform := boolean(), cleanup := fun(() -> ok)}} |
     {error, term()}.
 load_tarball_to_memory(Path) ->
-    case erl_tar:extract(Path, [memory, compressed]) of
-        {ok, FileList} ->
-            %% Normalize paths: remove leading "./" if present
-            Files = #{ normalize_tar_path(Name) => Data || {Name, Data} <- FileList },
-            GetBlob = fun(Digest) ->
-                BlobPath = <<"blobs/sha256/", (ocibuild_digest:encoded(Digest))/binary>>,
-                case Files of
-                    #{BlobPath := Data} -> {ok, Data};
-                    #{} -> {error, {missing_blob, Digest}}
-                end
-            end,
-            parse_tarball_contents(Files, GetBlob, fun() -> ok end);
-        {error, Reason} ->
-            {error, {invalid_tarball, Reason}}
+    maybe
+        %% Phase 1: Validate all entries (paths and types) before extraction
+        {ok, Entries} ?= wrap_tar_error(erl_tar:table(Path, [compressed, verbose])),
+        ok ?= validate_all_entries(Entries),
+        %% Phase 2: Extract to memory (entries already validated)
+        {ok, FileList} ?= wrap_tar_error(erl_tar:extract(Path, [memory, compressed])),
+        %% Normalize paths: remove leading "./" if present
+        Files = #{ normalize_tar_path(Name) => Data || {Name, Data} <- FileList },
+        GetBlob = fun(Digest) ->
+            BlobPath = <<"blobs/sha256/", (ocibuild_digest:encoded(Digest))/binary>>,
+            case Files of
+                #{BlobPath := Data} -> {ok, Data};
+                #{} -> {error, {missing_blob, Digest}}
+            end
+        end,
+        parse_tarball_contents(Files, GetBlob, fun() -> ok end)
     end.
 
 %% Normalize tar paths by removing leading "./" prefix
@@ -418,7 +421,7 @@ validate_tar_entry(Path, Type) ->
         ok ?= validate_tar_path(Path)
     end.
 
-%% Reject symlinks and hardlinks to prevent escape attacks
+%% Reject symlinks, hardlinks, and other special entry types to prevent attacks
 -spec validate_entry_type(string(), atom()) -> ok | {error, term()}.
 validate_entry_type(Path, symlink) ->
     {error, {symlink_not_allowed, list_to_binary(Path)}};
@@ -426,8 +429,9 @@ validate_entry_type(Path, link) ->
     {error, {hardlink_not_allowed, list_to_binary(Path)}};
 validate_entry_type(_Path, regular) -> ok;
 validate_entry_type(_Path, directory) -> ok;
-%% Allow other types (block/char devices are unlikely in OCI tarballs but harmless)
-validate_entry_type(_Path, _Type) -> ok.
+%% Reject all other types (block/char devices, FIFOs, sockets, etc.)
+validate_entry_type(Path, Type) ->
+    {error, {unsupported_entry_type, list_to_binary(Path), Type}}.
 
 %% Validate a single tar path for traversal attempts
 -spec validate_tar_path(string() | binary()) -> ok | {error, term()}.

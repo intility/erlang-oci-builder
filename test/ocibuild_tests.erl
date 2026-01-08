@@ -1439,6 +1439,62 @@ load_tarball_not_a_file_test() ->
     end.
 
 %%%===================================================================
+%%% Memory mode security tests
+%%% These tests verify that security validation works in memory mode
+%%% (the default for small tarballs under 100MB threshold).
+%%%===================================================================
+
+load_tarball_path_traversal_memory_mode_test() ->
+    %% Test path traversal validation in memory mode
+    TmpFile = make_temp_file("ocibuild_traversal_mem", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, <<"malicious content">>, "../../../etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Use high threshold to ensure memory mode is used
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        ?assertMatch({error, {path_traversal, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_absolute_path_memory_mode_test() ->
+    %% Test absolute path validation in memory mode
+    TmpFile = make_temp_file("ocibuild_abspath_mem", ".tar.gz"),
+    try
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, <<"malicious">>, "/etc/passwd", []),
+        ok = erl_tar:close(Handle),
+
+        %% Use high threshold to ensure memory mode is used
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        ?assertMatch({error, {absolute_path, _}}, Result)
+    after
+        file:delete(TmpFile)
+    end.
+
+load_tarball_symlink_memory_mode_test() ->
+    %% Test symlink validation in memory mode
+    TmpDir = make_temp_dir("symlink_mem_test"),
+    TmpFile = filename:join(TmpDir, "test.tar.gz"),
+    SymlinkPath = filename:join(TmpDir, "escape_symlink"),
+    try
+        ok = file:make_symlink("/", SymlinkPath),
+        {ok, Handle} = erl_tar:open(TmpFile, [write, compressed]),
+        ok = erl_tar:add(Handle, SymlinkPath, "escape_symlink", []),
+        ok = erl_tar:close(Handle),
+
+        %% Use high threshold to ensure memory mode is used
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        ?assertMatch({error, {symlink_not_allowed, _}}, Result)
+    after
+        file:delete(SymlinkPath),
+        file:delete(TmpFile),
+        file:del_dir(TmpDir)
+    end.
+
+%%%===================================================================
 %%% Registry retry tests
 %%%===================================================================
 
