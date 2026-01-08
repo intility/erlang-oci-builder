@@ -606,8 +606,9 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                 false ->
                     %% Clear progress bars before push to start fresh
                     ocibuild_progress:clear(),
-                    PushOpts = #{chunk_size => ChunkSize},
-                    do_push(AdapterModule, AdapterState, Images, Tags, PushRegistry, PushOpts)
+                    SignKey = maps:get(sign_key, Opts, undefined),
+                    PushOpts = #{chunk_size => ChunkSize, sign_key => SignKey},
+                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
             stop_httpc(),
@@ -704,6 +705,8 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
 
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
+            %% Push signature as referrer artifact (if sign_key configured)
+            push_signature_referrer(AdapterModule, Images, Registry, Repo, ImageTag, Auth, Opts),
             %% Clean up httpc after all pushes complete
             stop_httpc(),
 
@@ -2271,6 +2274,96 @@ push_sbom_referrer(AdapterModule, Image, Registry, Repo, Auth, Opts) when is_map
                     %% Could not calculate manifest - skip referrer push
                     ok
             end
+    end,
+    ok.
+
+%%%===================================================================
+%%% Image Signing
+%%%===================================================================
+
+%% @private Push cosign-compatible signature as OCI referrer artifact
+%% For single-platform images, signs and pushes signature as referrer to the image manifest.
+%% For multi-platform images, signature attachment is not yet supported.
+-spec push_signature_referrer(
+    module(),
+    ocibuild:image() | [ocibuild:image()],
+    binary(),
+    binary(),
+    binary(),
+    map(),
+    map()
+) -> ok.
+push_signature_referrer(AdapterModule, [Image], Registry, Repo, Tag, Auth, Opts) when is_map(Image) ->
+    %% Single image in a list - unwrap and process
+    push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts);
+push_signature_referrer(_AdapterModule, Images, _Registry, _Repo, _Tag, _Auth, _Opts) when is_list(Images) ->
+    %% Multi-platform images - signature attachment not yet supported
+    ok;
+push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) when is_map(Image) ->
+    case maps:get(sign_key, Opts, undefined) of
+        undefined ->
+            ok;
+        nil ->
+            ok;
+        SignKeyPath when is_binary(SignKeyPath) ->
+            sign_and_push(AdapterModule, Image, Registry, Repo, Tag, SignKeyPath, Auth, Opts)
+    end,
+    ok.
+
+%% @private Load key, sign manifest, and push signature as referrer
+-spec sign_and_push(
+    module(),
+    ocibuild:image(),
+    binary(),
+    binary(),
+    binary(),
+    binary(),
+    map(),
+    map()
+) -> ok.
+sign_and_push(AdapterModule, Image, Registry, Repo, Tag, SignKeyPath, Auth, Opts) ->
+    %% Load the signing key
+    case ocibuild_sign:load_key(binary_to_list(SignKeyPath)) of
+        {ok, PrivateKey} ->
+            %% Calculate manifest digest and size
+            case calculate_manifest_info(Image) of
+                {ok, ManifestDigest, ManifestSize} ->
+                    %% Build docker reference for payload
+                    DockerRef = <<Registry/binary, "/", Repo/binary, ":", Tag/binary>>,
+
+                    %% Sign the manifest
+                    case ocibuild_sign:sign(ManifestDigest, DockerRef, PrivateKey) of
+                        {ok, PayloadJson, Signature} ->
+                            PushOpts = maps:with([chunk_size], Opts),
+                            case
+                                ocibuild_registry:push_signature(
+                                    PayloadJson,
+                                    Signature,
+                                    Registry,
+                                    Repo,
+                                    ManifestDigest,
+                                    ManifestSize,
+                                    Auth,
+                                    PushOpts
+                                )
+                            of
+                                ok ->
+                                    AdapterModule:info("Image signed successfully", []);
+                                {error, {referrer_not_supported, _}} ->
+                                    %% Registry doesn't support referrers - silent skip
+                                    ok;
+                                {error, Reason} ->
+                                    AdapterModule:info("Warning: Signature push failed: ~p", [Reason])
+                            end;
+                        {error, SignError} ->
+                            AdapterModule:error("Signing failed: ~p", [SignError])
+                    end;
+                {error, _Reason} ->
+                    %% Could not calculate manifest - skip signature push
+                    ok
+            end;
+        {error, Reason} ->
+            AdapterModule:error("Failed to load signing key ~s: ~p", [SignKeyPath, Reason])
     end,
     ok.
 

@@ -100,7 +100,9 @@ error(Format, Args) ->
     %% Enable/disable automatic VCS annotations (default: true)
     vcs_annotations => boolean(),
     %% SBOM export path (optional, from --sbom CLI flag)
-    sbom => binary() | undefined
+    sbom => binary() | undefined,
+    %% Path to cosign private key for image signing (optional)
+    sign_key => binary() | undefined
 }.
 
 -export_type([config/0]).

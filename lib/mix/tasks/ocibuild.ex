@@ -30,6 +30,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `--uid` - User ID to run as (default: 65534 for nobody)
     * `--no-vcs-annotations` - Disable automatic VCS annotations
     * `--sbom` - Export SBOM to file path (SBOM is always embedded in image)
+    * `--sign-key` - Path to cosign private key for image signing
 
   ## Configuration
 
@@ -84,7 +85,8 @@ defmodule Mix.Tasks.Ocibuild do
           platform: :string,
           uid: :integer,
           no_vcs_annotations: :boolean,
-          sbom: :string
+          sbom: :string,
+          sign_key: :string
         ]
       )
 
@@ -230,6 +232,7 @@ defmodule Mix.Tasks.Ocibuild do
       app_version: get_app_version(config),
       vcs_annotations: get_vcs_annotations(opts, ocibuild_config),
       sbom: get_opt_binary(opts, :sbom),
+      sign_key: get_sign_key(opts, ocibuild_config),
       dependencies: Ocibuild.Lock.get_dependencies()
     }
   end
@@ -278,6 +281,23 @@ defmodule Mix.Tasks.Ocibuild do
       # Default to enabled
       true ->
         true
+    end
+  end
+
+  # Get sign key path: CLI --sign-key > OCIBUILD_SIGN_KEY env > config sign_key
+  defp get_sign_key(opts, ocibuild_config) do
+    cond do
+      opts[:sign_key] ->
+        to_binary(opts[:sign_key])
+
+      System.get_env("OCIBUILD_SIGN_KEY") ->
+        to_binary(System.get_env("OCIBUILD_SIGN_KEY"))
+
+      Keyword.has_key?(ocibuild_config, :sign_key) ->
+        to_binary(Keyword.get(ocibuild_config, :sign_key))
+
+      true ->
+        nil
     end
   end
 

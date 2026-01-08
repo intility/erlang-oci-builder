@@ -115,7 +115,9 @@ init(State) ->
                 {uid, undefined, "uid", integer, "User ID to run as (default: 65534)"},
                 {no_vcs_annotations, undefined, "no-vcs-annotations", boolean,
                     "Disable automatic VCS annotations"},
-                {sbom, undefined, "sbom", string, "Export SBOM to file path"}
+                {sbom, undefined, "sbom", string, "Export SBOM to file path"},
+                {sign_key, undefined, "sign-key", string,
+                    "Path to cosign private key for image signing"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -274,7 +276,8 @@ get_config(State) ->
         %% In Erlang, release name usually matches app name, but can be set explicitly
         app_name => get_app_name(State, Config),
         vcs_annotations => get_vcs_annotations(Args, Config),
-        sbom => get_sbom_path(Args)
+        sbom => get_sbom_path(Args),
+        sign_key => get_sign_key(Args, Config)
     }.
 
 %% @private Get app_name for layer classification
@@ -361,6 +364,25 @@ get_sbom_path(Args) ->
     case proplists:get_value(sbom, Args) of
         undefined -> undefined;
         Path -> list_to_binary(Path)
+    end.
+
+%% @private Get sign key path from args, env, or config
+%% Priority: CLI --sign-key > OCIBUILD_SIGN_KEY env > config sign_key
+get_sign_key(Args, Config) ->
+    case proplists:get_value(sign_key, Args) of
+        undefined ->
+            case os:getenv("OCIBUILD_SIGN_KEY") of
+                false ->
+                    case proplists:get_value(sign_key, Config) of
+                        undefined -> undefined;
+                        Path when is_list(Path) -> list_to_binary(Path);
+                        Path when is_binary(Path) -> Path
+                    end;
+                EnvPath ->
+                    list_to_binary(EnvPath)
+            end;
+        Path ->
+            list_to_binary(Path)
     end.
 
 %% @private Get push registry from args
