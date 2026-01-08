@@ -2345,18 +2345,23 @@ push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) w
         end
     else
         false ->
-            %% No sign key configured - skip
+            %% No sign key configured (SignKeyPath is undefined/nil/not binary) - skip
             ok;
-        {error, {key_read_failed, _, _} = KeyError} ->
-            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, {key_read_failed, KeyPath, _} = KeyError} ->
+            %% File read error - path is in the error tuple
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [KeyPath, KeyError]);
         {error, {invalid_pem, _} = KeyError} ->
-            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            %% PEM parsing errors - SignKeyPath is guaranteed to be binary here
+            %% (we only get here if is_binary(SignKeyPath) succeeded)
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {pem_decode_failed, _} = KeyError} ->
-            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {key_decode_failed, _} = KeyError} ->
-            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {unsupported_curve, _, _} = KeyError} ->
-            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, {unsupported_curve_format, _} = KeyError} ->
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, Reason} ->
             %% Could not calculate manifest, signing failed, or other error
             AdapterModule:info("Warning: Signing failed: ~p", [Reason])
