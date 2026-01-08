@@ -187,7 +187,8 @@ jobs:
         run: |
           IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
           MIX_ENV=prod mix ocibuild \
-            -t "${IMAGE_NAME_LOWER}:integration" \
+            -t "${IMAGE_NAME_LOWER}:${{ github.sha }}" \
+            -t "${IMAGE_NAME_LOWER}:integration-elixir" \
             -d "CI workflow test image" \
             --push ghcr.io
 

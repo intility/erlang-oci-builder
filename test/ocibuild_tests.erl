@@ -1129,8 +1129,18 @@ load_tarball_for_push_test() ->
 
         %% Verify we got one image
         [LoadedImage] = maps:get(images, Result),
-        ?assertMatch(#{manifest := _, manifest_digest := _, config := _, config_digest := _,
-                       layers := _, platform := _, annotations := _}, LoadedImage),
+        ?assertMatch(
+            #{
+                manifest := _,
+                manifest_digest := _,
+                config := _,
+                config_digest := _,
+                layers := _,
+                platform := _,
+                annotations := _
+            },
+            LoadedImage
+        ),
 
         %% Verify layers have correct structure
         Layers = maps:get(layers, LoadedImage),
@@ -1349,14 +1359,19 @@ load_tarball_hardlink_test() ->
                 %% Check if tar contains a hardlink entry
                 {ok, Entries} = erl_tar:table(TmpFile, [compressed, verbose]),
                 HasHardlink = lists:any(
-                    fun({_, link, _, _, _, _, _}) -> true;
-                       (_) -> false
-                    end, Entries),
+                    fun
+                        ({_, link, _, _, _, _, _}) -> true;
+                        (_) -> false
+                    end,
+                    Entries
+                ),
 
                 case HasHardlink of
                     true ->
                         %% Platform preserves hardlinks, test rejection
-                        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1}),
+                        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{
+                            memory_threshold => 1
+                        }),
                         ?assertMatch({error, {hardlink_not_allowed, _}}, Result);
                     false ->
                         %% Platform converts hardlinks to regular files, skip
@@ -1453,7 +1468,9 @@ load_tarball_path_traversal_memory_mode_test() ->
         ok = erl_tar:close(Handle),
 
         %% Use high threshold to ensure memory mode is used
-        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{
+            memory_threshold => 1024 * 1024 * 1024
+        }),
         ?assertMatch({error, {path_traversal, _}}, Result)
     after
         file:delete(TmpFile)
@@ -1468,7 +1485,9 @@ load_tarball_absolute_path_memory_mode_test() ->
         ok = erl_tar:close(Handle),
 
         %% Use high threshold to ensure memory mode is used
-        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{
+            memory_threshold => 1024 * 1024 * 1024
+        }),
         ?assertMatch({error, {absolute_path, _}}, Result)
     after
         file:delete(TmpFile)
@@ -1486,7 +1505,9 @@ load_tarball_symlink_memory_mode_test() ->
         ok = erl_tar:close(Handle),
 
         %% Use high threshold to ensure memory mode is used
-        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{memory_threshold => 1024 * 1024 * 1024}),
+        Result = ocibuild_layout:load_tarball_for_push(TmpFile, #{
+            memory_threshold => 1024 * 1024 * 1024
+        }),
         ?assertMatch({error, {symlink_not_allowed, _}}, Result)
     after
         file:delete(SymlinkPath),

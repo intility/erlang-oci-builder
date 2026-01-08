@@ -33,7 +33,7 @@ The state passed to this adapter is a map containing:
     labels => #{},
     cmd => <<\"start\">>,
     description => <<\"My app\">>,
-    tag => <<\"myapp:1.0.0\">>,
+    tags => [<<\"myapp:1.0.0\">>],
     output => <<\"myapp-1.0.0.tar.gz\">>,
     push => <<\"ghcr.io/myorg\">>,
     chunk_size => 5242880,
@@ -77,7 +77,7 @@ get_config(State) when is_map(State) ->
         % Elixir uses "start" instead of "foreground"
         cmd => ~"start",
         description => undefined,
-        tag => undefined,
+        tags => [],
         output => undefined,
         push => undefined,
         chunk_size => undefined,

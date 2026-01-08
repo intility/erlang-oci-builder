@@ -134,7 +134,7 @@ run(AdapterModule, AdapterState, Opts) ->
         labels := Labels,
         cmd := DefaultCmd,
         description := Description,
-        tag := Tag,
+        tags := Tags,
         output := OutputOpt,
         push := PushRegistry,
         chunk_size := ChunkSize
@@ -147,9 +147,10 @@ run(AdapterModule, AdapterState, Opts) ->
     Uid = maps:get(uid, Config, undefined),
 
     maybe
-        %% Validate tag exists
-        true ?= Tag =/= undefined,
-        AdapterModule:info("Building OCI image: ~s", [Tag]),
+        %% Validate at least one tag exists
+        true ?= Tags =/= [],
+        [FirstTag | _] = Tags,
+        AdapterModule:info("Building OCI image: ~s", [FirstTag]),
         %% Find release
         {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
         AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
@@ -192,7 +193,7 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Output the image(s) - this is where layer downloads happen for save
         SbomPath = maps:get(sbom, Config, undefined),
         OutputOpts = #{
-            tag => Tag,
+            tags => Tags,
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
@@ -537,7 +538,7 @@ configure_release_image(Image0, Files, Opts) ->
 %% @private Output the image (save and optionally push)
 %% Handles both single image and list of images (multi-platform)
 %%
-%% Opts: tag, output, push, chunk_size, platforms
+%% Opts: tags, output, push, chunk_size, platforms
 -spec do_output(
     AdapterModule :: module(),
     AdapterState :: term(),
@@ -545,16 +546,18 @@ configure_release_image(Image0, Files, Opts) ->
     Opts :: map()
 ) -> {ok, term()} | {error, term()}.
 do_output(AdapterModule, AdapterState, Images, Opts) ->
-    Tag = maps:get(tag, Opts),
+    Tags = maps:get(tags, Opts),
+    [FirstTag | _] = Tags,
     OutputOpt = maps:get(output, Opts, undefined),
     PushRegistry = maps:get(push, Opts, undefined),
     ChunkSize = maps:get(chunk_size, Opts, undefined),
     Platforms = maps:get(platforms, Opts, []),
 
     %% Determine output path (handle both Erlang undefined and Elixir nil)
+    %% Use first tag for output filename
     OutputPath =
         case is_nil_or_undefined(OutputOpt) of
-            true -> default_output_path(Tag);
+            true -> default_output_path(FirstTag);
             false -> binary_to_list(OutputOpt)
         end,
 
@@ -572,7 +575,8 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
 
     %% For multi-platform, use ocibuild:save with list of images
     %% For single platform, use single image
-    SaveOpts = #{tag => Tag, progress => maps:get(progress, Opts, undefined)},
+    %% Use first tag for the saved tarball
+    SaveOpts = #{tag => FirstTag, progress => maps:get(progress, Opts, undefined)},
     SaveResult =
         case Images of
             [SingleImage] ->
@@ -602,7 +606,7 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                     %% Clear progress bars before push to start fresh
                     ocibuild_progress:clear(),
                     PushOpts = #{chunk_size => ChunkSize},
-                    do_push(AdapterModule, AdapterState, Images, Tag, PushRegistry, PushOpts)
+                    do_push(AdapterModule, AdapterState, Images, Tags, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
             stop_httpc(),
@@ -636,20 +640,22 @@ default_output_path(Tag) ->
     ),
     SafeName ++ ".tar.gz".
 
-%% @private Push image(s) to registry
+%% @private Push image(s) to registry with multiple tags
 %% Handles both single image and list of images (multi-platform)
+%% First tag does full push, additional tags just add tag references
 %%
 %% Opts: chunk_size
 -spec do_push(
     AdapterModule :: module(),
     AdapterState :: term(),
     Images :: ocibuild:image() | [ocibuild:image()],
-    Tag :: binary(),
+    Tags :: [binary()],
     Registry :: binary(),
     Opts :: map()
 ) -> {ok, term()} | {error, term()}.
-do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
-    {ImageName, ImageTag} = parse_tag(Tag),
+do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
+    [FirstTag | AdditionalTags] = Tags,
+    {ImageName, FirstImageTag} = parse_tag(FirstTag),
     Auth = get_push_auth(),
     ChunkSize = maps:get(chunk_size, Opts, undefined),
 
@@ -672,38 +678,71 @@ do_push(AdapterModule, AdapterState, Images, Tag, PushDest, Opts) ->
             false -> #{}
         end,
 
-    RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
+    RepoTag = <<Repo/binary, ":", FirstImageTag/binary>>,
 
-    %% Push single image or multi-platform index
+    %% Push single image or multi-platform index with first tag
     PushResult =
         case Images of
             ImageList when is_list(ImageList), length(ImageList) > 1 ->
                 AdapterModule:info("Pushing multi-platform image to ~s/~s:~s", [
-                    Registry, Repo, ImageTag
+                    Registry, Repo, FirstImageTag
                 ]),
                 ocibuild:push_multi(ImageList, Registry, RepoTag, Auth, PushOpts);
             [SingleImage] ->
-                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, FirstImageTag]),
                 push_image(SingleImage, Registry, RepoTag, Auth, PushOpts);
             SingleImage ->
-                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, FirstImageTag]),
                 push_image(SingleImage, Registry, RepoTag, Auth, PushOpts)
         end,
 
     case PushResult of
         {ok, Digest} ->
+            %% Tag additional tags (efficient - just PUT manifest to new tag)
+            TagResults = tag_additional(AdapterModule, Registry, Repo, Digest, AdditionalTags, Auth),
+
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
             %% Clean up httpc after all pushes complete
             stop_httpc(),
-            %% Print digest for CI/CD integration (e.g., attestation workflows)
-            FullImageRef = <<Registry/binary, "/", Repo/binary, ":", ImageTag/binary>>,
+
+            %% Print digests for all tags (same digest for all)
+            FullImageRef = <<Registry/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
             AdapterModule:console("Pushed: ~s@~s~n", [FullImageRef, Digest]),
+            lists:foreach(
+                fun({Tag, ok}) ->
+                    {_, TagPart} = parse_tag(Tag),
+                    Ref = <<Registry/binary, "/", Repo/binary, ":", TagPart/binary>>,
+                    AdapterModule:console("Pushed: ~s@~s~n", [Ref, Digest]);
+                   ({Tag, {error, Reason}}) ->
+                    AdapterModule:error("Failed to tag ~s: ~p", [Tag, Reason])
+                end,
+                TagResults
+            ),
             {ok, AdapterState};
         {error, PushError} ->
             stop_httpc(),
             {error, {push_failed, PushError}}
     end.
+
+%% @private Tag additional tags (just PUT manifest to new tag URL)
+-spec tag_additional(module(), binary(), binary(), binary(), [binary()], map()) ->
+    [{binary(), ok | {error, term()}}].
+tag_additional(_AdapterModule, _Registry, _Repo, _Digest, [], _Auth) ->
+    [];
+tag_additional(AdapterModule, Registry, Repo, Digest, Tags, Auth) ->
+    lists:map(
+        fun(Tag) ->
+            {_, TagPart} = parse_tag(Tag),
+            AdapterModule:info("Tagging ~s/~s:~s", [Registry, Repo, TagPart]),
+            Result = ocibuild_registry:tag_from_digest(Registry, Repo, Digest, TagPart, Auth),
+            case Result of
+                {ok, _} -> {Tag, ok};
+                {error, _} = Err -> {Tag, Err}
+            end
+        end,
+        Tags
+    ).
 
 %%%===================================================================
 %%% Public API
@@ -1127,8 +1166,11 @@ separate steps.
 
 Options:
 - `registry` - Target registry (e.g., `<<"ghcr.io/myorg">>`)
-- `tag` - Optional tag override (uses embedded tag from tarball if not specified)
+- `tags` - Optional tag overrides (uses embedded tag from tarball if not specified)
 - `chunk_size` - Chunk size for uploads in bytes
+
+Supports multiple tags: first tag does full upload, additional tags just
+add tag references to the same manifest (efficient).
 
 Returns `{ok, AdapterState}` on success with the pushed digest printed.
 """.
@@ -1136,7 +1178,7 @@ Returns `{ok, AdapterState}` on success with the pushed digest printed.
     {ok, term()} | {error, term()}.
 push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
     Registry = maps:get(registry, Opts),
-    TagOverride = maps:get(tag, Opts, undefined),
+    TagsOverride = maps:get(tags, Opts, []),
     ChunkSize = maps:get(chunk_size, Opts, undefined),
 
     AdapterModule:info("Loading tarball: ~s", [TarballPath]),
@@ -1145,7 +1187,7 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
         {ok, #{images := Images, tag := EmbeddedTag, is_multi_platform := IsMulti, cleanup := Cleanup}} ->
             %% Wrap in try-after to ensure cleanup is always called
             try
-                push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
+                push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
                                   ChunkSize, Images, EmbeddedTag, IsMulti)
             after
                 Cleanup()
@@ -1155,36 +1197,39 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
     end.
 
 %% Internal implementation of push_tarball, separated to ensure cleanup in caller
--spec push_tarball_impl(module(), term(), binary(), binary() | undefined,
+-spec push_tarball_impl(module(), term(), binary(), [binary()],
                         non_neg_integer() | undefined, [map()], binary() | undefined, boolean()) ->
     {ok, term()} | {error, term()}.
-push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
+push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
                   ChunkSize, Images, EmbeddedTag, IsMulti) ->
     maybe
-        %% Determine tag: override takes precedence, then embedded, else error
-        Tag = case TagOverride of
-            undefined when EmbeddedTag =/= undefined -> EmbeddedTag;
-            undefined -> undefined;
-            _ -> TagOverride
+        %% Determine tags: override takes precedence, then embedded, else error
+        Tags = case TagsOverride of
+            [] when EmbeddedTag =/= undefined -> [EmbeddedTag];
+            [] -> [];
+            _ -> TagsOverride
         end,
 
-        %% Validate tag is specified
-        ok ?= case Tag of
-            undefined ->
+        %% Validate at least one tag is specified
+        ok ?= case Tags of
+            [] ->
                 {error, {no_tag_specified, "Use --tag to specify image tag"}};
             _ ->
                 ok
         end,
 
+        %% Use first tag for push, additional tags will be added after
+        [FirstTag | AdditionalTags] = Tags,
+
         %% Parse tag and registry
-        {ImageName, ImageTag} = parse_tag(Tag),
+        {ImageName, FirstImageTag} = parse_tag(FirstTag),
         {RegistryHost, Namespace} = parse_push_destination(Registry),
         Repo = case Namespace of
             <<>> -> ImageName;
             _ -> <<Namespace/binary, "/", ImageName/binary>>
         end,
 
-        AdapterModule:info("Pushing to ~s/~s:~s", [RegistryHost, Repo, ImageTag]),
+        AdapterModule:info("Pushing to ~s/~s:~s", [RegistryHost, Repo, FirstImageTag]),
 
         %% Get auth and progress
         Auth = get_push_auth(),
@@ -1194,20 +1239,20 @@ push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
         %% Convert loaded images to push_blobs_input format
         BlobsList = [convert_loaded_image_to_blobs(Img) || Img <- Images],
 
-        %% Push
+        %% Push with first tag
         Result = case {IsMulti, BlobsList} of
             {_, []} ->
                 %% Defensive: should be caught earlier by validate_index_schema
                 {error, {no_images_in_tarball}};
             {true, _} ->
                 ocibuild_registry:push_blobs_multi(
-                    RegistryHost, Repo, ImageTag, BlobsList, Auth, PushOpts
+                    RegistryHost, Repo, FirstImageTag, BlobsList, Auth, PushOpts
                 );
             {false, [Blobs]} ->
                 %% Check if tag override requires manifest update
-                FinalBlobs = maybe_update_manifest_tag(Blobs, Tag, EmbeddedTag),
+                FinalBlobs = maybe_update_manifest_tag(Blobs, FirstTag, EmbeddedTag),
                 ocibuild_registry:push_blobs(
-                    RegistryHost, Repo, ImageTag, FinalBlobs, Auth, PushOpts
+                    RegistryHost, Repo, FirstImageTag, FinalBlobs, Auth, PushOpts
                 );
             {false, _MultipleBlobsUnexpected} ->
                 %% Inconsistent state: single-platform flag but multiple images
@@ -1216,11 +1261,27 @@ push_tarball_impl(AdapterModule, AdapterState, Registry, TagOverride,
         end,
 
         clear_progress_line(),
-        stop_httpc(),
 
         {ok, Digest} ?= Result,
-        FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", ImageTag/binary>>,
+
+        %% Tag additional tags (efficient - just PUT manifest to new tag)
+        TagResults = tag_additional(AdapterModule, RegistryHost, Repo, Digest, AdditionalTags, Auth),
+
+        stop_httpc(),
+
+        %% Print digests for all tags
+        FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
         AdapterModule:console("Pushed: ~s@~s~n", [FullRef, Digest]),
+        lists:foreach(
+            fun({Tag, ok}) ->
+                {_, TagPart} = parse_tag(Tag),
+                Ref = <<RegistryHost/binary, "/", Repo/binary, ":", TagPart/binary>>,
+                AdapterModule:console("Pushed: ~s@~s~n", [Ref, Digest]);
+               ({Tag, {error, Reason}}) ->
+                AdapterModule:error("Failed to tag ~s: ~p", [Tag, Reason])
+            end,
+            TagResults
+        ),
         {ok, AdapterState}
     else
         {error, _} = Err -> Err

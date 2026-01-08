@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.1 - Unreleased
+
+### Features
+
+- **Multiple tag support** ([#30](https://github.com/intility/erlang-oci-builder/issues/30)):
+  - Push the same image with multiple tags in a single command: `-t myapp:1.0.0 -t myapp:latest`
+  - Efficient: first tag does full upload, additional tags just reference the same manifest
+  - Works with both build-and-push and push-tarball modes
+  - Works with both single-platform and multi-platform images
+  - All tags report the same digest in output
+
+### New Functions
+
+- `ocibuild_registry:tag_from_digest/5` - Tag an existing manifest with a new tag (no blob re-upload)
+
 ## 0.7.0 - 2026-01-08
 
 ### Features

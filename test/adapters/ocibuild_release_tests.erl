@@ -1207,7 +1207,7 @@ create_mock_adapter_state(ReleasePath, Overrides) ->
         labels => #{},
         cmd => ~"start",
         description => undefined,
-        tag => ~"myapp:1.0.0",
+        tags => [~"myapp:1.0.0"],
         output => list_to_binary(OutputPath),
         push => undefined,
         chunk_size => undefined,

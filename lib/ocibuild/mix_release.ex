@@ -18,7 +18,7 @@ defmodule Ocibuild.MixRelease do
           ocibuild: [
             base_image: "debian:stable-slim",
             push: "ghcr.io/myorg",  # Registry to push to (omit to skip push)
-            tag: "myapp:1.0.0",     # Optional, defaults to release_name:version
+            tag: "myapp:1.0.0",     # Optional, can be list for multiple tags
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
             expose: [8080],
@@ -36,7 +36,7 @@ defmodule Ocibuild.MixRelease do
   ## Configuration Options
 
     * `:base_image` - Base image (default: "debian:stable-slim")
-    * `:tag` - Image tag (default: release_name:release_version)
+    * `:tag` - Image tag or list of tags (default: release_name:release_version)
     * `:push` - Registry to push to (e.g., "ghcr.io/myorg"). Omit to skip push.
     * `:workdir` - Working directory in container (default: "/app")
     * `:env` - Environment variables map
@@ -101,7 +101,7 @@ defmodule Ocibuild.MixRelease do
       labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
       cmd: Keyword.get(ocibuild_config, :cmd, "start") |> to_binary(),
       description: get_description(ocibuild_config),
-      tag: get_tag(ocibuild_config, release.name, release.version) |> to_binary(),
+      tags: get_tags(ocibuild_config, release.name, release.version),
       output: nil,
       push: get_push(ocibuild_config),
       chunk_size: get_chunk_size(ocibuild_config),
@@ -143,10 +143,11 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
-  defp get_tag(ocibuild_config, release_name, version) do
+  defp get_tags(ocibuild_config, release_name, version) do
     case Keyword.get(ocibuild_config, :tag) do
-      nil -> "#{release_name}:#{version}"
-      tag -> tag
+      nil -> [to_binary("#{release_name}:#{version}")]
+      tags when is_list(tags) -> Enum.map(tags, &to_binary/1)
+      tag -> [to_binary(tag)]
     end
   end
 

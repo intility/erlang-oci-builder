@@ -89,6 +89,9 @@ podman load < myapp-1.0.0.tar.gz
 export OCIBUILD_PUSH_USERNAME="myuser"
 export OCIBUILD_PUSH_PASSWORD="mytoken"
 mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
+
+# Push with multiple tags (e.g., version + latest)
+mix ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
 ```
 
 #### Automatic Release Step
@@ -132,6 +135,9 @@ podman load < myapp-1.0.0.tar.gz
 export OCIBUILD_PUSH_USERNAME="myuser"
 export OCIBUILD_PUSH_PASSWORD="mytoken"
 rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
+
+# Push with multiple tags (e.g., version + latest)
+rebar3 ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
 ```
 
 ### Programmatic API (Erlang)
@@ -183,7 +189,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
 | Option                 | Short | Description                                       |
 |------------------------|-------|---------------------------------------------------|
-| `--tag`                | `-t`  | Image tag, e.g., `myapp:1.0.0`                    |
+| `--tag`                | `-t`  | Image tag (repeatable for multiple tags)          |
 | `--output`             | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
 | `--push`               | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
 | `--desc`               | `-d`  | Image description (OCI manifest annotation)       |
@@ -200,6 +206,21 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 - Tag defaults to `app:version` in Mix, required in rebar3
 - `--cmd` options (Elixir): `start`, `start_iex`, `daemon`, `daemon_iex`
 - Multi-platform builds require `include_erts: false` and a base image with ERTS
+
+### Multiple Tags
+
+Push the same image with multiple tags in a single command:
+
+```bash
+# Build and push with multiple tags
+rebar3 ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
+mix ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
+
+# Push existing tarball with multiple tags
+rebar3 ocibuild --push ghcr.io/myorg -t myapp:2.0.0 -t myapp:latest myimage.tar.gz
+```
+
+This is efficient: the first tag does a full upload, additional tags just reference the same manifest (no blob re-upload). All tags report the same digest.
 
 ### Push Existing Tarball
 
@@ -254,6 +275,7 @@ push:
     {uid, 65534},                          % User ID (optional, defaults to 65534)
     {description, "My application"},       % OCI manifest annotation
     {vcs_annotations, true}                % Auto VCS annotations (default: true)
+    % Tags are specified via CLI: -t myapp:1.0.0 -t myapp:latest
 ]}.
 ```
 
@@ -266,18 +288,19 @@ def project do
     version: "1.0.0",
     # ...
     ocibuild: [
-      base_image: "debian:stable-slim",    # Base image (default: debian:stable-slim)
-      tag: "myapp:1.0.0",                  # Optional, defaults to app:version
-      workdir: "/app",                     # Working directory in container
-      cmd: "start",                        # Release command (default: start)
-      env: %{"LANG" => "C.UTF-8"},         # Environment variables
-      expose: [8080, 443],                 # Ports to expose
-      labels: %{                           # Image labels
+      base_image: "debian:stable-slim",        # Base image (default: debian:stable-slim)
+      tag: "myapp:1.0.0",                      # Optional, defaults to app:version
+      # tag: ["myapp:1.0.0", "myapp:latest"],  # Or use a list for multiple tags
+      workdir: "/app",                         # Working directory in container
+      cmd: "start",                            # Release command (default: start)
+      env: %{"LANG" => "C.UTF-8"},             # Environment variables
+      expose: [8080, 443],                     # Ports to expose
+      labels: %{                               # Image labels
         "org.opencontainers.image.source" => "https://github.com/..."
       },
-      uid: 65534,                          # User ID (optional, defaults to 65534)
-      description: "My application",       # OCI manifest annotation
-      vcs_annotations: true                # Auto VCS annotations (default: true)
+      uid: 65534,                              # User ID (optional, defaults to 65534)
+      description: "My application",           # OCI manifest annotation
+      vcs_annotations: true                    # Auto VCS annotations (default: true)
     ]
   ]
 end

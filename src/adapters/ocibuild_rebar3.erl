@@ -18,7 +18,7 @@ rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 
 ## Options
 
-  * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Required.
+  * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Can be specified multiple times.
   * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
   * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
   * `-d, --desc` - Image description (OCI manifest annotation)
@@ -100,7 +100,7 @@ init(State) ->
             {short_desc, "Build OCI images"},
             {example, "rebar3 ocibuild -t myapp:1.0.0"},
             {opts, [
-                {tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
+                {tag, $t, "tag", string, "Image tag (repeatable, e.g., -t myapp:1.0.0 -t myapp:latest)"},
                 {output, $o, "output", string, "Output tarball path"},
                 {push, $p, "push", string, "Push to registry (e.g., ghcr.io/myorg)"},
                 {base, undefined, "base", string, "Override base image"},
@@ -129,25 +129,26 @@ do(State) ->
     PushRegistry = get_push_registry(Args),
     TarballPath = detect_tarball_arg(Rest),
 
+    Tags = get_tags(Args),
     case {PushRegistry, TarballPath} of
         {undefined, _} ->
-            %% No push registry - normal build mode (tag required)
-            case proplists:get_value(tag, Args) of
-                undefined ->
+            %% No push registry - normal build mode (at least one tag required)
+            case Tags of
+                [] ->
                     {error, {?MODULE, missing_tag}};
-                Tag ->
-                    do_build(State, Args, Config, list_to_binary(Tag))
+                _ ->
+                    do_build(State, Args, Config)
             end;
         {_Registry, {ok, Path}} ->
             %% Push tarball mode (standalone, no release needed)
             do_push_tarball(State, Args, Path);
         {_Registry, undefined} ->
-            %% Build and push mode (tag required)
-            case proplists:get_value(tag, Args) of
-                undefined ->
+            %% Build and push mode (at least one tag required)
+            case Tags of
+                [] ->
                     {error, {?MODULE, missing_tag}};
-                Tag ->
-                    do_build(State, Args, Config, list_to_binary(Tag))
+                _ ->
+                    do_build(State, Args, Config)
             end
     end.
 
@@ -167,15 +168,12 @@ detect_tarball_arg(_) ->
     {ok, rebar_state:t()} | {error, term()}.
 do_push_tarball(State, Args, TarballPath) ->
     PushRegistry = get_push_registry(Args),
-    Tag = case proplists:get_value(tag, Args) of
-        undefined -> undefined;
-        T -> list_to_binary(T)
-    end,
+    Tags = get_tags(Args),
     ChunkSize = get_chunk_size(Args),
 
     Opts = #{
         registry => PushRegistry,
-        tag => Tag,
+        tags => Tags,
         chunk_size => ChunkSize
     },
 
@@ -216,7 +214,7 @@ format_error(Reason) ->
 %%%===================================================================
 
 %% @private Main build logic - delegates to ocibuild_release:run/3
-do_build(State, _Args, _Config, _Tag) ->
+do_build(State, _Args, _Config) ->
     case ocibuild_release:run(?MODULE, State, #{}) of
         {ok, NewState} ->
             {ok, NewState};
@@ -262,7 +260,7 @@ get_config(State) ->
         labels => proplists:get_value(labels, Config, #{}),
         cmd => ~"foreground",
         description => get_description(Args, Config),
-        tag => get_tag(Args),
+        tags => get_tags(Args),
         output => get_output(Args),
         push => get_push_registry(Args),
         chunk_size => get_chunk_size(Args),
@@ -313,11 +311,11 @@ get_description(Args, Config) ->
             list_to_binary(Descr)
     end.
 
-%% @private Get tag from args
-get_tag(Args) ->
-    case proplists:get_value(tag, Args) of
-        undefined -> undefined;
-        Tag -> list_to_binary(Tag)
+%% @private Get tags from args (supports multiple -t flags)
+get_tags(Args) ->
+    case proplists:get_all_values(tag, Args) of
+        [] -> [];
+        TagStrs -> [list_to_binary(T) || T <- TagStrs]
     end.
 
 %% @private Get output path from args

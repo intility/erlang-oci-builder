@@ -18,7 +18,7 @@ defmodule Mix.Tasks.Ocibuild do
 
   ## Options
 
-    * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Defaults to release_name:version
+    * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Can be repeated. Defaults to release_name:version
     * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
     * `-c, --cmd` - Release start command (default: "start"). Use "daemon" for background
     * `-d, --desc` - Image description (OCI manifest annotation)
@@ -73,7 +73,7 @@ defmodule Mix.Tasks.Ocibuild do
       OptionParser.parse(args,
         aliases: [t: :tag, p: :push, o: :output, c: :cmd, d: :desc, P: :platform],
         switches: [
-          tag: :string,
+          tag: [:string, :keep],
           output: :string,
           push: :string,
           base: :string,
@@ -126,9 +126,12 @@ defmodule Mix.Tasks.Ocibuild do
       push: to_binary(opts[:push])
     }
 
+    # Collect all tag values (with :keep, Keyword.get_values returns list)
+    tags = Keyword.get_values(opts, :tag) |> Enum.map(&to_binary/1)
+
     push_opts = %{
       registry: to_binary(opts[:push]),
-      tag: if(opts[:tag], do: to_binary(opts[:tag]), else: nil),
+      tags: tags,
       chunk_size: get_chunk_size(opts)
     }
 
@@ -218,7 +221,7 @@ defmodule Mix.Tasks.Ocibuild do
       labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
       cmd: get_opt(opts, :cmd, ocibuild_config, :cmd, "start") |> to_binary(),
       description: get_description(opts, ocibuild_config),
-      tag: get_tag(opts, ocibuild_config, release_name, config[:version]) |> to_binary(),
+      tags: get_tags(opts, ocibuild_config, release_name, config[:version]),
       output: get_opt_binary(opts, :output),
       push: get_opt_binary(opts, :push),
       chunk_size: get_chunk_size(opts),
@@ -296,11 +299,26 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  defp get_tag(opts, ocibuild_config, release_name, version) do
+  # Get tags from options (supports multiple -t flags with :keep)
+  defp get_tags(opts, ocibuild_config, release_name, version) do
+    # Collect all tag values from CLI
+    cli_tags = Keyword.get_values(opts, :tag) |> Enum.map(&to_binary/1)
+
     cond do
-      opts[:tag] -> opts[:tag]
-      Keyword.has_key?(ocibuild_config, :tag) -> Keyword.get(ocibuild_config, :tag)
-      true -> "#{release_name}:#{version}"
+      # CLI tags take precedence
+      cli_tags != [] ->
+        cli_tags
+
+      # Check config for tag (may be string or list)
+      Keyword.has_key?(ocibuild_config, :tag) ->
+        case Keyword.get(ocibuild_config, :tag) do
+          tags when is_list(tags) -> Enum.map(tags, &to_binary/1)
+          tag -> [to_binary(tag)]
+        end
+
+      # Default to release_name:version
+      true ->
+        [to_binary("#{release_name}:#{version}")]
     end
   end
 

@@ -18,7 +18,7 @@ get_config_empty_state_test() ->
     ?assertEqual(#{}, maps:get(labels, Config)),
     ?assertEqual(~"start", maps:get(cmd, Config)),
     ?assertEqual(undefined, maps:get(description, Config)),
-    ?assertEqual(undefined, maps:get(tag, Config)),
+    ?assertEqual([], maps:get(tags, Config)),
     ?assertEqual(undefined, maps:get(output, Config)),
     ?assertEqual(undefined, maps:get(push, Config)),
     ?assertEqual(undefined, maps:get(chunk_size, Config)),
@@ -32,7 +32,7 @@ get_config_with_overrides_test() ->
         env => #{~"LANG" => ~"en_US.UTF-8"},
         expose => [4000, 4001],
         cmd => ~"daemon",
-        tag => ~"myapp:1.0.0"
+        tags => [~"myapp:1.0.0"]
     },
     Config = ocibuild_mix:get_config(State),
     ?assertEqual(~"alpine:3.19", maps:get(base_image, Config)),
@@ -40,7 +40,7 @@ get_config_with_overrides_test() ->
     ?assertEqual(#{~"LANG" => ~"en_US.UTF-8"}, maps:get(env, Config)),
     ?assertEqual([4000, 4001], maps:get(expose, Config)),
     ?assertEqual(~"daemon", maps:get(cmd, Config)),
-    ?assertEqual(~"myapp:1.0.0", maps:get(tag, Config)),
+    ?assertEqual([~"myapp:1.0.0"], maps:get(tags, Config)),
     %% Non-overridden defaults should still be present
     ?assertEqual(#{}, maps:get(labels, Config)).
 

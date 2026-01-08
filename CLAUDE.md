@@ -163,7 +163,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 
 | Option         | Short | Description                                       |
 |----------------|-------|---------------------------------------------------|
-| `--tag`        | `-t`  | Image tag, e.g., `myapp:1.0.0`                    |
+| `--tag`        | `-t`  | Image tag (repeatable), e.g., `-t myapp:1.0.0 -t myapp:latest` |
 | `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
 | `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
 | `--desc`       | `-d`  | Image description (OCI manifest annotation)       |
@@ -176,6 +176,17 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--no-vcs-annotations` | | Disable automatic VCS annotations            |
 | `--sbom`       |       | Export SBOM to file path (SBOM always in image)   |
 
+### Multiple Tags
+
+Push the same image with multiple tags in a single command:
+
+```bash
+rebar3 ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
+mix ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
+```
+
+This is efficient: the first tag does a full upload, additional tags just reference the same manifest.
+
 ### Push Existing Tarball
 
 You can push a pre-built OCI tarball without rebuilding by providing a tarball path after `--push`:
@@ -185,8 +196,8 @@ You can push a pre-built OCI tarball without rebuilding by providing a tarball p
 rebar3 ocibuild --push ghcr.io/myorg myimage.tar.gz
 mix ocibuild --push ghcr.io/myorg myimage.tar.gz
 
-# Push with tag override
-rebar3 ocibuild --push ghcr.io/myorg --tag myapp:2.0.0 myimage.tar.gz
+# Push with multiple tag overrides
+rebar3 ocibuild --push ghcr.io/myorg -t myapp:2.0.0 -t myapp:latest myimage.tar.gz
 ```
 
 This is useful for CI/CD pipelines where build and push are separate steps.
