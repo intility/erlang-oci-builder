@@ -2331,12 +2331,12 @@ push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) w
         ),
         case PushResult of
             ok ->
-                AdapterModule:info("Image signed successfully", []);
+                AdapterModule:info("Signature attached as artifact", []);
             {error, {referrer_not_supported, _}} ->
                 %% Registry doesn't support referrers - silent skip
                 ok;
             {error, PushError} ->
-                AdapterModule:info("Warning: Signature push failed: ~p", [PushError])
+                AdapterModule:info("Warning: Signature attachment failed: ~p", [PushError])
         end
     else
         false ->
