@@ -373,9 +373,17 @@ load_tarball_to_disk(Path) ->
     maybe
         ok ?= safe_extract_tarball(Path, TempDir),
         GetBlob = fun(Digest) ->
-            BlobPath = filename:join([TempDir, "blobs", "sha256",
-                                      binary_to_list(ocibuild_digest:encoded(Digest))]),
-            file:read_file(BlobPath)
+            %% Validate digest format to prevent path traversal attacks.
+            %% A malicious tarball could craft a digest like "sha256:../../etc/passwd"
+            %% which would escape the blobs directory if not validated.
+            case validate_digest_for_path(Digest) of
+                {ok, SafeEncoded} ->
+                    BlobPath = filename:join([TempDir, "blobs", "sha256",
+                                              binary_to_list(SafeEncoded)]),
+                    file:read_file(BlobPath);
+                {error, _} = Err ->
+                    Err
+            end
         end,
         {ok, Files} ?= read_disk_files(TempDir),
         Cleanup = fun() -> delete_temp_dir(TempDir) end,
@@ -454,11 +462,36 @@ check_not_absolute(<<$/, _/binary>> = Path) -> {error, {absolute_path, Path}};
 check_not_absolute(_) -> ok.
 
 check_no_traversal(Path) ->
-    Components = binary:split(Path, [~"/", <<$\\>>], [global]),
+    Components = binary:split(Path, [~"/"], [global]),
     case lists:member(~"..", Components) of
         true -> {error, {path_traversal, Path}};
         false -> ok
     end.
+
+%% Validate digest format before using it to construct file paths.
+%% Prevents path traversal attacks via malicious digests like "sha256:../../etc/passwd".
+%% Valid digests must be in format "algorithm:hexstring" where hexstring contains only [0-9a-f].
+-spec validate_digest_for_path(binary()) -> {ok, binary()} | {error, term()}.
+validate_digest_for_path(Digest) when is_binary(Digest) ->
+    case binary:split(Digest, ~":") of
+        [_Algorithm, Encoded] ->
+            case is_valid_hex(Encoded) of
+                true -> {ok, Encoded};
+                false -> {error, {invalid_digest_format, Digest}}
+            end;
+        _ ->
+            {error, {invalid_digest_format, Digest}}
+    end.
+
+%% Check if a binary contains only lowercase hex characters [0-9a-f]
+-spec is_valid_hex(binary()) -> boolean().
+is_valid_hex(<<>>) -> false;  % Empty digest is invalid
+is_valid_hex(Bin) -> is_valid_hex_chars(Bin).
+
+is_valid_hex_chars(<<>>) -> true;
+is_valid_hex_chars(<<C, Rest/binary>>) when C >= $0, C =< $9 -> is_valid_hex_chars(Rest);
+is_valid_hex_chars(<<C, Rest/binary>>) when C >= $a, C =< $f -> is_valid_hex_chars(Rest);
+is_valid_hex_chars(_) -> false.
 
 %% Read metadata files from disk-extracted tarball
 -spec read_disk_files(file:filename_all()) -> {ok, #{binary() => binary()}} | {error, term()}.
