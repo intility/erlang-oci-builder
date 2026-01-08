@@ -2341,18 +2341,18 @@ push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) w
             %% No sign key configured - skip
             ok;
         {error, {key_read_failed, _, _} = KeyError} ->
-            AdapterModule:error("Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {invalid_pem, _} = KeyError} ->
-            AdapterModule:error("Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {pem_decode_failed, _} = KeyError} ->
-            AdapterModule:error("Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {key_decode_failed, _} = KeyError} ->
-            AdapterModule:error("Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, {unsupported_curve, _, _} = KeyError} ->
-            AdapterModule:error("Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [SignKeyPath, KeyError]);
         {error, Reason} ->
             %% Could not calculate manifest, signing failed, or other error
-            AdapterModule:error("Signing failed: ~p", [Reason])
+            AdapterModule:info("Warning: Signing failed: ~p", [Reason])
     end.
 
 %% @private Calculate manifest digest and size from image

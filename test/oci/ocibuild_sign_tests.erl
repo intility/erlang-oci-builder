@@ -68,7 +68,7 @@ load_key_nonexistent_test() ->
 
 load_key_invalid_pem_test() ->
     %% Test loading invalid PEM content
-    TmpPath = "/tmp/ocibuild_test_invalid_key.pem",
+    TmpPath = ocibuild_test_helpers:make_temp_file("invalid_key", ".pem"),
     ok = file:write_file(TmpPath, ~"not a valid pem file"),
     try
         Result = ocibuild_sign:load_key(TmpPath),
@@ -90,7 +90,7 @@ load_key_valid_ecdsa_p256_test() ->
     PemEntry = public_key:pem_entry_encode('ECPrivateKey', ECPrivateKey),
     PemBin = public_key:pem_encode([PemEntry]),
 
-    TmpPath = "/tmp/ocibuild_test_valid_key.pem",
+    TmpPath = ocibuild_test_helpers:make_temp_file("valid_key", ".pem"),
     ok = file:write_file(TmpPath, PemBin),
     try
         Result = ocibuild_sign:load_key(TmpPath),
@@ -126,7 +126,7 @@ sign_test() ->
     %% Signature should be non-empty binary (DER-encoded ECDSA signature)
     ?assert(is_binary(Signature)),
     ?assert(byte_size(Signature) > 0),
-    %% ECDSA P-256 signatures are typically 70-72 bytes in DER encoding
+    %% DER-encoded ECDSA P-256 signatures range 64-80 bytes, typically ~70-72
     ?assert(byte_size(Signature) >= 64),
     ?assert(byte_size(Signature) =< 80).
 
