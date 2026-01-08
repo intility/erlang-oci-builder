@@ -208,7 +208,8 @@ jobs:
         run: |
           IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
           echo "Verifying signature for ghcr.io/${IMAGE_NAME_LOWER}:integration-elixir"
-          cosign verify --key /tmp/cosign.pub "ghcr.io/${IMAGE_NAME_LOWER}:integration-elixir"
+          # --insecure-ignore-tlog: Skip transparency log check (required for local key signing)
+          cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog "ghcr.io/${IMAGE_NAME_LOWER}:integration-elixir"
           echo "Signature verification passed - safe to run container"
 
       - name: Log in to GitHub Container Registry
