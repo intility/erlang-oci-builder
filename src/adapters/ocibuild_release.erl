@@ -2331,12 +2331,10 @@ push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) w
         ),
         case PushResult of
             ok ->
-                AdapterModule:info("Signature attached as artifact", []);
-            {error, {referrer_not_supported, _}} ->
-                %% Registry doesn't support referrers - silent skip
-                ok;
+                SignatureTag = ocibuild_registry:digest_to_signature_tag(ManifestDigest),
+                AdapterModule:info("Image signed with ~s", [SignatureTag]);
             {error, PushError} ->
-                AdapterModule:info("Warning: Signature attachment failed: ~p", [PushError])
+                AdapterModule:info("Warning: Signing failed: ~p", [PushError])
         end
     else
         false ->

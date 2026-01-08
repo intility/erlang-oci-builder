@@ -19,6 +19,7 @@ See: https://github.com/opencontainers/distribution-spec
     push_blobs_multi/5, push_blobs_multi/6,
     push_referrer/7, push_referrer/8,
     push_signature/7, push_signature/8,
+    digest_to_signature_tag/1,
     check_blob_exists/4,
     tag_from_digest/5,
     stop_httpc/0
