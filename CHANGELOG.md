@@ -9,8 +9,9 @@
   - Full references: `-t ghcr.io/org/myapp:v1.0.0` (extracts repo path for push)
   - Existing repo:tag format unchanged: `-t myapp:v1.0.0`
 
-- **Semicolon-separated tags** for docker/metadata-action compatibility:
-  - Single flag with multiple tags: `-t "ghcr.io/myorg/myapp:v1;ghcr.io/myorg/myapp:latest"`
+- **docker/metadata-action compatibility**:
+  - Use `sep-tags: ";"` in the action, then pass directly: `-t "${{ steps.meta.outputs.tags }}"`
+  - Semicolon-separated tags are split automatically
   - Works in both CLI and config files
 
 ### Security
