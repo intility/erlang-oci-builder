@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.9.0 - 2026-01-09
+
+### Features
+
+- **Zstd compression support** (OTP 28+):
+  - Layers can now be compressed with zstd for 20-50% smaller images and 5-10x faster decompression
+  - Automatic OTP version detection: uses zstd on OTP 28+, falls back to gzip on OTP 27
+  - New `--compression` CLI flag: `gzip`, `zstd`, or `auto` (default: `auto`)
+  - Configurable via `compression` option in rebar.config or mix.exs
+  - Explicit `--compression zstd` on OTP 27 returns clear error with OTP version info
+  - Media type automatically set to `application/vnd.oci.image.layer.v1.tar+zstd` for zstd layers
+
+### New Modules
+
+- `ocibuild_compress` - Compression abstraction with OTP version detection
+  - `is_available/1` - Check if compression algorithm is available
+  - `default/0` - Get best available compression (zstd on OTP 28+, gzip on OTP 27)
+  - `resolve/1` - Resolve `auto` to actual algorithm
+  - `compress/2` - Compress data with specified algorithm
+
+### Improvements
+
+- **Expanded test coverage**: Added dedicated unit tests for utility modules
+  - `ocibuild_digest_tests` - 38 tests covering SHA256 digests, hex encoding, and security edge cases
+  - `ocibuild_time_tests` - 23 tests covering ISO8601 conversion and SOURCE_DATE_EPOCH handling
+  - `ocibuild_compress_tests` - 29 tests covering compression algorithms and OTP version detection
+  - Test count increased from 497 to 558 (+61 tests)
+  - `ocibuild_digest`, `ocibuild_time`, and `ocibuild_json` now at 100% code coverage
+
+### API Changes
+
+- `ocibuild_layer:create/1,2` now returns `{ok, Layer} | {error, Reason}` instead of `Layer`
+  - This enables proper error propagation when compression fails (e.g., zstd on OTP 27)
+  - Internal callers updated; public API (`ocibuild:add_layer/2,3`) crashes on error as before
+
 ## 0.8.0 - 2026-01-08
 
 ### Features
