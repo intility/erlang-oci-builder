@@ -1777,6 +1777,20 @@ classify_tag_full_ref_no_tag_test() ->
         ocibuild_release:classify_tag(~"ghcr.io/myorg/myapp")
     ).
 
+classify_tag_path_traversal_returns_error_test() ->
+    %% Should return error, not crash
+    ?assertEqual(
+        {error, {invalid_tag, path_traversal, ~"../../../etc:passwd"}},
+        ocibuild_release:classify_tag(~"../../../etc:passwd")
+    ).
+
+classify_tag_null_byte_returns_error_test() ->
+    %% Should return error, not crash
+    ?assertEqual(
+        {error, {invalid_tag, null_byte, <<"myapp\0:v1">>}},
+        ocibuild_release:classify_tag(<<"myapp\0:v1">>)
+    ).
+
 %%%===================================================================
 %%% Tag resolution tests
 %%%===================================================================
@@ -1817,6 +1831,13 @@ resolve_tag_full_ref_with_port_test() ->
     ?assertEqual(
         {~"localhost:5000/myapp", ~"v1.0.0"},
         ocibuild_release:resolve_tag(~"localhost:5000/myapp:v1.0.0", undefined)
+    ).
+
+resolve_tag_propagates_validation_error_test() ->
+    %% Invalid tags should return error, not crash
+    ?assertEqual(
+        {error, {invalid_tag, path_traversal, ~"../evil:tag"}},
+        ocibuild_release:resolve_tag(~"../evil:tag", ~"myapp")
     ).
 
 %%%===================================================================

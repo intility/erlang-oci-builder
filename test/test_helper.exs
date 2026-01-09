@@ -100,7 +100,8 @@ defmodule Ocibuild.TestHelpers do
   """
   def get_vcs_annotations(opts, ocibuild_config) do
     cond do
-      opts[:no_vcs_annotations] -> false
+      opts[:no_vcs_annotations] ->
+        false
 
       Keyword.has_key?(ocibuild_config, :vcs_annotations) ->
         Keyword.get(ocibuild_config, :vcs_annotations)
@@ -224,8 +225,7 @@ defmodule Ocibuild.TestHelpers do
       release_name: release_name,
       app_name: app_name,
       release_path: to_charlist(release_path),
-      base_image:
-        Keyword.get(ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),
+      base_image: Keyword.get(ocibuild_config, :base_image, "debian:stable-slim") |> to_binary(),
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),

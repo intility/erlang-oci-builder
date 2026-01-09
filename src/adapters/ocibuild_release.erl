@@ -171,7 +171,7 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Find release (needed to resolve bare tags)
         {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
         %% Resolve tags (bare tags use release name as default repo)
-        DefaultRepo = atom_to_binary(ReleaseName),
+        DefaultRepo = to_binary(ReleaseName),
         {ok, ResolvedTags} ?= resolve_tags_list(Tags, DefaultRepo),
         [FirstTag | _] = ResolvedTags,
         {ImageName, _} = parse_tag(FirstTag),
@@ -1532,10 +1532,18 @@ Examples:
 - `~"myapp:v1.0.0"` -> `{repo_tag, ~"myapp", ~"v1.0.0"}`
 - `~"ghcr.io/org/app:v1"` -> `{full_ref, ~"ghcr.io/org/app", ~"v1"}`
 - `~"localhost:5000/myapp:v1"` -> `{full_ref, ~"localhost:5000/myapp", ~"v1"}`
+- `~"../../../etc:passwd"` -> `{error, {invalid_tag, path_traversal, ...}}`
 """.
--spec classify_tag(binary()) -> tag_format().
+-spec classify_tag(binary()) -> tag_format() | {error, term()}.
 classify_tag(Tag) ->
-    ok = validate_tag(Tag),
+    case validate_tag(Tag) of
+        {error, _} = Err ->
+            Err;
+        ok ->
+            classify_tag_impl(Tag)
+    end.
+
+classify_tag_impl(Tag) ->
     case binary:split(Tag, ~":", [global]) of
         [TagOnly] ->
             %% No colon: check if it contains slashes (full ref without tag)
@@ -1587,6 +1595,8 @@ Examples:
     {Repo :: binary(), Tag :: binary()} | {error, term()}.
 resolve_tag(RawTag, DefaultRepo) ->
     case classify_tag(RawTag) of
+        {error, _} = Err ->
+            Err;
         {bare, TagPart} when DefaultRepo =/= undefined ->
             {DefaultRepo, TagPart};
         {bare, TagPart} ->

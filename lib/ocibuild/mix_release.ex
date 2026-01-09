@@ -182,7 +182,9 @@ defmodule Ocibuild.MixRelease do
 
   defp get_compression(ocibuild_config) do
     case Keyword.get(ocibuild_config, :compression, :auto) do
-      comp when comp in [:gzip, :zstd, :auto] -> comp
+      comp when comp in [:gzip, :zstd, :auto] ->
+        comp
+
       other ->
         IO.warn("Invalid compression '#{inspect(other)}', using :auto")
         :auto

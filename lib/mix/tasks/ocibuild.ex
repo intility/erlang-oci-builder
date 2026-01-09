@@ -140,7 +140,12 @@ defmodule Mix.Tasks.Ocibuild do
       chunk_size: get_chunk_size(opts)
     }
 
-    case :ocibuild_release.push_tarball(:ocibuild_mix, state, to_charlist(tarball_path), push_opts) do
+    case :ocibuild_release.push_tarball(
+           :ocibuild_mix,
+           state,
+           to_charlist(tarball_path),
+           push_opts
+         ) do
       {:ok, _state} ->
         :ok
 

@@ -157,28 +157,28 @@ defmodule Mix.Tasks.OcibuildTest do
       assert TestHelpers.get_chunk_size([]) == nil
     end
 
-    test "converts MB to bytes for valid size" do
-      assert TestHelpers.get_chunk_size([chunk_size: 10]) == 10 * 1024 * 1024
+    test "accepts minimum value of 1 MB" do
+      assert TestHelpers.get_chunk_size(chunk_size: 1) == 1024 * 1024
     end
 
-    test "accepts minimum value of 1 MB" do
-      assert TestHelpers.get_chunk_size([chunk_size: 1]) == 1 * 1024 * 1024
+    test "converts MB to bytes for valid size" do
+      assert TestHelpers.get_chunk_size(chunk_size: 10) == 10 * 1024 * 1024
     end
 
     test "accepts maximum value of 100 MB" do
-      assert TestHelpers.get_chunk_size([chunk_size: 100]) == 100 * 1024 * 1024
+      assert TestHelpers.get_chunk_size(chunk_size: 100) == 100 * 1024 * 1024
     end
 
     test "returns nil for out of range value (too small)" do
-      assert TestHelpers.get_chunk_size([chunk_size: 0]) == nil
+      assert TestHelpers.get_chunk_size(chunk_size: 0) == nil
     end
 
     test "returns nil for out of range value (too large)" do
-      assert TestHelpers.get_chunk_size([chunk_size: 101]) == nil
+      assert TestHelpers.get_chunk_size(chunk_size: 101) == nil
     end
 
     test "returns nil for negative value" do
-      assert TestHelpers.get_chunk_size([chunk_size: -1]) == nil
+      assert TestHelpers.get_chunk_size(chunk_size: -1) == nil
     end
   end
 
