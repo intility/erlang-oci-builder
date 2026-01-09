@@ -1556,14 +1556,22 @@ classify_tag_impl(Tag) ->
                     {full_ref, TagOnly, ~"latest"}
             end;
         [RepoOrHost, TagPart] ->
-            %% One colon: check if repo has slashes (indicates full reference)
-            case binary:match(RepoOrHost, ~"/") of
+            %% One colon: could be repo:tag, registry/path:tag, or registry:port/repo
+            case binary:match(TagPart, ~"/") of
+                {_, _} ->
+                    %% Second part contains slash: registry:port/repo with implicit "latest"
+                    %% e.g., "localhost:5000/myapp" -> {full_ref, "localhost:5000/myapp", "latest"}
+                    {full_ref, Tag, ~"latest"};
                 nomatch ->
-                    %% No slash in first part: simple repo:tag
-                    {repo_tag, RepoOrHost, TagPart};
-                _ ->
-                    %% Contains slash: full reference like ghcr.io/org/app:v1
-                    {full_ref, RepoOrHost, TagPart}
+                    %% No slash in second part: check first part for slash
+                    case binary:match(RepoOrHost, ~"/") of
+                        nomatch ->
+                            %% No slash in either part: simple repo:tag
+                            {repo_tag, RepoOrHost, TagPart};
+                        _ ->
+                            %% First part has slash: full reference like ghcr.io/org/app:v1
+                            {full_ref, RepoOrHost, TagPart}
+                    end
             end;
         Parts ->
             %% Multiple colons: registry with port like localhost:5000/myapp:v1

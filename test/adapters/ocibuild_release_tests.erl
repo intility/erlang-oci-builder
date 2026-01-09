@@ -1777,6 +1777,13 @@ classify_tag_full_ref_no_tag_test() ->
         ocibuild_release:classify_tag(~"ghcr.io/myorg/myapp")
     ).
 
+classify_tag_registry_port_no_tag_test() ->
+    %% Registry with port but no explicit tag (e.g., localhost:5000/myapp)
+    ?assertEqual(
+        {full_ref, ~"localhost:5000/myapp", ~"latest"},
+        ocibuild_release:classify_tag(~"localhost:5000/myapp")
+    ).
+
 classify_tag_path_traversal_returns_error_test() ->
     %% Should return error, not crash
     ?assertEqual(

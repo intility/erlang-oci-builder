@@ -82,6 +82,44 @@ defmodule Ocibuild.TestHelpers do
   end
 
   @doc """
+  Get tags from CLI options or config, with semicolon expansion support.
+
+  Supports docker/metadata-action style semicolon-separated tags.
+  Used by Mix.Tasks.Ocibuild where CLI options take precedence.
+  """
+  def get_tags(opts, ocibuild_config, release_name, version) do
+    # Collect all tag values from CLI, expanding semicolon-separated values
+    cli_tags =
+      Keyword.get_values(opts, :tag)
+      |> Enum.flat_map(&String.split(&1, ";"))
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&to_binary/1)
+
+    cond do
+      # CLI tags take precedence
+      cli_tags != [] ->
+        cli_tags
+
+      # Check config for tag (may be string or list)
+      Keyword.has_key?(ocibuild_config, :tag) ->
+        case Keyword.get(ocibuild_config, :tag) do
+          # List of tags (but not a charlist - charlists are lists of integers)
+          tags when is_list(tags) and (tags == [] or not is_integer(hd(tags))) ->
+            Enum.map(tags, &to_binary/1)
+
+          # Single tag (binary, charlist, or other)
+          tag ->
+            [to_binary(tag)]
+        end
+
+      # Default to release_name:version
+      true ->
+        [to_binary("#{release_name}:#{version}")]
+    end
+  end
+
+  @doc """
   Get description from CLI options or config.
 
   Used by Mix.Tasks.Ocibuild where CLI options take precedence.

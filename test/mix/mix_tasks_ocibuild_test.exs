@@ -116,6 +116,41 @@ defmodule Mix.Tasks.OcibuildTest do
     end
   end
 
+  describe "get_tags/4 semicolon expansion" do
+    test "splits semicolon-separated tags" do
+      opts = [tag: "myapp:v1;myapp:latest"]
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "trims whitespace around semicolons" do
+      opts = [tag: "myapp:v1 ; myapp:latest"]
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "filters empty segments" do
+      opts = [tag: "myapp:v1;;myapp:latest"]
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "works with full references" do
+      opts = [tag: "ghcr.io/org/app:v1;ghcr.io/org/app:latest"]
+
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == [
+               "ghcr.io/org/app:v1",
+               "ghcr.io/org/app:latest"
+             ]
+    end
+
+    test "returns default when no tags provided" do
+      assert TestHelpers.get_tags([], [], :myapp, "1.0.0") == ["myapp:1.0.0"]
+    end
+
+    test "uses config tags when no CLI option" do
+      config = [tag: ["myapp:v1", "myapp:latest"]]
+      assert TestHelpers.get_tags([], config, :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+  end
+
   describe "get_description/2" do
     test "uses CLI option when provided" do
       opts = [desc: "CLI description"]
