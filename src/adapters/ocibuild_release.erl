@@ -105,7 +105,10 @@ Security features:
     normalize_path/1,
     is_path_within/2,
     validate_symlink_target/2,
-    tag_additional/6
+    tag_additional/6,
+    default_output_path/2,
+    classify_extension/1,
+    compression_extension/1
 ]).
 -endif.
 
@@ -160,7 +163,8 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Validate at least one tag exists
         true ?= Tags =/= [],
         [FirstTag | _] = Tags,
-        AdapterModule:info("Building OCI image: ~s", [FirstTag]),
+        {ImageName, _} = parse_tag(FirstTag),
+        AdapterModule:info("Building OCI image: ~s", [ImageName]),
         %% Find release
         {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
         AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
@@ -564,13 +568,14 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
     PushRegistry = maps:get(push, Opts, undefined),
     ChunkSize = maps:get(chunk_size, Opts, undefined),
     Platforms = maps:get(platforms, Opts, []),
+    Compression = maps:get(compression, Opts, auto),
 
     %% Determine output path (handle both Erlang undefined and Elixir nil)
-    %% Use first tag for output filename
+    %% Use first tag for output filename, ensure correct extension for compression
     OutputPath =
         case is_nil_or_undefined(OutputOpt) of
-            true -> default_output_path(FirstTag);
-            false -> binary_to_list(OutputOpt)
+            true -> default_output_path(FirstTag, Compression);
+            false -> normalize_output_path(AdapterModule, binary_to_list(OutputOpt), Compression)
         end,
 
     %% Determine if this is multi-platform
@@ -665,8 +670,9 @@ save_multi_image(Images, OutputPath, Opts) ->
     SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Images, list_to_binary(OutputPath), SaveOpts).
 
-%% @private Generate default output path from tag
-default_output_path(Tag) ->
+%% @private Generate default output path from tag and compression
+-spec default_output_path(binary(), ocibuild_compress:compression()) -> string().
+default_output_path(Tag, Compression) ->
     TagStr = binary_to_list(Tag),
     ImageName = lists:last(string:split(TagStr, "/", all)),
     SafeName = lists:map(
@@ -676,7 +682,81 @@ default_output_path(Tag) ->
         end,
         ImageName
     ),
-    SafeName ++ ".tar.gz".
+    SafeName ++ compression_extension(Compression).
+
+%% @private Normalize user-provided output path
+%% - No extension or .tar: append correct compression extension
+%% - Valid archive extension matching compression: use as-is
+%% - Valid archive extension mismatching compression: warn about mismatch
+%% - Invalid extension: warn but use as-is
+-spec normalize_output_path(module(), string(), ocibuild_compress:compression()) -> string().
+normalize_output_path(AdapterModule, Path, Compression) ->
+    ResolvedCompression = ocibuild_compress:resolve(Compression),
+    case classify_extension(Path) of
+        {valid, ExtCompression} when ExtCompression =:= ResolvedCompression ->
+            %% Valid archive extension matching compression, use as-is
+            Path;
+        {valid, ExtCompression} ->
+            %% Valid archive extension but mismatches compression setting
+            Expected = compression_extension(ResolvedCompression),
+            Actual = compression_extension(ExtCompression),
+            AdapterModule:info(
+                "Warning: Output file '~s' has extension '~s' but compression is ~s (~s)",
+                [Path, Actual, ResolvedCompression, Expected]
+            ),
+            Path;
+        needs_completion ->
+            %% No extension or just .tar, append compression extension
+            Path ++ compression_extension(ResolvedCompression);
+        {invalid, Ext} ->
+            %% Unusual extension, warn but allow
+            Expected = compression_extension(ResolvedCompression),
+            AdapterModule:info(
+                "Warning: Output file '~s' has extension '~s', expected '~s'",
+                [Path, Ext, Expected]
+            ),
+            Path
+    end.
+
+%% @private Get file extension for compression type
+-spec compression_extension(ocibuild_compress:compression()) -> string().
+compression_extension(Compression) ->
+    case ocibuild_compress:resolve(Compression) of
+        gzip -> ".tar.gz";
+        zstd -> ".tar.zst"
+    end.
+
+%% @private Classify the file extension
+%% Returns {valid, gzip | zstd} for valid archive extensions,
+%% needs_completion for .tar or no extension,
+%% {invalid, Ext} for unrecognized extensions
+-spec classify_extension(string()) ->
+    {valid, gzip | zstd} | needs_completion | {invalid, string()}.
+classify_extension(Path) ->
+    LowerPath = string:lowercase(Path),
+    case {has_suffix(LowerPath, ".tar.gz"), has_suffix(LowerPath, ".tgz"),
+          has_suffix(LowerPath, ".tar.zst"), has_suffix(LowerPath, ".tar.zstd"),
+          has_suffix(LowerPath, ".tar")} of
+        {true, _, _, _, _} -> {valid, gzip};
+        {_, true, _, _, _} -> {valid, gzip};
+        {_, _, true, _, _} -> {valid, zstd};
+        {_, _, _, true, _} -> {valid, zstd};
+        {_, _, _, _, true} -> needs_completion;
+        _ ->
+            %% Check if there's any extension at all
+            case filename:extension(Path) of
+                "" -> needs_completion;
+                Ext -> {invalid, Ext}
+            end
+    end.
+
+%% @private Check if string has suffix
+-spec has_suffix(string(), string()) -> boolean().
+has_suffix(Str, Suffix) ->
+    StrLen = length(Str),
+    SuffixLen = length(Suffix),
+    StrLen >= SuffixLen andalso
+        lists:suffix(Suffix, Str).
 
 %% @private Push image(s) to registry with multiple tags
 %% Handles both single image and list of images (multi-platform)

@@ -205,6 +205,39 @@ rebar3 ocibuild --push ghcr.io/myorg -t myapp:2.0.0 -t myapp:latest myimage.tar.
 
 This is useful for CI/CD pipelines where build and push are separate steps.
 
+### Output Examples
+
+**Save only** (no `--push`):
+```
+Building OCI image: myapp
+Using release: myapp at _build/prod/rel/myapp
+Collected 142 files from release
+Saving image to myapp-1.0.0.tar.gz
+  Layer 1/1 cached (28.7 MB)
+Tagged: myapp:1.0.0
+Tagged: myapp:latest
+Digest: sha256:50efd4f1995...
+
+To load the image:
+  podman load < myapp-1.0.0.tar.gz
+```
+
+**Push to registry**:
+```
+Building OCI image: myapp
+Using release: myapp at _build/prod/rel/myapp
+Collected 142 files from release
+Pushing: ghcr.io/myorg/myapp:1.0.0
+  Layer 1/3 (erts, amd64)  : [==============================] 100%  45.2 MB
+  Layer 2/3 (deps, amd64)  : [==============================] 100%  12.8 MB
+  Layer 3/3 (app, amd64)   : [==============================] 100%   2.0 MB
+Tagged: ghcr.io/myorg/myapp:1.0.0
+Tagged: ghcr.io/myorg/myapp:latest
+Digest: sha256:abc123def456...
+```
+
+The final `Digest:` line is suitable for CI/CD pipelines to capture the image digest.
+
 Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex`
 files to support the new functionality.
 

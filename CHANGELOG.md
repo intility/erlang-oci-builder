@@ -22,11 +22,24 @@
 
 ### Improvements
 
+- **Smart output path handling**:
+  - Default output filename now uses correct extension for compression (`.tar.gz` for gzip, `.tar.zst` for zstd)
+  - Paths without extension or ending in `.tar` auto-complete with correct compression extension
+  - Valid archive extensions (`.tar.gz`, `.tgz`, `.tar.zst`, `.tar.zstd`) are used as-is
+  - Warns when extension doesn't match compression (e.g., `--output myimage.tar.gz --compression zstd`)
+  - Warns for unrecognized extensions (e.g., `.png`, `.zip`) but allows them
+
+- **Improved console output**:
+  - "Building OCI image" message now shows only image name without tag for clarity
+  - Save and push operations now show "Tagged: <ref>" for each tag
+  - Final output shows "Digest: sha256:..." for easy CI/CD pipeline integration
+  - Removed extra blank lines between output messages
+
 - **Expanded test coverage**: Added dedicated unit tests for utility modules
   - `ocibuild_digest_tests` - 38 tests covering SHA256 digests, hex encoding, and security edge cases
-  - `ocibuild_time_tests` - 23 tests covering ISO8601 conversion and SOURCE_DATE_EPOCH handling
+  - `ocibuild_time_tests` - 23 tests covering ISO8601 conversion and `SOURCE_DATE_EPOCH` handling
   - `ocibuild_compress_tests` - 29 tests covering compression algorithms and OTP version detection
-  - Test count increased from 497 to 558 (+61 tests)
+  - `ocibuild_release_tests` - Added 19 tests for output path extension handling
   - `ocibuild_digest`, `ocibuild_time`, and `ocibuild_json` now at 100% code coverage
 
 ### API Changes

@@ -1629,3 +1629,81 @@ push_signature_referrer_push_failure_test() ->
     after
         file:delete(KeyPath)
     end.
+
+%%%===================================================================
+%%% Output path extension tests
+%%%===================================================================
+
+%% classify_extension tests
+
+classify_extension_tar_gz_test() ->
+    ?assertEqual({valid, gzip}, ocibuild_release:classify_extension("myimage.tar.gz")).
+
+classify_extension_tar_gz_uppercase_test() ->
+    ?assertEqual({valid, gzip}, ocibuild_release:classify_extension("myimage.TAR.GZ")).
+
+classify_extension_tgz_test() ->
+    ?assertEqual({valid, gzip}, ocibuild_release:classify_extension("myimage.tgz")).
+
+classify_extension_tar_zst_test() ->
+    ?assertEqual({valid, zstd}, ocibuild_release:classify_extension("myimage.tar.zst")).
+
+classify_extension_tar_zstd_test() ->
+    ?assertEqual({valid, zstd}, ocibuild_release:classify_extension("myimage.tar.zstd")).
+
+classify_extension_just_tar_test() ->
+    ?assertEqual(needs_completion, ocibuild_release:classify_extension("myimage.tar")).
+
+classify_extension_no_extension_test() ->
+    ?assertEqual(needs_completion, ocibuild_release:classify_extension("myimage")).
+
+classify_extension_invalid_png_test() ->
+    ?assertEqual({invalid, ".png"}, ocibuild_release:classify_extension("myimage.png")).
+
+classify_extension_invalid_zip_test() ->
+    ?assertEqual({invalid, ".zip"}, ocibuild_release:classify_extension("myimage.zip")).
+
+classify_extension_path_with_dots_test() ->
+    %% Path like "my.app.name" has ".name" extension which is invalid
+    ?assertEqual({invalid, ".name"}, ocibuild_release:classify_extension("my.app.name")).
+
+classify_extension_path_with_tar_gz_test() ->
+    %% Full path should work
+    ?assertEqual({valid, gzip}, ocibuild_release:classify_extension("/tmp/output/myimage.tar.gz")).
+
+%% compression_extension tests
+
+compression_extension_gzip_test() ->
+    ?assertEqual(".tar.gz", ocibuild_release:compression_extension(gzip)).
+
+compression_extension_zstd_test() ->
+    ?assertEqual(".tar.zst", ocibuild_release:compression_extension(zstd)).
+
+compression_extension_auto_test() ->
+    %% auto resolves to default (gzip on OTP 27, zstd on OTP 28+)
+    Ext = ocibuild_release:compression_extension(auto),
+    ?assert(Ext =:= ".tar.gz" orelse Ext =:= ".tar.zst").
+
+%% default_output_path tests
+
+default_output_path_simple_tag_gzip_test() ->
+    ?assertEqual("myapp-1.0.0.tar.gz", ocibuild_release:default_output_path(~"myapp:1.0.0", gzip)).
+
+default_output_path_simple_tag_zstd_test() ->
+    ?assertEqual("myapp-1.0.0.tar.zst", ocibuild_release:default_output_path(~"myapp:1.0.0", zstd)).
+
+default_output_path_with_registry_test() ->
+    %% Should extract just the image name from full registry path
+    ?assertEqual("myapp-latest.tar.gz", ocibuild_release:default_output_path(~"ghcr.io/myorg/myapp:latest", gzip)).
+
+default_output_path_no_tag_test() ->
+    %% Tag without version should still work (no colon to replace)
+    ?assertEqual("myapp.tar.gz", ocibuild_release:default_output_path(~"myapp", gzip)).
+
+default_output_path_auto_compression_test() ->
+    %% auto should resolve to appropriate extension
+    Path = ocibuild_release:default_output_path(~"myapp:1.0.0", auto),
+    ?assert(
+        Path =:= "myapp-1.0.0.tar.gz" orelse
+        Path =:= "myapp-1.0.0.tar.zst"
+    ).

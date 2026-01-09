@@ -644,17 +644,21 @@ This approach requires no configuration and has zero maintenance overhead — it
 
 ```
 # First build: all layers uploaded
-Layer 1/3 (erts, amd64)         : [==============================] 45 MB
-Layer 2/3 (deps, amd64)         : [==============================] 12 MB
-Layer 3/3 (app, amd64)          : [==============================]  2 MB
-Layer 4/4 (sbom, amd64)         : [==============================] 100% 3.4 KB/3.4 KB
+  Layer 1/3 (erts, amd64)         : [==============================] 45 MB
+  Layer 2/3 (deps, amd64)         : [==============================] 12 MB
+  Layer 3/3 (app, amd64)          : [==============================]  2 MB
+  Layer 4/4 (sbom, amd64)         : [==============================] 100% 3.4 KB/3.4 KB
+Tagged: ghcr.io/myorg/myapp:1.0.0
+Tagged: ghcr.io/myorg/myapp:latest
+Digest: sha256:abc123def456...
 
-
-# After code change: only app layer uploaded
-Layer 1/3 (erts, amd64)         : exists (skipped)
-Layer 2/3 (deps, amd64)         : exists (skipped)
-Layer 3/3 (app, amd64)          : [==============================]  2 MB
-Layer 4/4 (sbom, amd64)         : [==============================] 100% 3.4 KB/3.4 KB
+# After code change: only app layer uploaded (SBOM changes if version changes)
+  Layer 1/3 (erts, amd64)         : exists (skipped)
+  Layer 2/3 (deps, amd64)         : exists (skipped)
+  Layer 3/3 (app, amd64)          : [==============================]  2 MB
+  Layer 4/4 (sbom, amd64)         : [==============================] 100% 3.4 KB/3.4 KB
+Tagged: ghcr.io/myorg/myapp:1.0.1
+Digest: sha256:def789abc012...
 ```
 
 Typical improvements:
