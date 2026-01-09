@@ -24,6 +24,7 @@ rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
   * `-d, --desc` - Image description (OCI manifest annotation)
   * `--base` - Override base image
   * `--release` - Release name (if multiple configured)
+  * `--compression` - Layer compression: gzip, zstd, or auto (default: auto)
 
 ## Configuration
 
@@ -37,7 +38,8 @@ Add to your `rebar.config`:
     {expose, [8080]},
     {labels, #{}},
     {description, "My awesome application"},
-    {tag, ["myapp:1.0.0", "myapp:latest"]}  % or a single string: "myapp:1.0.0"
+    {tag, ["myapp:1.0.0", "myapp:latest"]},  % or a single string: "myapp:1.0.0"
+    {compression, auto}  % gzip, zstd, or auto (zstd on OTP 28+, gzip on OTP 27)
 ]}.
 ```
 
@@ -83,6 +85,7 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -eqwalizer({nowarn_function, get_output/1}).
 -eqwalizer({nowarn_function, get_sbom_path/1}).
 -eqwalizer({nowarn_function, get_sign_key/2}).
+-eqwalizer({nowarn_function, get_compression/2}).
 -eqwalizer({nowarn_function, get_push_registry/1}).
 -eqwalizer({nowarn_function, get_platform/2}).
 -eqwalizer({nowarn_function, parse_rebar_lock/1}).
@@ -138,7 +141,9 @@ init(State) ->
                     "Disable automatic VCS annotations"},
                 {sbom, undefined, "sbom", string, "Export SBOM to file path"},
                 {sign_key, undefined, "sign-key", string,
-                    "Path to cosign private key for image signing"}
+                    "Path to cosign private key for image signing"},
+                {compression, undefined, "compression", string,
+                    "Layer compression: gzip, zstd, or auto (default: auto)"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -298,7 +303,8 @@ get_config(State) ->
         app_name => get_app_name(State, Config),
         vcs_annotations => get_vcs_annotations(Args, Config),
         sbom => get_sbom_path(Args),
-        sign_key => get_sign_key(Args, Config)
+        sign_key => get_sign_key(Args, Config),
+        compression => get_compression(Args, Config)
     }.
 
 %% @private Get app_name for layer classification
@@ -406,6 +412,30 @@ get_sign_key(Args, Config) ->
         Path ->
             list_to_binary(Path)
     end.
+
+%% @private Get compression algorithm from args or config
+%% Priority: CLI --compression > config compression > auto (default)
+%% Valid values: "gzip", "zstd", "auto" (strings from CLI) or atoms from config
+get_compression(Args, Config) ->
+    case proplists:get_value(compression, Args) of
+        undefined ->
+            case proplists:get_value(compression, Config) of
+                undefined -> auto;
+                Comp when is_atom(Comp) -> validate_compression(Comp);
+                Comp when is_list(Comp) -> validate_compression(list_to_atom(Comp));
+                Comp when is_binary(Comp) -> validate_compression(binary_to_atom(Comp, utf8))
+            end;
+        CompStr when is_list(CompStr) ->
+            validate_compression(list_to_atom(CompStr))
+    end.
+
+%% @private Validate compression value, default to auto if invalid
+validate_compression(gzip) -> gzip;
+validate_compression(zstd) -> zstd;
+validate_compression(auto) -> auto;
+validate_compression(Other) ->
+    io:format("Warning: invalid compression '~p', using 'auto'~n", [Other]),
+    auto.
 
 %% @private Get push registry from args
 get_push_registry(Args) ->

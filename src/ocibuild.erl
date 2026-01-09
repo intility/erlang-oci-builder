@@ -286,10 +286,16 @@ Add a layer to the image from a list of files with options.
 
 Options:
 - `layer_type`: Type of layer content (erts, deps, app) for progress display
+- `compression`: Compression algorithm (`gzip`, `zstd`, or `auto`). Default: `auto`
 
 ```
 Image1 = ocibuild:add_layer(Image, Files, #{layer_type => app}).
+
+%% With explicit compression
+Image2 = ocibuild:add_layer(Image, Files, #{compression => zstd}).
 ```
+
+Raises an error if compression fails (e.g., zstd requested on OTP 27).
 """.
 -spec add_layer(image(), [{Path :: binary(), Content :: binary(), Mode :: integer()}], map()) ->
     image().
@@ -297,10 +303,14 @@ add_layer(#{layers := Layers, config := Config} = Image, Files, Opts) ->
     %% Get reproducible timestamp for layer mtime
     MTime = ocibuild_time:get_timestamp(),
     LayerOpts = Opts#{mtime => MTime},
-    Layer = ocibuild_layer:create(Files, LayerOpts),
-    NewConfig = add_layer_to_config(Config, Layer),
-    %% Prepend for O(1) - layers are stored in reverse order, reversed on export
-    Image#{layers := [Layer | Layers], config := NewConfig}.
+    case ocibuild_layer:create(Files, LayerOpts) of
+        {ok, Layer} ->
+            NewConfig = add_layer_to_config(Config, Layer),
+            %% Prepend for O(1) - layers are stored in reverse order, reversed on export
+            Image#{layers := [Layer | Layers], config := NewConfig};
+        {error, Reason} ->
+            erlang:error(Reason)
+    end.
 
 -doc """
 Copy files to a destination directory in the image.

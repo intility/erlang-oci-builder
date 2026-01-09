@@ -127,7 +127,8 @@ User API (ocibuild.erl)
     ├─► ocibuild_http.erl ────► Parallel HTTP operations via supervised workers
     │       └─► ocibuild_registry.erl ──► Pull base image manifest + config + layers
     │           └─► ocibuild_cache.erl ──► Cache layers locally
-    ├─► ocibuild_layer.erl ─────► Create layers (uses ocibuild_tar + zlib + ocibuild_digest)
+    ├─► ocibuild_layer.erl ─────► Create layers (uses ocibuild_tar + ocibuild_compress + ocibuild_digest)
+    │       └─► ocibuild_compress.erl ► Compression abstraction (zstd on OTP 28+, gzip on OTP 27)
     ├─► ocibuild_manifest.erl ──► Generate manifest JSON (with annotations)
     └─► ocibuild_layout.erl ────► Export to directory/tarball
         OR ocibuild_registry.erl ► Push to registry
@@ -153,9 +154,9 @@ ocibuild_http_sup (one_for_one)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH), automatic VCS annotations (Git, GitHub Actions, GitLab CI, Azure DevOps), SBOM generation (SPDX 2.2 embedded in image layer and attached via OCI referrers API).
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH), automatic VCS annotations (Git, GitHub Actions, GitLab CI, Azure DevOps), SBOM generation (SPDX 2.2 embedded in image layer and attached via OCI referrers API), zstd compression (automatic on OTP 28+, configurable via `--compression` flag).
 
-**Not Implemented:** Resumable uploads, zstd compression.
+**Not Implemented:** Resumable uploads, keyless signing (Sigstore/Fulcio).
 
 ## CLI Reference
 
@@ -176,6 +177,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--no-vcs-annotations` | | Disable automatic VCS annotations            |
 | `--sbom`       |       | Export SBOM to file path (SBOM always in image)   |
 | `--sign-key`   |       | Path to cosign private key for image signing      |
+| `--compression`|       | Layer compression: `gzip`, `zstd`, or `auto`      |
 
 ### Multiple Tags
 
@@ -220,7 +222,8 @@ files to support the new functionality.
     {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}},
     {description, "My application"},
     {vcs_annotations, true},   % Automatic VCS annotations (default: true)
-    {sign_key, "cosign.key"}   % Optional: path to cosign private key
+    {sign_key, "cosign.key"},  % Optional: path to cosign private key
+    {compression, auto}        % gzip, zstd, or auto (default: auto)
 ]}.
 ```
 
@@ -235,7 +238,8 @@ def project do
       expose: [8080],
       description: "My application",
       vcs_annotations: true,   # Automatic VCS annotations (default: true)
-      sign_key: "cosign.key"   # Optional: path to cosign private key
+      sign_key: "cosign.key",  # Optional: path to cosign private key
+      compression: :auto       # :gzip, :zstd, or :auto (default: :auto)
     ]
   ]
 end

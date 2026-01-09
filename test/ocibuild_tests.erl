@@ -189,7 +189,7 @@ tar_duplicate_paths_after_normalization_test() ->
 
 layer_create_test() ->
     Files = [{~"/app/test", ~"test data", 8#755}],
-    Layer = ocibuild_layer:create(Files),
+    {ok, Layer} = ocibuild_layer:create(Files),
 
     %% Check all required fields exist
     ?assert(maps:is_key(media_type, Layer)),
@@ -202,10 +202,11 @@ layer_create_test() ->
     #{digest := Digest} = Layer,
     ?assertMatch(<<"sha256:", _/binary>>, Digest),
 
-    %% Media type should be correct
-    ?assertEqual(
-        ~"application/vnd.oci.image.layer.v1.tar+gzip",
-        maps:get(media_type, Layer)
+    %% Media type should be gzip or zstd (depending on OTP version)
+    MediaType = maps:get(media_type, Layer),
+    ?assert(
+        MediaType =:= ~"application/vnd.oci.image.layer.v1.tar+gzip" orelse
+        MediaType =:= ~"application/vnd.oci.image.layer.v1.tar+zstd"
     ).
 
 %%%===================================================================
@@ -1800,8 +1801,8 @@ layer_mtime_option_test() ->
     %% Test that layer respects mtime option
     Files = [{~"/test.txt", ~"content", 8#644}],
     MTime = 1700000000,
-    Layer1 = ocibuild_layer:create(Files, #{mtime => MTime}),
-    Layer2 = ocibuild_layer:create(Files, #{mtime => MTime}),
+    {ok, Layer1} = ocibuild_layer:create(Files, #{mtime => MTime}),
+    {ok, Layer2} = ocibuild_layer:create(Files, #{mtime => MTime}),
     %% Digests should match
     ?assertEqual(maps:get(digest, Layer1), maps:get(digest, Layer2)),
     ?assertEqual(maps:get(diff_id, Layer1), maps:get(diff_id, Layer2)).
@@ -1822,8 +1823,8 @@ layer_reproducible_test() ->
     try
         Files = [{~"/app/file", ~"data", 8#644}],
         MTime = ocibuild_time:get_timestamp(),
-        Layer1 = ocibuild_layer:create(Files, #{mtime => MTime}),
-        Layer2 = ocibuild_layer:create(Files, #{mtime => MTime}),
+        {ok, Layer1} = ocibuild_layer:create(Files, #{mtime => MTime}),
+        {ok, Layer2} = ocibuild_layer:create(Files, #{mtime => MTime}),
         ?assertEqual(maps:get(digest, Layer1), maps:get(digest, Layer2))
     after
         os:unsetenv("SOURCE_DATE_EPOCH")

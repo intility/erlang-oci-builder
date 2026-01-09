@@ -32,6 +32,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.                                             |
 | **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.                                   |
 | **Image signing**             | ✅     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
+| **Zstd compression**          | ✅     | Automatic zstd on OTP 28+ (20-50% smaller, faster). Falls back to gzip on OTP 27.                         |
 
 ## Installation
 
@@ -202,6 +203,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 | `--sbom`               |       | Export SBOM to file path (SBOM always in image)   |
 | `--no-vcs-annotations` |       | Disable automatic VCS annotations                 |
 | `--sign-key`           |       | Path to cosign private key for image signing      |
+| `--compression`        |       | Layer compression: `gzip`, `zstd`, or `auto`      |
 
 **Notes:**
 - Tag defaults to `app:version` in Mix, required in rebar3

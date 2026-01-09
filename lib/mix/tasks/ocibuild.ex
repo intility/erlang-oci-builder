@@ -31,6 +31,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `--no-vcs-annotations` - Disable automatic VCS annotations
     * `--sbom` - Export SBOM to file path (SBOM is always embedded in image)
     * `--sign-key` - Path to cosign private key for image signing
+    * `--compression` - Layer compression: gzip, zstd, or auto (default: auto)
 
   ## Configuration
 
@@ -46,7 +47,8 @@ defmodule Mix.Tasks.Ocibuild do
             expose: [8080],
             labels: %{},
             cmd: "start",  # Release command: "start" (Elixir default), "daemon", etc.
-            description: "My awesome application"  # OCI manifest annotation
+            description: "My awesome application",  # OCI manifest annotation
+            compression: :auto  # :gzip, :zstd, or :auto (zstd on OTP 28+, gzip on OTP 27)
           ]
         ]
       end
@@ -86,7 +88,8 @@ defmodule Mix.Tasks.Ocibuild do
           uid: :integer,
           no_vcs_annotations: :boolean,
           sbom: :string,
-          sign_key: :string
+          sign_key: :string,
+          compression: :string
         ]
       )
 
@@ -233,6 +236,7 @@ defmodule Mix.Tasks.Ocibuild do
       vcs_annotations: get_vcs_annotations(opts, ocibuild_config),
       sbom: get_opt_binary(opts, :sbom),
       sign_key: get_sign_key(opts, ocibuild_config),
+      compression: get_compression(opts, ocibuild_config),
       dependencies: Ocibuild.Lock.get_dependencies()
     }
   end
@@ -299,6 +303,34 @@ defmodule Mix.Tasks.Ocibuild do
       true ->
         nil
     end
+  end
+
+  # Get compression algorithm: CLI --compression > config compression > :auto
+  # Valid values: "gzip", "zstd", "auto" (strings from CLI) or atoms from config
+  defp get_compression(opts, ocibuild_config) do
+    compression =
+      cond do
+        opts[:compression] ->
+          opts[:compression]
+
+        Keyword.has_key?(ocibuild_config, :compression) ->
+          Keyword.get(ocibuild_config, :compression)
+
+        true ->
+          :auto
+      end
+
+    validate_compression(compression)
+  end
+
+  defp validate_compression(comp) when comp in [:gzip, :zstd, :auto], do: comp
+  defp validate_compression("gzip"), do: :gzip
+  defp validate_compression("zstd"), do: :zstd
+  defp validate_compression("auto"), do: :auto
+
+  defp validate_compression(other) do
+    IO.warn("Invalid compression '#{inspect(other)}', using :auto")
+    :auto
   end
 
   defp get_opt(opts, opt_key, config, config_key, default) do

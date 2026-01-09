@@ -50,6 +50,8 @@ defmodule Ocibuild.MixRelease do
     * `:uid` - User ID to run as (default: 65534 for nobody)
     * `:vcs_annotations` - Enable automatic VCS annotations (default: true)
     * `:sbom` - Export SBOM to file path (SBOM is always embedded in image)
+    * `:compression` - Layer compression: `:gzip`, `:zstd`, or `:auto` (default: `:auto`)
+      Uses zstd on OTP 28+, gzip on OTP 27.
   """
 
   @doc """
@@ -110,6 +112,7 @@ defmodule Ocibuild.MixRelease do
       uid: Keyword.get(ocibuild_config, :uid),
       vcs_annotations: Keyword.get(ocibuild_config, :vcs_annotations, true),
       sbom: get_sbom_path(ocibuild_config),
+      compression: get_compression(ocibuild_config),
       dependencies: Ocibuild.Lock.get_dependencies()
     }
   end
@@ -174,6 +177,15 @@ defmodule Ocibuild.MixRelease do
       nil -> nil
       platform when is_binary(platform) -> platform
       platform when is_list(platform) -> to_binary(platform)
+    end
+  end
+
+  defp get_compression(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :compression, :auto) do
+      comp when comp in [:gzip, :zstd, :auto] -> comp
+      other ->
+        IO.warn("Invalid compression '#{inspect(other)}', using :auto")
+        :auto
     end
   end
 

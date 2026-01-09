@@ -27,7 +27,7 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 | Non-root by default       | ✅                 | ✅          | ❌                | ✅              |
 | SBOM generation           | ✅ (SPDX)          | ✅ (SPDX)   | ❌                | ✅ (SPDX)       |
 | Image signing             | ✅ (cosign)        | ✅ (cosign) | ❌                | ❌              |
-| Zstd compression          | ❌ Future (OTP28+) | ✅          | ❌                | ❌              |
+| Zstd compression          | ✅ (OTP 28+)       | ✅          | ❌                | ❌              |
 
 Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented
 
@@ -72,7 +72,7 @@ src/
 │   └── ocibuild_cache.erl        # Layer caching for base images
 │
 ├── oci/                      # OCI image building
-│   ├── ocibuild_layer.erl        # OCI layer creation (tar + gzip + digests)
+│   ├── ocibuild_layer.erl        # OCI layer creation (tar + compression + digests)
 │   ├── ocibuild_manifest.erl     # OCI manifest generation (with annotations)
 │   ├── ocibuild_index.erl        # OCI image index for multi-platform images
 │   ├── ocibuild_layout.erl       # OCI image layout export (directory/tarball)
@@ -90,6 +90,7 @@ src/
 │   └── ocibuild_vcs_git.erl      # Git adapter (CI env vars + git commands)
 │
 └── util/                     # Utilities
+    ├── ocibuild_compress.erl     # Compression abstraction (zstd on OTP 28+, gzip fallback)
     ├── ocibuild_digest.erl       # SHA256 digest utilities
     ├── ocibuild_json.erl         # JSON encode/decode (OTP 27 native + fallback)
     ├── ocibuild_time.erl         # Timestamp utilities (SOURCE_DATE_EPOCH)
@@ -144,7 +145,7 @@ ocibuild_rebar3 / ocibuild_mix (Adapters)
                     ├─► ocibuild_layer ─────► Create new layers
                     │       │
                     │       ├─► ocibuild_tar ──► Build tar in memory (sorted, deterministic mtime)
-                    │       ├─► zlib:gzip/1 ───► Compress
+                    │       ├─► ocibuild_compress ► Compress (zstd on OTP 28+, gzip fallback)
                     │       └─► ocibuild_digest ► Calculate SHA256
                     │
                     ├─► ocibuild_manifest ──► Generate manifest JSON (with annotations)
@@ -335,12 +336,19 @@ Creates OCI layers from file lists. An OCI layer has two digests:
 - `diff_id`: SHA256 of **uncompressed** tar (used in config's rootfs section)
 
 ```erlang
--spec create([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> layer().
+-spec create(Files, Opts) -> {ok, layer()} | {error, term()} when
+    Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
+    Opts :: #{compression => gzip | zstd | auto, mtime => non_neg_integer()}.
 ```
 
+**Compression Options:**
+- `auto` (default): Uses zstd on OTP 28+, gzip on OTP 27
+- `gzip`: Always use gzip compression
+- `zstd`: Use zstd (fails with `{error, {zstd_not_available, ...}}` on OTP 27)
+
 **Media Types Supported:**
-- `application/vnd.oci.image.layer.v1.tar+gzip` (default)
-- `application/vnd.oci.image.layer.v1.tar+zstd` (defined but not implemented)
+- `application/vnd.oci.image.layer.v1.tar+gzip` (default on OTP 27)
+- `application/vnd.oci.image.layer.v1.tar+zstd` (default on OTP 28+, via `--compression zstd`)
 - `application/vnd.oci.image.layer.v1.tar` (uncompressed, defined but not used)
 
 ---
@@ -1236,9 +1244,11 @@ cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
 - If upload fails mid-way, must restart from beginning
 - Would need session persistence for true resumability
 
-**Zstd Compression:**
-- Defined in media types but not implemented
-- Would need zstd NIF or pure Erlang implementation
+**Zstd Compression:** ✅ Implemented
+- Uses OTP 28+ stdlib `zstd` module (no external dependencies)
+- Automatic: Uses zstd on OTP 28+, falls back to gzip on OTP 27
+- Configurable via `--compression gzip|zstd|auto` CLI flag
+- 20-50% smaller images, 5-10x faster decompression than gzip
 
 **Layer Squashing:**
 - Combine multiple layers into one for smaller images
@@ -1257,6 +1267,7 @@ cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
 application/vnd.oci.image.manifest.v1+json
 application/vnd.oci.image.config.v1+json
 application/vnd.oci.image.layer.v1.tar+gzip
+application/vnd.oci.image.layer.v1.tar+zstd
 application/vnd.oci.image.index.v1+json
 ```
 

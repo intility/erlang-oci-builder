@@ -1925,16 +1925,19 @@ Falls back to single layer if no dependencies provided (backward compatible).
     Deps :: [#{name := binary(), version := binary(), source := binary()}],
     Opts :: map()
 ) -> ocibuild:image().
-build_release_layers(Image0, Files, _ReleasePath, [], _Opts) ->
+build_release_layers(Image0, Files, _ReleasePath, [], Opts) ->
     %% No dependency info - single layer fallback
-    ocibuild:add_layer(Image0, Files);
-build_release_layers(Image0, Files, _ReleasePath, _Deps, #{app_name := undefined}) ->
+    LayerOpts = get_layer_opts(Opts),
+    ocibuild:add_layer(Image0, Files, LayerOpts);
+build_release_layers(Image0, Files, _ReleasePath, _Deps, #{app_name := undefined} = Opts) ->
     %% No app_name - can't do smart layering, single layer fallback
-    ocibuild:add_layer(Image0, Files);
+    LayerOpts = get_layer_opts(Opts),
+    ocibuild:add_layer(Image0, Files, LayerOpts);
 build_release_layers(Image0, Files, ReleasePath, Deps, #{app_name := AppName} = Opts) ->
     %% Smart layering with known app_name
     Workdir = to_binary(maps:get(workdir, Opts, ?DEFAULT_WORKDIR)),
     HasErts = has_bundled_erts(ReleasePath),
+    LayerOpts = get_layer_opts(Opts),
 
     {ErtsFiles, DepFiles, AppFiles} =
         partition_files_by_layer(Files, Deps, to_binary(AppName), Workdir, HasErts),
@@ -1942,25 +1945,36 @@ build_release_layers(Image0, Files, ReleasePath, Deps, #{app_name := AppName} = 
     case HasErts of
         true ->
             %% 3 layers: ERTS + OTP libs -> Deps -> App
-            I1 = add_layer_if_nonempty(Image0, ErtsFiles, erts),
-            I2 = add_layer_if_nonempty(I1, DepFiles, deps),
-            add_layer_if_nonempty(I2, AppFiles, app);
+            I1 = add_layer_if_nonempty(Image0, ErtsFiles, erts, LayerOpts),
+            I2 = add_layer_if_nonempty(I1, DepFiles, deps, LayerOpts),
+            add_layer_if_nonempty(I2, AppFiles, app, LayerOpts);
         false ->
             %% 2 layers: Deps + OTP libs -> App
-            I1 = add_layer_if_nonempty(Image0, DepFiles, deps),
-            add_layer_if_nonempty(I1, AppFiles, app)
+            I1 = add_layer_if_nonempty(Image0, DepFiles, deps, LayerOpts),
+            add_layer_if_nonempty(I1, AppFiles, app, LayerOpts)
     end;
-build_release_layers(Image0, Files, _ReleasePath, _Deps, _Opts) ->
+build_release_layers(Image0, Files, _ReleasePath, _Deps, Opts) ->
     %% No app_name in opts - single layer fallback
-    ocibuild:add_layer(Image0, Files).
+    LayerOpts = get_layer_opts(Opts),
+    ocibuild:add_layer(Image0, Files, LayerOpts).
+
+%% @private Extract layer-specific options from config
+-spec get_layer_opts(map()) -> map().
+get_layer_opts(Opts) ->
+    case maps:get(compression, Opts, undefined) of
+        undefined -> #{};
+        Compression -> #{compression => Compression}
+    end.
 
 %% @private Add layer only if file list is non-empty
--spec add_layer_if_nonempty(ocibuild:image(), [{binary(), binary(), non_neg_integer()}], atom()) ->
+-spec add_layer_if_nonempty(
+    ocibuild:image(), [{binary(), binary(), non_neg_integer()}], atom(), map()
+) ->
     ocibuild:image().
-add_layer_if_nonempty(Image, [], _Type) ->
+add_layer_if_nonempty(Image, [], _Type, _Opts) ->
     Image;
-add_layer_if_nonempty(Image, Files, Type) ->
-    ocibuild:add_layer(Image, Files, #{layer_type => Type}).
+add_layer_if_nonempty(Image, Files, Type, Opts) ->
+    ocibuild:add_layer(Image, Files, Opts#{layer_type => Type}).
 
 %% @private Strip workdir prefix from path
 -spec strip_workdir_prefix(binary(), binary()) -> binary().
