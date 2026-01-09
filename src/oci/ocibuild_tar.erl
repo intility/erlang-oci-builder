@@ -12,7 +12,7 @@ The TAR format consists of 512-byte blocks:
 - Archive ends with two 512-byte blocks of zeros
 """.
 
--export([create/1, create/2, create_compressed/1, create_compressed/2]).
+-export([create/1, create/2]).
 
 -define(BLOCK_SIZE, 512).
 
@@ -138,20 +138,6 @@ find_duplicates(Paths) ->
         Paths
     ),
     lists:usort(Dups).
-
--doc "Create a gzip-compressed TAR archive in memory.".
--spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
-    binary().
-create_compressed(Files) ->
-    create_compressed(Files, #{}).
-
--doc "Create a gzip-compressed TAR archive in memory with options.".
--spec create_compressed(Files, Opts) -> binary() when
-    Files :: [{Path :: binary(), Content :: binary(), Mode :: integer()}],
-    Opts :: #{mtime => non_neg_integer()}.
-create_compressed(Files, Opts) ->
-    Tar = create(Files, Opts),
-    zlib:gzip(Tar).
 
 %%%===================================================================
 %%% Internal functions

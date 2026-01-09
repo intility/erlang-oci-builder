@@ -63,13 +63,6 @@ tar_basic_test() ->
     %% Should contain at least the file content
     ?assert(binary:match(Tar, ~"Hello, World!") =/= nomatch).
 
-tar_compressed_test() ->
-    Files = [{~"/test.txt", ~"test content", 8#644}],
-    Compressed = ocibuild_tar:create_compressed(Files),
-    %% Should start with gzip magic bytes
-    <<16#1f, 16#8b, _/binary>> = Compressed,
-    ok.
-
 %% Security test: path traversal sequences must be rejected
 tar_path_traversal_test() ->
     %% Paths with ".." components should raise error

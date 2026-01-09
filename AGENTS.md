@@ -308,9 +308,6 @@ This is a critical module that builds TAR archives entirely in memory without wr
 ```erlang
 %% Create a tar archive in memory
 -spec create([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> binary().
-
-%% Create a gzip-compressed tar archive
--spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> binary().
 ```
 
 **Implementation Notes:**
