@@ -1716,7 +1716,7 @@ validate_tag_valid_simple_test() ->
     ?assertEqual(ok, ocibuild_release:validate_tag(~"myapp:v1.0.0")).
 
 validate_tag_valid_full_ref_test() ->
-    ?assertEqual(ok, ocibuild_release:validate_tag(~"ghcr.io/intility/myapp:v1.0.0")).
+    ?assertEqual(ok, ocibuild_release:validate_tag(~"ghcr.io/myorg/myapp:v1.0.0")).
 
 validate_tag_valid_registry_with_port_test() ->
     ?assertEqual(ok, ocibuild_release:validate_tag(~"localhost:5000/myapp:v1.0.0")).
@@ -1735,8 +1735,8 @@ validate_tag_path_traversal_middle_test() ->
 
 validate_tag_path_traversal_in_registry_test() ->
     ?assertEqual(
-        {error, {invalid_tag, path_traversal, ~"ghcr.io/../intility/myapp:v1"}},
-        ocibuild_release:validate_tag(~"ghcr.io/../intility/myapp:v1")
+        {error, {invalid_tag, path_traversal, ~"ghcr.io/../myorg/myapp:v1"}},
+        ocibuild_release:validate_tag(~"ghcr.io/../myorg/myapp:v1")
     ).
 
 validate_tag_null_byte_test() ->
@@ -1760,8 +1760,8 @@ classify_tag_repo_tag_test() ->
 
 classify_tag_full_ref_test() ->
     ?assertEqual(
-        {full_ref, ~"ghcr.io/intility/myapp", ~"v1.0.0"},
-        ocibuild_release:classify_tag(~"ghcr.io/intility/myapp:v1.0.0")
+        {full_ref, ~"ghcr.io/myorg/myapp", ~"v1.0.0"},
+        ocibuild_release:classify_tag(~"ghcr.io/myorg/myapp:v1.0.0")
     ).
 
 classify_tag_registry_with_port_test() ->
@@ -1773,8 +1773,8 @@ classify_tag_registry_with_port_test() ->
 classify_tag_full_ref_no_tag_test() ->
     %% Full reference without explicit tag defaults to latest
     ?assertEqual(
-        {full_ref, ~"ghcr.io/intility/myapp", ~"latest"},
-        ocibuild_release:classify_tag(~"ghcr.io/intility/myapp")
+        {full_ref, ~"ghcr.io/myorg/myapp", ~"latest"},
+        ocibuild_release:classify_tag(~"ghcr.io/myorg/myapp")
     ).
 
 %%%===================================================================
@@ -1806,16 +1806,16 @@ resolve_tag_repo_tag_ignores_context_test() ->
         ocibuild_release:resolve_tag(~"myapp:v1.0.0", ~"other")
     ).
 
-resolve_tag_full_ref_extracts_repo_test() ->
-    %% Should extract just the repo name (last path component)
+resolve_tag_full_ref_preserves_path_test() ->
+    %% Should preserve full repo path for docker load/push compatibility
     ?assertEqual(
-        {~"myapp", ~"v1.0.0"},
-        ocibuild_release:resolve_tag(~"ghcr.io/intility/myapp:v1.0.0", undefined)
+        {~"ghcr.io/myorg/myapp", ~"v1.0.0"},
+        ocibuild_release:resolve_tag(~"ghcr.io/myorg/myapp:v1.0.0", undefined)
     ).
 
 resolve_tag_full_ref_with_port_test() ->
     ?assertEqual(
-        {~"myapp", ~"v1.0.0"},
+        {~"localhost:5000/myapp", ~"v1.0.0"},
         ocibuild_release:resolve_tag(~"localhost:5000/myapp:v1.0.0", undefined)
     ).
 
@@ -1842,9 +1842,10 @@ resolve_tag_to_full_repo_tag_test() ->
     ).
 
 resolve_tag_to_full_full_ref_test() ->
+    %% Full refs are preserved as-is for docker load/push compatibility
     ?assertEqual(
-        {ok, ~"myapp:v1.0.0"},
-        ocibuild_release:resolve_tag_to_full(~"ghcr.io/intility/myapp:v1.0.0", undefined)
+        {ok, ~"ghcr.io/myorg/myapp:v1.0.0"},
+        ocibuild_release:resolve_tag_to_full(~"ghcr.io/myorg/myapp:v1.0.0", undefined)
     ).
 
 %%%===================================================================
@@ -1867,8 +1868,9 @@ resolve_tags_list_multiple_test() ->
     ).
 
 resolve_tags_list_mixed_formats_test() ->
+    %% Full refs are preserved, bare tags use default repo
     ?assertEqual(
-        {ok, [~"myapp:v1.0.0", ~"other:latest", ~"app:v2"]},
+        {ok, [~"myapp:v1.0.0", ~"other:latest", ~"ghcr.io/org/app:v2"]},
         ocibuild_release:resolve_tags_list(
             [~"v1.0.0", ~"other:latest", ~"ghcr.io/org/app:v2"],
             ~"myapp"

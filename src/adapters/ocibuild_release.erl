@@ -1575,12 +1575,12 @@ classify_tag(Tag) ->
 Resolve a tag to a canonical {Repo, Tag} tuple using optional default repo.
 
 For bare tags (no colon), uses the provided default repo.
-For full references, extracts just the repo name (last path component).
+For full references, preserves the full repo path (for docker load/push compatibility).
 
 Examples:
 - `resolve_tag(~"v1.0.0", ~"myapp")` -> `{~"myapp", ~"v1.0.0"}`
 - `resolve_tag(~"myapp:v1", undefined)` -> `{~"myapp", ~"v1"}`
-- `resolve_tag(~"ghcr.io/org/app:v1", undefined)` -> `{~"app", ~"v1"}`
+- `resolve_tag(~"ghcr.io/org/app:v1", undefined)` -> `{~"ghcr.io/org/app", ~"v1"}`
 - `resolve_tag(~"v1.0.0", undefined)` -> `{error, {bare_tag_needs_context, ~"v1.0.0"}}`
 """.
 -spec resolve_tag(binary(), binary() | undefined) ->
@@ -1594,9 +1594,8 @@ resolve_tag(RawTag, DefaultRepo) ->
         {repo_tag, Repo, TagPart} ->
             {Repo, TagPart};
         {full_ref, FullRepo, TagPart} ->
-            %% Extract just repo name from path (last component)
-            RepoName = lists:last(binary:split(FullRepo, ~"/", [global])),
-            {RepoName, TagPart}
+            %% Preserve full repo path (includes registry) for docker load/push compatibility
+            {FullRepo, TagPart}
     end.
 
 -doc """
@@ -1634,8 +1633,8 @@ resolve_tags_list([Tag | Rest], DefaultRepo, Acc) ->
 Parse a push destination into registry host and namespace.
 
 Examples:
-- `~"ghcr.io/intility"` -> `{~"ghcr.io", ~"intility"}`
 - `~"ghcr.io"` -> `{~"ghcr.io", <<>>}`
+- `~"ghcr.io/myorg"` -> `{~"ghcr.io", ~"myorg"}`
 - `~"docker.io/myorg"` -> `{~"docker.io", ~"myorg"}`
 - `~"localhost:5000/myorg"` -> `{~"localhost:5000", ~"myorg"}`
 """.
