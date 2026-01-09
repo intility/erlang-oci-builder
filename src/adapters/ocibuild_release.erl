@@ -1547,13 +1547,12 @@ get_tags(CliTags, ConfigTags, DefaultRepo, DefaultVersion) ->
 -doc """
 Expand semicolon-separated tags into multiple tags.
 
-Supports docker/metadata-action style semicolon-separated tags.
+Supports docker/metadata-action style tags (use `sep-tags: ";"` in the action).
 Trims whitespace and filters empty segments.
 
 Examples:
 - `~"myapp:v1;myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
 - `~"myapp:v1 ; myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
-- `~"myapp:v1;;myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
 """.
 -spec expand_semicolon_tags(binary()) -> [binary()].
 expand_semicolon_tags(TagStr) when is_binary(TagStr) ->
