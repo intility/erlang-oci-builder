@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.1 - 2026-01-09
+
+### Features
+
+- **Flexible tag formats** ([#34](https://github.com/intility/erlang-oci-builder/issues/34)):
+  - Bare tags: `-t v1.0.0` or `-t latest` (uses release name as repo)
+  - Full references: `-t ghcr.io/org/myapp:v1.0.0` (extracts repo path for push)
+  - Existing repo:tag format unchanged: `-t myapp:v1.0.0`
+
+- **Semicolon-separated tags** for docker/metadata-action compatibility:
+  - Single flag with multiple tags: `-t "ghcr.io/myorg/myapp:v1;ghcr.io/myorg/myapp:latest"`
+  - Works in both CLI and config files
+
+### Security
+
+- **Tag validation**: Tags are validated to prevent path traversal attacks
+  - Rejects tags containing `..` path components
+  - Rejects tags containing null bytes
+
+### Bug Fixes
+
+- Fixed registry path handling when using full reference tags with `--push`
+  - `-t ghcr.io/org/myapp:v1 --push ghcr.io` now correctly pushes to `ghcr.io/org/myapp:v1`
+  - Previously would incorrectly create `ghcr.io/ghcr.io/org/myapp:v1`
+
 ## 0.9.0 - 2026-01-09
 
 ### Features

@@ -206,7 +206,7 @@ layer_create_test() ->
     MediaType = maps:get(media_type, Layer),
     ?assert(
         MediaType =:= ~"application/vnd.oci.image.layer.v1.tar+gzip" orelse
-        MediaType =:= ~"application/vnd.oci.image.layer.v1.tar+zstd"
+            MediaType =:= ~"application/vnd.oci.image.layer.v1.tar+zstd"
     ).
 
 %%%===================================================================

@@ -116,6 +116,56 @@ defmodule Mix.Tasks.OcibuildTest do
     end
   end
 
+  describe "get_tags/4 semicolon expansion" do
+    test "splits semicolon-separated tags" do
+      opts = [tag: "myapp:v1;myapp:latest"]
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "trims whitespace around semicolons" do
+      opts = [tag: "myapp:v1 ; myapp:latest"]
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "filters empty segments" do
+      opts = [tag: "myapp:v1;;myapp:latest"]
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "works with full references" do
+      opts = [tag: "ghcr.io/org/app:v1;ghcr.io/org/app:latest"]
+
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == [
+               "ghcr.io/org/app:v1",
+               "ghcr.io/org/app:latest"
+             ]
+    end
+
+    test "returns default when no tags provided" do
+      assert TestHelpers.get_tags([], [], :myapp, "1.0.0") == ["myapp:1.0.0"]
+    end
+
+    test "uses config tags when no CLI option" do
+      config = [tag: ["myapp:v1", "myapp:latest"]]
+      assert TestHelpers.get_tags([], config, :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "config tags with semicolons are expanded" do
+      config = [tag: "myapp:v1;myapp:latest"]
+      assert TestHelpers.get_tags([], config, :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
+    test "multiple -t flags combined with semicolons" do
+      opts = [tag: "myapp:v1", tag: "myapp:v2;myapp:latest"]
+
+      assert TestHelpers.get_tags(opts, [], :myapp, "1.0.0") == [
+               "myapp:v1",
+               "myapp:v2",
+               "myapp:latest"
+             ]
+    end
+  end
+
   describe "get_description/2" do
     test "uses CLI option when provided" do
       opts = [desc: "CLI description"]
@@ -157,28 +207,28 @@ defmodule Mix.Tasks.OcibuildTest do
       assert TestHelpers.get_chunk_size([]) == nil
     end
 
-    test "converts MB to bytes for valid size" do
-      assert TestHelpers.get_chunk_size([chunk_size: 10]) == 10 * 1024 * 1024
+    test "accepts minimum value of 1 MB" do
+      assert TestHelpers.get_chunk_size(chunk_size: 1) == 1024 * 1024
     end
 
-    test "accepts minimum value of 1 MB" do
-      assert TestHelpers.get_chunk_size([chunk_size: 1]) == 1 * 1024 * 1024
+    test "converts MB to bytes for valid size" do
+      assert TestHelpers.get_chunk_size(chunk_size: 10) == 10 * 1024 * 1024
     end
 
     test "accepts maximum value of 100 MB" do
-      assert TestHelpers.get_chunk_size([chunk_size: 100]) == 100 * 1024 * 1024
+      assert TestHelpers.get_chunk_size(chunk_size: 100) == 100 * 1024 * 1024
     end
 
     test "returns nil for out of range value (too small)" do
-      assert TestHelpers.get_chunk_size([chunk_size: 0]) == nil
+      assert TestHelpers.get_chunk_size(chunk_size: 0) == nil
     end
 
     test "returns nil for out of range value (too large)" do
-      assert TestHelpers.get_chunk_size([chunk_size: 101]) == nil
+      assert TestHelpers.get_chunk_size(chunk_size: 101) == nil
     end
 
     test "returns nil for negative value" do
-      assert TestHelpers.get_chunk_size([chunk_size: -1]) == nil
+      assert TestHelpers.get_chunk_size(chunk_size: -1) == nil
     end
   end
 

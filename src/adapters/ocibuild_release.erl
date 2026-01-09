@@ -46,6 +46,12 @@ Security features:
     add_description/2
 ]).
 
+%% Public API - Tag Utilities
+-export([
+    get_tags/4,
+    expand_semicolon_tags/1
+]).
+
 %% Public API - Authentication
 -export([
     get_push_auth/0,
@@ -108,7 +114,14 @@ Security features:
     tag_additional/6,
     default_output_path/2,
     classify_extension/1,
-    compression_extension/1
+    compression_extension/1,
+    %% Tag classification and resolution
+    validate_tag/1,
+    classify_tag/1,
+    resolve_tag/2,
+    resolve_tag_to_full/2,
+    resolve_tags_list/2,
+    extract_repo_path/1
 ]).
 -endif.
 
@@ -162,11 +175,14 @@ run(AdapterModule, AdapterState, Opts) ->
     maybe
         %% Validate at least one tag exists
         true ?= Tags =/= [],
-        [FirstTag | _] = Tags,
+        %% Find release (needed to resolve bare tags)
+        {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
+        %% Resolve tags (bare tags use release name as default repo)
+        DefaultRepo = to_binary(ReleaseName),
+        {ok, ResolvedTags} ?= resolve_tags_list(Tags, DefaultRepo),
+        [FirstTag | _] = ResolvedTags,
         {ImageName, _} = parse_tag(FirstTag),
         AdapterModule:info("Building OCI image: ~s", [ImageName]),
-        %% Find release
-        {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
         AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
         %% Parse and validate platforms
         {ok, Platforms} ?= parse_platform_option(PlatformOpt),
@@ -208,7 +224,7 @@ run(AdapterModule, AdapterState, Opts) ->
         SbomPath = maps:get(sbom, Config, undefined),
         SignKey = maps:get(sign_key, Config, undefined),
         OutputOpts = #{
-            tags => Tags,
+            tags => ResolvedTags,
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
@@ -781,11 +797,15 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
     %% The registry is the first component, namespace is the rest
     {Registry, Namespace} = parse_push_destination(PushDest),
 
-    %% Combine namespace with image name to form full repo path
+    %% Handle full reference tags (e.g., ghcr.io/myorg/myapp:v1)
+    %% If tag already contains a registry, extract just the repo path
+    RepoPath = extract_repo_path(ImageName),
+
+    %% Combine namespace with repo path to form full repo path
     Repo =
         case Namespace of
-            <<>> -> ImageName;
-            _ -> <<Namespace/binary, "/", ImageName/binary>>
+            <<>> -> RepoPath;
+            _ -> <<Namespace/binary, "/", RepoPath/binary>>
         end,
 
     %% Build push options (ChunkSize is expected to be in bytes already or undefined/nil)
@@ -1324,20 +1344,32 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
 push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
                   ChunkSize, Images, EmbeddedTag, IsMulti) ->
     maybe
+        %% Determine default repo from embedded tag (for bare tag resolution)
+        DefaultRepo = case EmbeddedTag of
+            undefined -> undefined;
+            Embedded ->
+                {EmbeddedRepo, _} = parse_tag(Embedded),
+                EmbeddedRepo
+        end,
+
         %% Determine tags: override takes precedence, then embedded, else error
-        Tags = case TagsOverride of
+        %% Resolve bare tags using default repo from embedded tag
+        RawTags = case TagsOverride of
             [] when EmbeddedTag =/= undefined -> [EmbeddedTag];
             [] -> [];
             _ -> TagsOverride
         end,
 
         %% Validate at least one tag is specified
-        ok ?= case Tags of
+        ok ?= case RawTags of
             [] ->
                 {error, {no_tag_specified, "Use --tag to specify image tag"}};
             _ ->
                 ok
         end,
+
+        %% Resolve tags (bare tags use embedded tag's repo as default)
+        {ok, Tags} ?= resolve_tags_list(RawTags, DefaultRepo),
 
         %% Use first tag for push, additional tags will be added after
         [FirstTag | AdditionalTags] = Tags,
@@ -1345,9 +1377,13 @@ push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
         %% Parse tag and registry
         {ImageName, FirstImageTag} = parse_tag(FirstTag),
         {RegistryHost, Namespace} = parse_push_destination(Registry),
+
+        %% Handle full reference tags (e.g., ghcr.io/myorg/myapp:v1)
+        %% If tag already contains a registry, extract just the repo path
+        RepoPath = extract_repo_path(ImageName),
         Repo = case Namespace of
-            <<>> -> ImageName;
-            _ -> <<Namespace/binary, "/", ImageName/binary>>
+            <<>> -> RepoPath;
+            _ -> <<Namespace/binary, "/", RepoPath/binary>>
         end,
 
         FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
@@ -1467,11 +1503,231 @@ parse_tag(Tag) ->
     end.
 
 -doc """
+Get tags from CLI options and config, with semicolon expansion support.
+
+This is the shared implementation used by both rebar3 and Mix adapters.
+Supports docker/metadata-action style semicolon-separated tags.
+
+Parameters:
+- CliTags: List of tag strings from CLI (e.g., from multiple -t flags)
+- ConfigTags: List of tag strings from config file
+- DefaultRepo: Default repository name (usually release name)
+- DefaultVersion: Default version string
+
+Returns a list of binary tags. CLI tags take precedence over config tags.
+If neither is provided, returns a default tag of `DefaultRepo:DefaultVersion`.
+
+Examples:
+- `get_tags([~"myapp:v1;myapp:latest"], [], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `get_tags([], [~"myapp:v1;myapp:latest"], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `get_tags([], [~"myapp:v1"], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1"]`
+- `get_tags([], [], ~"myapp", ~"1.0.0")` -> `[~"myapp:1.0.0"]`
+""".
+-spec get_tags([binary()], [binary()], binary(), binary()) -> [binary()].
+get_tags(CliTags, ConfigTags, DefaultRepo, DefaultVersion) ->
+    %% Expand semicolons in both CLI and config tags
+    ExpandedCliTags = lists:flatmap(fun expand_semicolon_tags/1, CliTags),
+    ExpandedConfigTags = lists:flatmap(fun expand_semicolon_tags/1, ConfigTags),
+    case ExpandedCliTags of
+        [] ->
+            case ExpandedConfigTags of
+                [] when DefaultRepo =:= <<>> orelse DefaultVersion =:= <<>> ->
+                    %% No tags and no valid default - return empty
+                    [];
+                [] ->
+                    %% Generate default tag from repo:version
+                    [<<DefaultRepo/binary, ":", DefaultVersion/binary>>];
+                _ ->
+                    ExpandedConfigTags
+            end;
+        _ ->
+            ExpandedCliTags
+    end.
+
+-doc """
+Expand semicolon-separated tags into multiple tags.
+
+Supports docker/metadata-action style semicolon-separated tags.
+Trims whitespace and filters empty segments.
+
+Examples:
+- `~"myapp:v1;myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `~"myapp:v1 ; myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `~"myapp:v1;;myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
+""".
+-spec expand_semicolon_tags(binary()) -> [binary()].
+expand_semicolon_tags(TagStr) when is_binary(TagStr) ->
+    [Trimmed ||
+     Part <- binary:split(TagStr, ~";", [global]),
+     Trimmed <- [string:trim(Part)],
+     Trimmed =/= <<>>].
+
+%% Tag format classification type
+-type tag_format() ::
+    {bare, Tag :: binary()} |
+    {repo_tag, Repo :: binary(), Tag :: binary()} |
+    {full_ref, Repo :: binary(), Tag :: binary()}.
+
+-doc """
+Validate a tag for security issues.
+
+Prevents path traversal attacks via malicious tags like `../../../etc:passwd`.
+Also rejects null bytes which could truncate paths in C-based tools.
+
+Examples:
+- `~"myapp:v1.0.0"` -> `ok`
+- `~"../../../etc:passwd"` -> `{error, {invalid_tag, path_traversal, ...}}`
+- `~"myapp\0:v1"` -> `{error, {invalid_tag, null_byte, ...}}`
+""".
+-spec validate_tag(binary()) -> ok | {error, term()}.
+validate_tag(Tag) ->
+    case binary:match(Tag, <<0>>) of
+        nomatch ->
+            %% Check for path traversal in all components
+            %% Split on both / and : to check all parts
+            AllParts = binary:split(Tag, [~"/", ~":"], [global]),
+            case lists:member(~"..", AllParts) of
+                true -> {error, {invalid_tag, path_traversal, Tag}};
+                false -> ok
+            end;
+        _ ->
+            {error, {invalid_tag, null_byte, Tag}}
+    end.
+
+-doc """
+Classify a tag into one of three formats.
+
+Returns:
+- `{bare, Tag}` - Just a tag with no repo (e.g., `v1.0.0`, `latest`)
+- `{repo_tag, Repo, Tag}` - Simple repo:tag format (e.g., `myapp:v1.0.0`)
+- `{full_ref, Repo, Tag}` - Full reference with registry (e.g., `ghcr.io/org/app:v1`)
+
+Examples:
+- `~"v1.0.0"` -> `{bare, ~"v1.0.0"}`
+- `~"myapp:v1.0.0"` -> `{repo_tag, ~"myapp", ~"v1.0.0"}`
+- `~"ghcr.io/org/app:v1"` -> `{full_ref, ~"ghcr.io/org/app", ~"v1"}`
+- `~"localhost:5000/myapp:v1"` -> `{full_ref, ~"localhost:5000/myapp", ~"v1"}`
+- `~"../../../etc:passwd"` -> `{error, {invalid_tag, path_traversal, ...}}`
+""".
+-spec classify_tag(binary()) -> tag_format() | {error, term()}.
+classify_tag(Tag) ->
+    case validate_tag(Tag) of
+        {error, _} = Err ->
+            Err;
+        ok ->
+            classify_tag_impl(Tag)
+    end.
+
+classify_tag_impl(Tag) ->
+    case binary:split(Tag, ~":", [global]) of
+        [TagOnly] ->
+            %% No colon: check if it contains slashes (full ref without tag)
+            case binary:match(TagOnly, ~"/") of
+                nomatch ->
+                    %% No slash: bare tag like "v1.0.0" or "latest"
+                    {bare, TagOnly};
+                _ ->
+                    %% Contains slash: full reference without tag like "ghcr.io/org/app"
+                    {full_ref, TagOnly, ~"latest"}
+            end;
+        [RepoOrHost, TagPart] ->
+            %% One colon: could be repo:tag, registry/path:tag, or registry:port/repo
+            case binary:match(TagPart, ~"/") of
+                {_, _} ->
+                    %% Second part contains slash: registry:port/repo with implicit "latest"
+                    %% e.g., "localhost:5000/myapp" -> {full_ref, "localhost:5000/myapp", "latest"}
+                    {full_ref, Tag, ~"latest"};
+                nomatch ->
+                    %% No slash in second part: check first part for slash
+                    case binary:match(RepoOrHost, ~"/") of
+                        nomatch ->
+                            %% No slash in either part: simple repo:tag
+                            {repo_tag, RepoOrHost, TagPart};
+                        _ ->
+                            %% First part has slash: full reference like ghcr.io/org/app:v1
+                            {full_ref, RepoOrHost, TagPart}
+                    end
+            end;
+        Parts ->
+            %% Multiple colons: registry with port like localhost:5000/myapp:v1
+            LastPart = lists:last(Parts),
+            case binary:match(LastPart, ~"/") of
+                nomatch ->
+                    %% Last part is the tag
+                    Repo = iolist_to_binary(lists:join(~":", lists:droplast(Parts))),
+                    {full_ref, Repo, LastPart};
+                _ ->
+                    %% Last part contains slash, no explicit tag
+                    {full_ref, Tag, ~"latest"}
+            end
+    end.
+
+-doc """
+Resolve a tag to a canonical {Repo, Tag} tuple using optional default repo.
+
+For bare tags (no colon), uses the provided default repo.
+For full references, preserves the full repo path (for docker load/push compatibility).
+
+Examples:
+- `resolve_tag(~"v1.0.0", ~"myapp")` -> `{~"myapp", ~"v1.0.0"}`
+- `resolve_tag(~"myapp:v1", undefined)` -> `{~"myapp", ~"v1"}`
+- `resolve_tag(~"ghcr.io/org/app:v1", undefined)` -> `{~"ghcr.io/org/app", ~"v1"}`
+- `resolve_tag(~"v1.0.0", undefined)` -> `{error, {bare_tag_needs_context, ~"v1.0.0"}}`
+""".
+-spec resolve_tag(binary(), binary() | undefined) ->
+    {Repo :: binary(), Tag :: binary()} | {error, term()}.
+resolve_tag(RawTag, DefaultRepo) ->
+    case classify_tag(RawTag) of
+        {error, _} = Err ->
+            Err;
+        {bare, TagPart} when DefaultRepo =/= undefined ->
+            {DefaultRepo, TagPart};
+        {bare, TagPart} ->
+            {error, {bare_tag_needs_context, TagPart}};
+        {repo_tag, Repo, TagPart} ->
+            {Repo, TagPart};
+        {full_ref, FullRepo, TagPart} ->
+            %% Preserve full repo path (includes registry) for docker load/push compatibility
+            {FullRepo, TagPart}
+    end.
+
+-doc """
+Resolve a tag to a full repo:tag binary string.
+
+Returns `{ok, Binary}` on success or `{error, Reason}` if the tag cannot be resolved.
+""".
+-spec resolve_tag_to_full(binary(), binary() | undefined) -> {ok, binary()} | {error, term()}.
+resolve_tag_to_full(RawTag, DefaultRepo) ->
+    case resolve_tag(RawTag, DefaultRepo) of
+        {error, _} = Err -> Err;
+        {Repo, TagPart} -> {ok, <<Repo/binary, ":", TagPart/binary>>}
+    end.
+
+-doc """
+Resolve a list of tags using a default repo for bare tags.
+
+Returns `{ok, ResolvedTags}` or `{error, Reason}` on first failure.
+""".
+-spec resolve_tags_list([binary()], binary() | undefined) -> {ok, [binary()]} | {error, term()}.
+resolve_tags_list(Tags, DefaultRepo) ->
+    resolve_tags_list(Tags, DefaultRepo, []).
+
+resolve_tags_list([], _DefaultRepo, Acc) ->
+    {ok, lists:reverse(Acc)};
+resolve_tags_list([Tag | Rest], DefaultRepo, Acc) ->
+    case resolve_tag_to_full(Tag, DefaultRepo) of
+        {ok, Resolved} ->
+            resolve_tags_list(Rest, DefaultRepo, [Resolved | Acc]);
+        {error, _} = Err ->
+            Err
+    end.
+
+-doc """
 Parse a push destination into registry host and namespace.
 
 Examples:
-- `~"ghcr.io/intility"` -> `{~"ghcr.io", ~"intility"}`
 - `~"ghcr.io"` -> `{~"ghcr.io", <<>>}`
+- `~"ghcr.io/myorg"` -> `{~"ghcr.io", ~"myorg"}`
 - `~"docker.io/myorg"` -> `{~"docker.io", ~"myorg"}`
 - `~"localhost:5000/myorg"` -> `{~"localhost:5000", ~"myorg"}`
 """.
@@ -1491,6 +1747,39 @@ parse_push_destination(Dest) ->
                     %% First part is the registry, rest is namespace
                     Namespace = iolist_to_binary(lists:join(~"/", Rest)),
                     {FirstPart, Namespace}
+            end
+    end.
+
+-doc """
+Extract repository path from an image name, stripping any registry prefix.
+
+When a tag contains a full reference like `ghcr.io/myorg/myapp`, this extracts
+just the repository path (`myorg/myapp`) so it can be combined with a different
+push registry without duplicating the registry prefix.
+
+Examples:
+- `~"myapp"` -> `~"myapp"` (no change)
+- `~"myorg/myapp"` -> `~"myorg/myapp"` (no change, no registry)
+- `~"ghcr.io/myorg/myapp"` -> `~"myorg/myapp"` (registry stripped)
+- `~"localhost:5000/myapp"` -> `~"myapp"` (registry with port stripped)
+""".
+-spec extract_repo_path(binary()) -> binary().
+extract_repo_path(ImageName) ->
+    case binary:split(ImageName, ~"/") of
+        [_SinglePart] ->
+            %% No slash - just a repo name like "myapp"
+            ImageName;
+        [FirstPart | Rest] ->
+            %% Check if first part looks like a registry (contains "." or ":")
+            case binary:match(FirstPart, [~".", ~":"]) of
+                nomatch ->
+                    %% No dot or colon - not a registry, return as-is
+                    %% e.g., "myorg/myapp" stays "myorg/myapp"
+                    ImageName;
+                _ ->
+                    %% First part is a registry, return just the repo path
+                    %% e.g., "ghcr.io/myorg/myapp" -> "myorg/myapp"
+                    iolist_to_binary(lists:join(~"/", Rest))
             end
     end.
 
