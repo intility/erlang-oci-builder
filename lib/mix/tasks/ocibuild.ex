@@ -356,37 +356,41 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  # Get tags from options (supports multiple -t flags with :keep)
-  # Also supports semicolon-separated tags for docker/metadata-action compatibility
-  defp get_tags(opts, ocibuild_config, release_name, version) do
-    # Collect all tag values from CLI, expanding semicolon-separated values
-    cli_tags =
-      Keyword.get_values(opts, :tag)
-      |> Enum.flat_map(&String.split(&1, ";"))
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.map(&to_binary/1)
+  @doc """
+  Get tags from options (supports multiple -t flags with :keep).
 
-    cond do
-      # CLI tags take precedence
-      cli_tags != [] ->
-        cli_tags
+  Also supports semicolon-separated tags for docker/metadata-action compatibility.
+  Delegates to :ocibuild_release.get_tags/4 for shared implementation.
+  """
+  def get_tags(opts, ocibuild_config, release_name, version) do
+    # Extract CLI tags as binaries
+    cli_tags = Keyword.get_values(opts, :tag) |> Enum.map(&to_binary/1)
 
-      # Check config for tag (may be string or list)
-      Keyword.has_key?(ocibuild_config, :tag) ->
-        case Keyword.get(ocibuild_config, :tag) do
-          # List of tags (but not a charlist - charlists are lists of integers)
-          tags when is_list(tags) and (tags == [] or not is_integer(hd(tags))) ->
-            Enum.map(tags, &to_binary/1)
+    # Extract config tags as binaries
+    config_tags = get_config_tags(ocibuild_config)
 
-          # Single tag (binary, charlist, or other)
-          tag ->
-            [to_binary(tag)]
-        end
+    # Delegate to shared Erlang implementation
+    :ocibuild_release.get_tags(
+      cli_tags,
+      config_tags,
+      to_binary(release_name),
+      to_binary(version)
+    )
+  end
 
-      # Default to release_name:version
-      true ->
-        [to_binary("#{release_name}:#{version}")]
+  # Extract tags from config as list of binaries
+  defp get_config_tags(ocibuild_config) do
+    case Keyword.get(ocibuild_config, :tag) do
+      nil ->
+        []
+
+      # List of tags (but not a charlist - charlists are lists of integers)
+      tags when is_list(tags) and (tags == [] or not is_integer(hd(tags))) ->
+        Enum.map(tags, &to_binary/1)
+
+      # Single tag (binary, charlist, or other)
+      tag ->
+        [to_binary(tag)]
     end
   end
 

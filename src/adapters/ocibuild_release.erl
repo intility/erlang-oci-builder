@@ -46,6 +46,12 @@ Security features:
     add_description/2
 ]).
 
+%% Public API - Tag Utilities
+-export([
+    get_tags/4,
+    expand_semicolon_tags/1
+]).
+
 %% Public API - Authentication
 -export([
     get_push_auth/0,
@@ -114,7 +120,8 @@ Security features:
     classify_tag/1,
     resolve_tag/2,
     resolve_tag_to_full/2,
-    resolve_tags_list/2
+    resolve_tags_list/2,
+    extract_repo_path/1
 ]).
 -endif.
 
@@ -790,11 +797,15 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
     %% The registry is the first component, namespace is the rest
     {Registry, Namespace} = parse_push_destination(PushDest),
 
-    %% Combine namespace with image name to form full repo path
+    %% Handle full reference tags (e.g., ghcr.io/myorg/myapp:v1)
+    %% If tag already contains a registry, extract just the repo path
+    RepoPath = extract_repo_path(ImageName),
+
+    %% Combine namespace with repo path to form full repo path
     Repo =
         case Namespace of
-            <<>> -> ImageName;
-            _ -> <<Namespace/binary, "/", ImageName/binary>>
+            <<>> -> RepoPath;
+            _ -> <<Namespace/binary, "/", RepoPath/binary>>
         end,
 
     %% Build push options (ChunkSize is expected to be in bytes already or undefined/nil)
@@ -1366,9 +1377,13 @@ push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
         %% Parse tag and registry
         {ImageName, FirstImageTag} = parse_tag(FirstTag),
         {RegistryHost, Namespace} = parse_push_destination(Registry),
+
+        %% Handle full reference tags (e.g., ghcr.io/myorg/myapp:v1)
+        %% If tag already contains a registry, extract just the repo path
+        RepoPath = extract_repo_path(ImageName),
         Repo = case Namespace of
-            <<>> -> ImageName;
-            _ -> <<Namespace/binary, "/", ImageName/binary>>
+            <<>> -> RepoPath;
+            _ -> <<Namespace/binary, "/", RepoPath/binary>>
         end,
 
         FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
@@ -1486,6 +1501,64 @@ parse_tag(Tag) ->
                     {Tag, ~"latest"}
             end
     end.
+
+-doc """
+Get tags from CLI options and config, with semicolon expansion support.
+
+This is the shared implementation used by both rebar3 and Mix adapters.
+Supports docker/metadata-action style semicolon-separated tags.
+
+Parameters:
+- CliTags: List of tag strings from CLI (e.g., from multiple -t flags)
+- ConfigTags: List of tag strings from config file
+- DefaultRepo: Default repository name (usually release name)
+- DefaultVersion: Default version string
+
+Returns a list of binary tags. CLI tags take precedence over config tags.
+If neither is provided, returns a default tag of `DefaultRepo:DefaultVersion`.
+
+Examples:
+- `get_tags([~"myapp:v1;myapp:latest"], [], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `get_tags([], [~"myapp:v1"], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1"]`
+- `get_tags([], [], ~"myapp", ~"1.0.0")` -> `[~"myapp:1.0.0"]`
+""".
+-spec get_tags([binary()], [binary()], binary(), binary()) -> [binary()].
+get_tags(CliTags, ConfigTags, DefaultRepo, DefaultVersion) ->
+    %% Expand semicolons in CLI tags
+    ExpandedCliTags = lists:flatmap(fun expand_semicolon_tags/1, CliTags),
+    case ExpandedCliTags of
+        [] ->
+            case ConfigTags of
+                [] when DefaultRepo =:= <<>> orelse DefaultVersion =:= <<>> ->
+                    %% No tags and no valid default - return empty
+                    [];
+                [] ->
+                    %% Generate default tag from repo:version
+                    [<<DefaultRepo/binary, ":", DefaultVersion/binary>>];
+                _ ->
+                    ConfigTags
+            end;
+        _ ->
+            ExpandedCliTags
+    end.
+
+-doc """
+Expand semicolon-separated tags into multiple tags.
+
+Supports docker/metadata-action style semicolon-separated tags.
+Trims whitespace and filters empty segments.
+
+Examples:
+- `~"myapp:v1;myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `~"myapp:v1 ; myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `~"myapp:v1;;myapp:latest"` -> `[~"myapp:v1", ~"myapp:latest"]`
+""".
+-spec expand_semicolon_tags(binary()) -> [binary()].
+expand_semicolon_tags(TagStr) when is_binary(TagStr) ->
+    [Trimmed ||
+     Part <- binary:split(TagStr, ~";", [global]),
+     Trimmed <- [string:trim(Part)],
+     Trimmed =/= <<>>].
 
 %% Tag format classification type
 -type tag_format() ::
@@ -1672,6 +1745,39 @@ parse_push_destination(Dest) ->
                     %% First part is the registry, rest is namespace
                     Namespace = iolist_to_binary(lists:join(~"/", Rest)),
                     {FirstPart, Namespace}
+            end
+    end.
+
+-doc """
+Extract repository path from an image name, stripping any registry prefix.
+
+When a tag contains a full reference like `ghcr.io/myorg/myapp`, this extracts
+just the repository path (`myorg/myapp`) so it can be combined with a different
+push registry without duplicating the registry prefix.
+
+Examples:
+- `~"myapp"` -> `~"myapp"` (no change)
+- `~"myorg/myapp"` -> `~"myorg/myapp"` (no change, no registry)
+- `~"ghcr.io/myorg/myapp"` -> `~"myorg/myapp"` (registry stripped)
+- `~"localhost:5000/myapp"` -> `~"myapp"` (registry with port stripped)
+""".
+-spec extract_repo_path(binary()) -> binary().
+extract_repo_path(ImageName) ->
+    case binary:split(ImageName, ~"/") of
+        [_SinglePart] ->
+            %% No slash - just a repo name like "myapp"
+            ImageName;
+        [FirstPart | Rest] ->
+            %% Check if first part looks like a registry (contains "." or ":")
+            case binary:match(FirstPart, [~".", ~":"]) of
+                nomatch ->
+                    %% No dot or colon - not a registry, return as-is
+                    %% e.g., "myorg/myapp" stays "myorg/myapp"
+                    ImageName;
+                _ ->
+                    %% First part is a registry, return just the repo path
+                    %% e.g., "ghcr.io/myorg/myapp" -> "myorg/myapp"
+                    iolist_to_binary(lists:join(~"/", Rest))
             end
     end.
 

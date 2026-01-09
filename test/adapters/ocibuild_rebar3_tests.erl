@@ -266,6 +266,12 @@ get_tags_semicolon_full_refs_test() ->
     Config = [],
     ?assertEqual([~"ghcr.io/org/app:v1", ~"ghcr.io/org/app:latest"], ocibuild_rebar3:get_tags(Args, Config)).
 
+get_tags_multiple_flags_with_semicolons_test() ->
+    %% Multiple -t flags combined with semicolon-separated values
+    Args = [{tag, "myapp:v1"}, {tag, "myapp:v2;myapp:latest"}],
+    Config = [],
+    ?assertEqual([~"myapp:v1", ~"myapp:v2", ~"myapp:latest"], ocibuild_rebar3:get_tags(Args, Config)).
+
 %%%===================================================================
 %%% Helper functions
 %%%===================================================================

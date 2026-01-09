@@ -1877,6 +1877,30 @@ resolve_tag_to_full_full_ref_test() ->
     ).
 
 %%%===================================================================
+%%% extract_repo_path tests
+%%%===================================================================
+
+extract_repo_path_simple_name_test() ->
+    %% Simple repo name with no registry
+    ?assertEqual(~"myapp", ocibuild_release:extract_repo_path(~"myapp")).
+
+extract_repo_path_org_repo_test() ->
+    %% Org/repo without registry (no dot/colon in first part)
+    ?assertEqual(~"myorg/myapp", ocibuild_release:extract_repo_path(~"myorg/myapp")).
+
+extract_repo_path_full_ref_test() ->
+    %% Full reference with registry - should strip registry
+    ?assertEqual(~"myorg/myapp", ocibuild_release:extract_repo_path(~"ghcr.io/myorg/myapp")).
+
+extract_repo_path_registry_with_port_test() ->
+    %% Registry with port - should strip registry
+    ?assertEqual(~"myapp", ocibuild_release:extract_repo_path(~"localhost:5000/myapp")).
+
+extract_repo_path_deep_path_test() ->
+    %% Deep path with registry - should strip only registry
+    ?assertEqual(~"org/team/myapp", ocibuild_release:extract_repo_path(~"ghcr.io/org/team/myapp")).
+
+%%%===================================================================
 %%% resolve_tags_list tests
 %%%===================================================================
 

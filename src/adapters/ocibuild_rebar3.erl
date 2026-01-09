@@ -348,23 +348,14 @@ get_description(Args, Config) ->
 %% Args: collects all values for `tag` (supports one or many -t flags)
 %% Config: `tag` can be a single string/binary or a list of such values
 %% Supports semicolon-separated tags for docker/metadata-action compatibility
+%% Delegates to ocibuild_release:get_tags/4 for shared implementation
 get_tags(Args, Config) ->
-    case proplists:get_all_values(tag, Args) of
-        [] ->
-            %% No CLI tags, check config (and normalize to binary list)
-            normalize_tags(proplists:get_value(tag, Config, []));
-        TagStrs ->
-            %% CLI tags (all -t occurrences) override config
-            %% Expand semicolon-separated values (for metadata-action compatibility)
-            lists:flatmap(fun expand_semicolon_tags/1, TagStrs)
-    end.
-
-%% @private Expand semicolon-separated tags into multiple tags
-%% e.g., "ghcr.io/org/app:v1;ghcr.io/org/app:latest" -> [<<"ghcr.io/org/app:v1">>, <<"ghcr.io/org/app:latest">>]
-expand_semicolon_tags(TagStr) when is_list(TagStr) ->
-    [list_to_binary(string:trim(T)) ||
-     T <- string:split(TagStr, ";", all),
-     string:trim(T) =/= ""].
+    %% Extract CLI tags as binaries
+    CliTags = [list_to_binary(T) || T <- proplists:get_all_values(tag, Args)],
+    %% Extract config tags as binaries
+    ConfigTags = normalize_tags(proplists:get_value(tag, Config, [])),
+    %% Use shared implementation (DefaultRepo and DefaultVersion not used when tags exist)
+    ocibuild_release:get_tags(CliTags, ConfigTags, <<>>, <<>>).
 
 %% @private Normalize tags from config to binary list
 %% Handles both single tag (string) and list of tags
