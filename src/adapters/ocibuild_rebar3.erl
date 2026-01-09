@@ -347,6 +347,7 @@ get_description(Args, Config) ->
 %% @private Get tags as a list of binaries from args or config
 %% Args: collects all values for `tag` (supports one or many -t flags)
 %% Config: `tag` can be a single string/binary or a list of such values
+%% Supports semicolon-separated tags for docker/metadata-action compatibility
 get_tags(Args, Config) ->
     case proplists:get_all_values(tag, Args) of
         [] ->
@@ -354,8 +355,16 @@ get_tags(Args, Config) ->
             normalize_tags(proplists:get_value(tag, Config, []));
         TagStrs ->
             %% CLI tags (all -t occurrences) override config
-            [list_to_binary(T) || T <- TagStrs]
+            %% Expand semicolon-separated values (for metadata-action compatibility)
+            lists:flatmap(fun expand_semicolon_tags/1, TagStrs)
     end.
+
+%% @private Expand semicolon-separated tags into multiple tags
+%% e.g., "ghcr.io/org/app:v1;ghcr.io/org/app:latest" -> [<<"ghcr.io/org/app:v1">>, <<"ghcr.io/org/app:latest">>]
+expand_semicolon_tags(TagStr) when is_list(TagStr) ->
+    [list_to_binary(string:trim(T)) ||
+     T <- string:split(TagStr, ";", all),
+     string:trim(T) =/= ""].
 
 %% @private Normalize tags from config to binary list
 %% Handles both single tag (string) and list of tags

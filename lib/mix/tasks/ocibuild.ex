@@ -352,9 +352,15 @@ defmodule Mix.Tasks.Ocibuild do
   end
 
   # Get tags from options (supports multiple -t flags with :keep)
+  # Also supports semicolon-separated tags for docker/metadata-action compatibility
   defp get_tags(opts, ocibuild_config, release_name, version) do
-    # Collect all tag values from CLI
-    cli_tags = Keyword.get_values(opts, :tag) |> Enum.map(&to_binary/1)
+    # Collect all tag values from CLI, expanding semicolon-separated values
+    cli_tags =
+      Keyword.get_values(opts, :tag)
+      |> Enum.flat_map(&String.split(&1, ";"))
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&to_binary/1)
 
     cond do
       # CLI tags take precedence

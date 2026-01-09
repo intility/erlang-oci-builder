@@ -108,7 +108,13 @@ Security features:
     tag_additional/6,
     default_output_path/2,
     classify_extension/1,
-    compression_extension/1
+    compression_extension/1,
+    %% Tag classification and resolution
+    validate_tag/1,
+    classify_tag/1,
+    resolve_tag/2,
+    resolve_tag_to_full/2,
+    resolve_tags_list/2
 ]).
 -endif.
 
@@ -162,11 +168,14 @@ run(AdapterModule, AdapterState, Opts) ->
     maybe
         %% Validate at least one tag exists
         true ?= Tags =/= [],
-        [FirstTag | _] = Tags,
+        %% Find release (needed to resolve bare tags)
+        {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
+        %% Resolve tags (bare tags use release name as default repo)
+        DefaultRepo = atom_to_binary(ReleaseName),
+        {ok, ResolvedTags} ?= resolve_tags_list(Tags, DefaultRepo),
+        [FirstTag | _] = ResolvedTags,
         {ImageName, _} = parse_tag(FirstTag),
         AdapterModule:info("Building OCI image: ~s", [ImageName]),
-        %% Find release
-        {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
         AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
         %% Parse and validate platforms
         {ok, Platforms} ?= parse_platform_option(PlatformOpt),
@@ -208,7 +217,7 @@ run(AdapterModule, AdapterState, Opts) ->
         SbomPath = maps:get(sbom, Config, undefined),
         SignKey = maps:get(sign_key, Config, undefined),
         OutputOpts = #{
-            tags => Tags,
+            tags => ResolvedTags,
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
@@ -1324,20 +1333,32 @@ push_tarball(AdapterModule, AdapterState, TarballPath, Opts) ->
 push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
                   ChunkSize, Images, EmbeddedTag, IsMulti) ->
     maybe
+        %% Determine default repo from embedded tag (for bare tag resolution)
+        DefaultRepo = case EmbeddedTag of
+            undefined -> undefined;
+            Embedded ->
+                {EmbeddedRepo, _} = parse_tag(Embedded),
+                EmbeddedRepo
+        end,
+
         %% Determine tags: override takes precedence, then embedded, else error
-        Tags = case TagsOverride of
+        %% Resolve bare tags using default repo from embedded tag
+        RawTags = case TagsOverride of
             [] when EmbeddedTag =/= undefined -> [EmbeddedTag];
             [] -> [];
             _ -> TagsOverride
         end,
 
         %% Validate at least one tag is specified
-        ok ?= case Tags of
+        ok ?= case RawTags of
             [] ->
                 {error, {no_tag_specified, "Use --tag to specify image tag"}};
             _ ->
                 ok
         end,
+
+        %% Resolve tags (bare tags use embedded tag's repo as default)
+        {ok, Tags} ?= resolve_tags_list(RawTags, DefaultRepo),
 
         %% Use first tag for push, additional tags will be added after
         [FirstTag | AdditionalTags] = Tags,
@@ -1464,6 +1485,149 @@ parse_tag(Tag) ->
                     %% Last part contains a slash, so no tag specified
                     {Tag, ~"latest"}
             end
+    end.
+
+%% Tag format classification type
+-type tag_format() ::
+    {bare, Tag :: binary()} |
+    {repo_tag, Repo :: binary(), Tag :: binary()} |
+    {full_ref, Repo :: binary(), Tag :: binary()}.
+
+-doc """
+Validate a tag for security issues.
+
+Prevents path traversal attacks via malicious tags like `../../../etc:passwd`.
+Also rejects null bytes which could truncate paths in C-based tools.
+
+Examples:
+- `~"myapp:v1.0.0"` -> `ok`
+- `~"../../../etc:passwd"` -> `{error, {invalid_tag, path_traversal, ...}}`
+- `~"myapp\0:v1"` -> `{error, {invalid_tag, null_byte, ...}}`
+""".
+-spec validate_tag(binary()) -> ok | {error, term()}.
+validate_tag(Tag) ->
+    case binary:match(Tag, <<0>>) of
+        nomatch ->
+            %% Check for path traversal in all components
+            %% Split on both / and : to check all parts
+            AllParts = binary:split(Tag, [~"/", ~":"], [global]),
+            case lists:member(~"..", AllParts) of
+                true -> {error, {invalid_tag, path_traversal, Tag}};
+                false -> ok
+            end;
+        _ ->
+            {error, {invalid_tag, null_byte, Tag}}
+    end.
+
+-doc """
+Classify a tag into one of three formats.
+
+Returns:
+- `{bare, Tag}` - Just a tag with no repo (e.g., `v1.0.0`, `latest`)
+- `{repo_tag, Repo, Tag}` - Simple repo:tag format (e.g., `myapp:v1.0.0`)
+- `{full_ref, Repo, Tag}` - Full reference with registry (e.g., `ghcr.io/org/app:v1`)
+
+Examples:
+- `~"v1.0.0"` -> `{bare, ~"v1.0.0"}`
+- `~"myapp:v1.0.0"` -> `{repo_tag, ~"myapp", ~"v1.0.0"}`
+- `~"ghcr.io/org/app:v1"` -> `{full_ref, ~"ghcr.io/org/app", ~"v1"}`
+- `~"localhost:5000/myapp:v1"` -> `{full_ref, ~"localhost:5000/myapp", ~"v1"}`
+""".
+-spec classify_tag(binary()) -> tag_format().
+classify_tag(Tag) ->
+    ok = validate_tag(Tag),
+    case binary:split(Tag, ~":", [global]) of
+        [TagOnly] ->
+            %% No colon: check if it contains slashes (full ref without tag)
+            case binary:match(TagOnly, ~"/") of
+                nomatch ->
+                    %% No slash: bare tag like "v1.0.0" or "latest"
+                    {bare, TagOnly};
+                _ ->
+                    %% Contains slash: full reference without tag like "ghcr.io/org/app"
+                    {full_ref, TagOnly, ~"latest"}
+            end;
+        [RepoOrHost, TagPart] ->
+            %% One colon: check if repo has slashes (indicates full reference)
+            case binary:match(RepoOrHost, ~"/") of
+                nomatch ->
+                    %% No slash in first part: simple repo:tag
+                    {repo_tag, RepoOrHost, TagPart};
+                _ ->
+                    %% Contains slash: full reference like ghcr.io/org/app:v1
+                    {full_ref, RepoOrHost, TagPart}
+            end;
+        Parts ->
+            %% Multiple colons: registry with port like localhost:5000/myapp:v1
+            LastPart = lists:last(Parts),
+            case binary:match(LastPart, ~"/") of
+                nomatch ->
+                    %% Last part is the tag
+                    Repo = iolist_to_binary(lists:join(~":", lists:droplast(Parts))),
+                    {full_ref, Repo, LastPart};
+                _ ->
+                    %% Last part contains slash, no explicit tag
+                    {full_ref, Tag, ~"latest"}
+            end
+    end.
+
+-doc """
+Resolve a tag to a canonical {Repo, Tag} tuple using optional default repo.
+
+For bare tags (no colon), uses the provided default repo.
+For full references, extracts just the repo name (last path component).
+
+Examples:
+- `resolve_tag(~"v1.0.0", ~"myapp")` -> `{~"myapp", ~"v1.0.0"}`
+- `resolve_tag(~"myapp:v1", undefined)` -> `{~"myapp", ~"v1"}`
+- `resolve_tag(~"ghcr.io/org/app:v1", undefined)` -> `{~"app", ~"v1"}`
+- `resolve_tag(~"v1.0.0", undefined)` -> `{error, {bare_tag_needs_context, ~"v1.0.0"}}`
+""".
+-spec resolve_tag(binary(), binary() | undefined) ->
+    {Repo :: binary(), Tag :: binary()} | {error, term()}.
+resolve_tag(RawTag, DefaultRepo) ->
+    case classify_tag(RawTag) of
+        {bare, TagPart} when DefaultRepo =/= undefined ->
+            {DefaultRepo, TagPart};
+        {bare, TagPart} ->
+            {error, {bare_tag_needs_context, TagPart}};
+        {repo_tag, Repo, TagPart} ->
+            {Repo, TagPart};
+        {full_ref, FullRepo, TagPart} ->
+            %% Extract just repo name from path (last component)
+            RepoName = lists:last(binary:split(FullRepo, ~"/", [global])),
+            {RepoName, TagPart}
+    end.
+
+-doc """
+Resolve a tag to a full repo:tag binary string.
+
+Returns `{ok, Binary}` on success or `{error, Reason}` if the tag cannot be resolved.
+""".
+-spec resolve_tag_to_full(binary(), binary() | undefined) -> {ok, binary()} | {error, term()}.
+resolve_tag_to_full(RawTag, DefaultRepo) ->
+    case resolve_tag(RawTag, DefaultRepo) of
+        {error, _} = Err -> Err;
+        {Repo, TagPart} -> {ok, <<Repo/binary, ":", TagPart/binary>>}
+    end.
+
+-doc """
+Resolve a list of tags using a default repo for bare tags.
+
+Returns `{ok, ResolvedTags}` or `{error, Reason}` on first failure.
+""".
+-spec resolve_tags_list([binary()], binary() | undefined) -> {ok, [binary()]} | {error, term()}.
+resolve_tags_list(Tags, DefaultRepo) ->
+    resolve_tags_list(Tags, DefaultRepo, []).
+
+resolve_tags_list([], _DefaultRepo, Acc) ->
+    {ok, lists:reverse(Acc)};
+resolve_tags_list([Tag | Rest], DefaultRepo, Acc) ->
+    case resolve_tag_to_full(Tag, DefaultRepo) of
+        {ok, Resolved} ->
+            resolve_tags_list(Rest, DefaultRepo, [Resolved | Acc]);
+        {error, _} = Err ->
+            Err
     end.
 
 -doc """

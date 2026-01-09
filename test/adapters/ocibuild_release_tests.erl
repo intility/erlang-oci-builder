@@ -1707,3 +1707,177 @@ default_output_path_auto_compression_test() ->
         Path =:= "myapp-1.0.0.tar.gz" orelse
         Path =:= "myapp-1.0.0.tar.zst"
     ).
+
+%%%===================================================================
+%%% Tag validation tests (security)
+%%%===================================================================
+
+validate_tag_valid_simple_test() ->
+    ?assertEqual(ok, ocibuild_release:validate_tag(~"myapp:v1.0.0")).
+
+validate_tag_valid_full_ref_test() ->
+    ?assertEqual(ok, ocibuild_release:validate_tag(~"ghcr.io/intility/myapp:v1.0.0")).
+
+validate_tag_valid_registry_with_port_test() ->
+    ?assertEqual(ok, ocibuild_release:validate_tag(~"localhost:5000/myapp:v1.0.0")).
+
+validate_tag_path_traversal_test() ->
+    ?assertEqual(
+        {error, {invalid_tag, path_traversal, ~"../../../etc:passwd"}},
+        ocibuild_release:validate_tag(~"../../../etc:passwd")
+    ).
+
+validate_tag_path_traversal_middle_test() ->
+    ?assertEqual(
+        {error, {invalid_tag, path_traversal, ~"myapp/../../../etc:v1"}},
+        ocibuild_release:validate_tag(~"myapp/../../../etc:v1")
+    ).
+
+validate_tag_path_traversal_in_registry_test() ->
+    ?assertEqual(
+        {error, {invalid_tag, path_traversal, ~"ghcr.io/../intility/myapp:v1"}},
+        ocibuild_release:validate_tag(~"ghcr.io/../intility/myapp:v1")
+    ).
+
+validate_tag_null_byte_test() ->
+    ?assertEqual(
+        {error, {invalid_tag, null_byte, <<"myapp\0:v1">>}},
+        ocibuild_release:validate_tag(<<"myapp\0:v1">>)
+    ).
+
+%%%===================================================================
+%%% Tag classification tests
+%%%===================================================================
+
+classify_tag_bare_test() ->
+    ?assertEqual({bare, ~"v1.0.0"}, ocibuild_release:classify_tag(~"v1.0.0")).
+
+classify_tag_bare_latest_test() ->
+    ?assertEqual({bare, ~"latest"}, ocibuild_release:classify_tag(~"latest")).
+
+classify_tag_repo_tag_test() ->
+    ?assertEqual({repo_tag, ~"myapp", ~"v1.0.0"}, ocibuild_release:classify_tag(~"myapp:v1.0.0")).
+
+classify_tag_full_ref_test() ->
+    ?assertEqual(
+        {full_ref, ~"ghcr.io/intility/myapp", ~"v1.0.0"},
+        ocibuild_release:classify_tag(~"ghcr.io/intility/myapp:v1.0.0")
+    ).
+
+classify_tag_registry_with_port_test() ->
+    ?assertEqual(
+        {full_ref, ~"localhost:5000/myapp", ~"v1.0.0"},
+        ocibuild_release:classify_tag(~"localhost:5000/myapp:v1.0.0")
+    ).
+
+classify_tag_full_ref_no_tag_test() ->
+    %% Full reference without explicit tag defaults to latest
+    ?assertEqual(
+        {full_ref, ~"ghcr.io/intility/myapp", ~"latest"},
+        ocibuild_release:classify_tag(~"ghcr.io/intility/myapp")
+    ).
+
+%%%===================================================================
+%%% Tag resolution tests
+%%%===================================================================
+
+resolve_tag_bare_with_context_test() ->
+    ?assertEqual(
+        {~"myapp", ~"v1.0.0"},
+        ocibuild_release:resolve_tag(~"v1.0.0", ~"myapp")
+    ).
+
+resolve_tag_bare_without_context_test() ->
+    ?assertEqual(
+        {error, {bare_tag_needs_context, ~"v1.0.0"}},
+        ocibuild_release:resolve_tag(~"v1.0.0", undefined)
+    ).
+
+resolve_tag_repo_tag_test() ->
+    ?assertEqual(
+        {~"myapp", ~"v1.0.0"},
+        ocibuild_release:resolve_tag(~"myapp:v1.0.0", undefined)
+    ).
+
+resolve_tag_repo_tag_ignores_context_test() ->
+    %% Context is ignored when tag already has repo
+    ?assertEqual(
+        {~"myapp", ~"v1.0.0"},
+        ocibuild_release:resolve_tag(~"myapp:v1.0.0", ~"other")
+    ).
+
+resolve_tag_full_ref_extracts_repo_test() ->
+    %% Should extract just the repo name (last path component)
+    ?assertEqual(
+        {~"myapp", ~"v1.0.0"},
+        ocibuild_release:resolve_tag(~"ghcr.io/intility/myapp:v1.0.0", undefined)
+    ).
+
+resolve_tag_full_ref_with_port_test() ->
+    ?assertEqual(
+        {~"myapp", ~"v1.0.0"},
+        ocibuild_release:resolve_tag(~"localhost:5000/myapp:v1.0.0", undefined)
+    ).
+
+%%%===================================================================
+%%% resolve_tag_to_full tests
+%%%===================================================================
+
+resolve_tag_to_full_bare_with_context_test() ->
+    ?assertEqual(
+        {ok, ~"myapp:v1.0.0"},
+        ocibuild_release:resolve_tag_to_full(~"v1.0.0", ~"myapp")
+    ).
+
+resolve_tag_to_full_bare_without_context_test() ->
+    ?assertEqual(
+        {error, {bare_tag_needs_context, ~"v1.0.0"}},
+        ocibuild_release:resolve_tag_to_full(~"v1.0.0", undefined)
+    ).
+
+resolve_tag_to_full_repo_tag_test() ->
+    ?assertEqual(
+        {ok, ~"myapp:v1.0.0"},
+        ocibuild_release:resolve_tag_to_full(~"myapp:v1.0.0", undefined)
+    ).
+
+resolve_tag_to_full_full_ref_test() ->
+    ?assertEqual(
+        {ok, ~"myapp:v1.0.0"},
+        ocibuild_release:resolve_tag_to_full(~"ghcr.io/intility/myapp:v1.0.0", undefined)
+    ).
+
+%%%===================================================================
+%%% resolve_tags_list tests
+%%%===================================================================
+
+resolve_tags_list_empty_test() ->
+    ?assertEqual({ok, []}, ocibuild_release:resolve_tags_list([], ~"myapp")).
+
+resolve_tags_list_single_bare_test() ->
+    ?assertEqual(
+        {ok, [~"myapp:v1.0.0"]},
+        ocibuild_release:resolve_tags_list([~"v1.0.0"], ~"myapp")
+    ).
+
+resolve_tags_list_multiple_test() ->
+    ?assertEqual(
+        {ok, [~"myapp:v1.0.0", ~"myapp:latest"]},
+        ocibuild_release:resolve_tags_list([~"v1.0.0", ~"latest"], ~"myapp")
+    ).
+
+resolve_tags_list_mixed_formats_test() ->
+    ?assertEqual(
+        {ok, [~"myapp:v1.0.0", ~"other:latest", ~"app:v2"]},
+        ocibuild_release:resolve_tags_list(
+            [~"v1.0.0", ~"other:latest", ~"ghcr.io/org/app:v2"],
+            ~"myapp"
+        )
+    ).
+
+resolve_tags_list_error_propagates_test() ->
+    %% Error on bare tag without context should propagate
+    ?assertEqual(
+        {error, {bare_tag_needs_context, ~"v1.0.0"}},
+        ocibuild_release:resolve_tags_list([~"v1.0.0"], undefined)
+    ).
