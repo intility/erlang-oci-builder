@@ -150,6 +150,11 @@ defmodule Mix.Tasks.OcibuildTest do
       assert TestHelpers.get_tags([], config, :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
     end
 
+    test "config tags with semicolons are expanded" do
+      config = [tag: "myapp:v1;myapp:latest"]
+      assert TestHelpers.get_tags([], config, :myapp, "1.0.0") == ["myapp:v1", "myapp:latest"]
+    end
+
     test "multiple -t flags combined with semicolons" do
       opts = [tag: "myapp:v1", tag: "myapp:v2;myapp:latest"]
 

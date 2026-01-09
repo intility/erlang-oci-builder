@@ -272,6 +272,12 @@ get_tags_multiple_flags_with_semicolons_test() ->
     Config = [],
     ?assertEqual([~"myapp:v1", ~"myapp:v2", ~"myapp:latest"], ocibuild_rebar3:get_tags(Args, Config)).
 
+get_tags_config_semicolon_expansion_test() ->
+    %% Config tags should also expand semicolons
+    Args = [],
+    Config = [{tag, "myapp:v1;myapp:latest"}],
+    ?assertEqual([~"myapp:v1", ~"myapp:latest"], ocibuild_rebar3:get_tags(Args, Config)).
+
 %%%===================================================================
 %%% Helper functions
 %%%===================================================================

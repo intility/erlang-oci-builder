@@ -1519,16 +1519,18 @@ If neither is provided, returns a default tag of `DefaultRepo:DefaultVersion`.
 
 Examples:
 - `get_tags([~"myapp:v1;myapp:latest"], [], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1", ~"myapp:latest"]`
+- `get_tags([], [~"myapp:v1;myapp:latest"], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1", ~"myapp:latest"]`
 - `get_tags([], [~"myapp:v1"], ~"myapp", ~"1.0.0")` -> `[~"myapp:v1"]`
 - `get_tags([], [], ~"myapp", ~"1.0.0")` -> `[~"myapp:1.0.0"]`
 """.
 -spec get_tags([binary()], [binary()], binary(), binary()) -> [binary()].
 get_tags(CliTags, ConfigTags, DefaultRepo, DefaultVersion) ->
-    %% Expand semicolons in CLI tags
+    %% Expand semicolons in both CLI and config tags
     ExpandedCliTags = lists:flatmap(fun expand_semicolon_tags/1, CliTags),
+    ExpandedConfigTags = lists:flatmap(fun expand_semicolon_tags/1, ConfigTags),
     case ExpandedCliTags of
         [] ->
-            case ConfigTags of
+            case ExpandedConfigTags of
                 [] when DefaultRepo =:= <<>> orelse DefaultVersion =:= <<>> ->
                     %% No tags and no valid default - return empty
                     [];
@@ -1536,7 +1538,7 @@ get_tags(CliTags, ConfigTags, DefaultRepo, DefaultVersion) ->
                     %% Generate default tag from repo:version
                     [<<DefaultRepo/binary, ":", DefaultVersion/binary>>];
                 _ ->
-                    ConfigTags
+                    ExpandedConfigTags
             end;
         _ ->
             ExpandedCliTags
