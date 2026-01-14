@@ -252,7 +252,7 @@ files to support the new functionality.
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
-    {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}},
+    {labels, #{<<"maintainer">> => <<"team@example.com">>}},
     {description, "My application"},
     {vcs_annotations, true},   % Automatic VCS annotations (default: true)
     {sign_key, "cosign.key"},  % Optional: path to cosign private key

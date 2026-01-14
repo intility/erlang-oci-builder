@@ -274,8 +274,8 @@ push:
         ~"LANG" => ~"C.UTF-8"
     }},
     {expose, [8080, 443]},                     % Ports to expose
-    {labels, #{                                % Image labels
-        ~"org.opencontainers.image.source" => ~"https://github.com/..."
+    {labels, #{                                % Image config labels
+        ~"maintainer" => ~"team@example.com"
     }},
     {uid, 65534},                              % User ID (optional, defaults to 65534)
     {description, "My application"},           % OCI manifest annotation
@@ -299,8 +299,8 @@ def project do
       cmd: "start",                            # Release command (default: start)
       env: %{"LANG" => "C.UTF-8"},             # Environment variables
       expose: [8080, 443],                     # Ports to expose
-      labels: %{                               # Image labels
-        "org.opencontainers.image.source" => "https://github.com/..."
+      labels: %{                               # Image config labels
+        "maintainer" => "team@example.com"
       },
       uid: 65534,                              # User ID (optional, defaults to 65534)
       description: "My application",           # OCI manifest annotation
