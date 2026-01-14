@@ -77,7 +77,6 @@ get_config(State) when is_map(State) ->
         annotations => #{},
         % Elixir uses "start" instead of "foreground"
         cmd => ~"start",
-        description => undefined,
         tags => [],
         output => undefined,
         push => undefined,

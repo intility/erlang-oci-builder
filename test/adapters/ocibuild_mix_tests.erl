@@ -17,7 +17,6 @@ get_config_empty_state_test() ->
     ?assertEqual([], maps:get(expose, Config)),
     ?assertEqual(#{}, maps:get(labels, Config)),
     ?assertEqual(~"start", maps:get(cmd, Config)),
-    ?assertEqual(undefined, maps:get(description, Config)),
     ?assertEqual([], maps:get(tags, Config)),
     ?assertEqual(undefined, maps:get(output, Config)),
     ?assertEqual(undefined, maps:get(push, Config)),

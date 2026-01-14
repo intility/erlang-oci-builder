@@ -1673,7 +1673,7 @@ validate_annotations_security(Annotations) ->
                 {error, {Type, _}} ->
                     {error, {invalid_annotation, Type, Key}}
             end;
-           (_, _, Error) ->
+        (_, _, Error) ->
             Error
         end,
         ok,
