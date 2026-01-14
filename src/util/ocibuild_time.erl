@@ -23,6 +23,7 @@ ISO8601 = ocibuild_time:unix_to_iso8601(1700000000).
 """.
 
 -export([get_timestamp/0, get_iso8601/0, unix_to_iso8601/1]).
+-export([parse_rfc3339/1, normalize_rfc3339/1]).
 
 %% Offset between Erlang's gregorian calendar epoch (year 0) and Unix epoch (1970)
 -define(UNIX_EPOCH_OFFSET, 62167219200).
@@ -75,3 +76,50 @@ unix_to_iso8601(Timestamp) ->
             [Y, Mo, D, H, Mi, S]
         )
     ).
+
+-doc """
+Parse and validate an RFC 3339 timestamp string.
+
+Uses `calendar:rfc3339_to_system_time/1` for proper validation including
+date validity checks (no Feb 30th, etc.).
+
+Returns the system time in seconds if valid.
+
+Example:
+```
+{ok, 1704067200} = ocibuild_time:parse_rfc3339(~"2024-01-01T00:00:00Z").
+{error, badarg} = ocibuild_time:parse_rfc3339(~"not-a-date").
+{error, badarg} = ocibuild_time:parse_rfc3339(~"2024-02-30T00:00:00Z").
+```
+""".
+-spec parse_rfc3339(binary()) -> {ok, integer()} | {error, badarg}.
+parse_rfc3339(Bin) when is_binary(Bin) ->
+    try
+        %% calendar:rfc3339_to_system_time/2 with unit option returns seconds
+        Seconds = calendar:rfc3339_to_system_time(binary_to_list(Bin), [{unit, second}]),
+        {ok, Seconds}
+    catch
+        error:_ -> {error, badarg}
+    end.
+
+-doc """
+Parse and normalize an RFC 3339 timestamp to a consistent format.
+
+Accepts RFC 3339 strings with various timezone formats and normalizes
+to UTC with Z suffix: "YYYY-MM-DDTHH:MM:SSZ"
+
+Example:
+```
+{ok, ~"2024-01-01T00:00:00Z"} = ocibuild_time:normalize_rfc3339(~"2024-01-01T00:00:00Z").
+{ok, ~"2024-01-01T00:00:00Z"} = ocibuild_time:normalize_rfc3339(~"2024-01-01T01:00:00+01:00").
+{error, badarg} = ocibuild_time:normalize_rfc3339(~"invalid").
+```
+""".
+-spec normalize_rfc3339(binary()) -> {ok, binary()} | {error, badarg}.
+normalize_rfc3339(Bin) when is_binary(Bin) ->
+    case parse_rfc3339(Bin) of
+        {ok, Seconds} ->
+            {ok, unix_to_iso8601(Seconds)};
+        {error, _} = Err ->
+            Err
+    end.

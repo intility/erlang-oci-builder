@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking Changes
+
+- **Removed `--desc` CLI option and `description` config option**: Use `--annotation "org.opencontainers.image.description=Your description"` or the `annotations` config map instead. This consolidates description handling into the more flexible annotations system.
+
+### Features
+
+- **Custom manifest annotations** ([#37](https://github.com/intility/erlang-oci-builder/issues/37)):
+  - New `--annotation KEY=VALUE` CLI flag (repeatable) for adding custom OCI manifest annotations
+  - New `-a` short alias for `--annotation`
+  - New `annotations` config option for both rebar.config and mix.exs
+  - CLI annotations override config annotations
+  - Security validation: annotations are checked for null bytes and path traversal
+  - Protected annotations (source, revision, base.name, base.digest) cannot be overridden
+  - Special handling for `org.opencontainers.image.created`: accepts both unix timestamp and RFC 3339 format, normalizes to UTC ISO 8601
+  - New `ocibuild_time:parse_rfc3339/1` and `normalize_rfc3339/1` functions for RFC 3339 timestamp handling
+
 ## 0.9.1 - 2026-01-09
 
 ### Features

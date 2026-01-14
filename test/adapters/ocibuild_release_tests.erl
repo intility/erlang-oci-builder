@@ -1935,3 +1935,218 @@ resolve_tags_list_error_propagates_test() ->
         {error, {bare_tag_needs_context, ~"v1.0.0"}},
         ocibuild_release:resolve_tags_list([~"v1.0.0"], undefined)
     ).
+
+%%%===================================================================
+%%% Annotation parsing tests (parse_cli_annotation/1)
+%%%===================================================================
+
+parse_cli_annotation_valid_test() ->
+    ?assertEqual(
+        {ok, {~"com.example.team", ~"platform"}},
+        ocibuild_release:parse_cli_annotation("com.example.team=platform")
+    ).
+
+parse_cli_annotation_with_equals_in_value_test() ->
+    %% Equals sign in value should be preserved
+    ?assertEqual(
+        {ok, {~"com.example.config", ~"key=value"}},
+        ocibuild_release:parse_cli_annotation("com.example.config=key=value")
+    ).
+
+parse_cli_annotation_empty_value_test() ->
+    %% Empty value is valid
+    ?assertEqual(
+        {ok, {~"com.example.key", <<>>}},
+        ocibuild_release:parse_cli_annotation("com.example.key=")
+    ).
+
+parse_cli_annotation_invalid_no_equals_test() ->
+    ?assertEqual(
+        {error, {invalid_annotation_format, "no-equals-sign"}},
+        ocibuild_release:parse_cli_annotation("no-equals-sign")
+    ).
+
+parse_cli_annotation_invalid_empty_test() ->
+    ?assertEqual(
+        {error, {invalid_annotation_format, ""}},
+        ocibuild_release:parse_cli_annotation("")
+    ).
+
+parse_cli_annotation_url_value_test() ->
+    %% URL values should be preserved
+    ?assertEqual(
+        {ok, {~"org.opencontainers.image.url", ~"https://example.com/path"}},
+        ocibuild_release:parse_cli_annotation("org.opencontainers.image.url=https://example.com/path")
+    ).
+
+%%%===================================================================
+%%% Annotation normalization tests (normalize_annotations/1)
+%%%===================================================================
+
+normalize_annotations_binary_keys_test() ->
+    ?assertEqual(
+        #{~"key" => ~"value"},
+        ocibuild_release:normalize_annotations(#{~"key" => ~"value"})
+    ).
+
+normalize_annotations_string_keys_test() ->
+    ?assertEqual(
+        #{~"key" => ~"value"},
+        ocibuild_release:normalize_annotations(#{"key" => "value"})
+    ).
+
+normalize_annotations_atom_keys_test() ->
+    ?assertEqual(
+        #{~"key" => ~"value"},
+        ocibuild_release:normalize_annotations(#{key => value})
+    ).
+
+normalize_annotations_mixed_test() ->
+    Result = ocibuild_release:normalize_annotations(#{
+        "string_key" => "string_value",
+        atom_key => atom_value,
+        ~"binary_key" => ~"binary_value"
+    }),
+    ?assertEqual(~"string_value", maps:get(~"string_key", Result)),
+    ?assertEqual(~"atom_value", maps:get(~"atom_key", Result)),
+    ?assertEqual(~"binary_value", maps:get(~"binary_key", Result)).
+
+normalize_annotations_empty_map_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_annotations(#{})).
+
+normalize_annotations_not_a_map_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_annotations(not_a_map)).
+
+normalize_annotations_undefined_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_annotations(undefined)).
+
+normalize_annotations_nil_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_annotations(nil)).
+
+%%%===================================================================
+%%% Annotation validation tests (validate_annotations/1)
+%%%===================================================================
+
+validate_annotations_ok_test() ->
+    ?assertEqual(
+        {ok, #{~"com.example.team" => ~"platform"}},
+        ocibuild_release:validate_annotations(#{~"com.example.team" => ~"platform"})
+    ).
+
+validate_annotations_empty_ok_test() ->
+    ?assertEqual({ok, #{}}, ocibuild_release:validate_annotations(#{})).
+
+validate_annotations_null_byte_in_key_test() ->
+    ?assertEqual(
+        {error, {invalid_annotation, null_byte, <<"bad\0key">>}},
+        ocibuild_release:validate_annotations(#{<<"bad\0key">> => ~"value"})
+    ).
+
+validate_annotations_null_byte_in_value_test() ->
+    ?assertEqual(
+        {error, {invalid_annotation, null_byte, <<"bad\0value">>}},
+        ocibuild_release:validate_annotations(#{~"key" => <<"bad\0value">>})
+    ).
+
+validate_annotations_path_traversal_in_key_test() ->
+    ?assertEqual(
+        {error, {invalid_annotation, path_traversal, ~"../../../etc"}},
+        ocibuild_release:validate_annotations(#{~"../../../etc" => ~"value"})
+    ).
+
+validate_annotations_path_traversal_in_value_test() ->
+    ?assertEqual(
+        {error, {invalid_annotation, path_traversal, ~"../../../etc/passwd"}},
+        ocibuild_release:validate_annotations(#{~"key" => ~"../../../etc/passwd"})
+    ).
+
+validate_annotations_protected_source_test() ->
+    ?assertEqual(
+        {error, {protected_annotation, ~"org.opencontainers.image.source"}},
+        ocibuild_release:validate_annotations(#{~"org.opencontainers.image.source" => ~"evil"})
+    ).
+
+validate_annotations_protected_revision_test() ->
+    ?assertEqual(
+        {error, {protected_annotation, ~"org.opencontainers.image.revision"}},
+        ocibuild_release:validate_annotations(#{~"org.opencontainers.image.revision" => ~"evil"})
+    ).
+
+validate_annotations_protected_base_name_test() ->
+    ?assertEqual(
+        {error, {protected_annotation, ~"org.opencontainers.image.base.name"}},
+        ocibuild_release:validate_annotations(#{~"org.opencontainers.image.base.name" => ~"evil"})
+    ).
+
+validate_annotations_protected_base_digest_test() ->
+    ?assertEqual(
+        {error, {protected_annotation, ~"org.opencontainers.image.base.digest"}},
+        ocibuild_release:validate_annotations(#{~"org.opencontainers.image.base.digest" => ~"evil"})
+    ).
+
+validate_annotations_created_valid_unix_timestamp_test() ->
+    %% Unix timestamp should be converted to ISO 8601
+    {ok, Result} = ocibuild_release:validate_annotations(#{
+        ~"org.opencontainers.image.created" => ~"1704067200"
+    }),
+    Created = maps:get(~"org.opencontainers.image.created", Result),
+    ?assertEqual(~"2024-01-01T00:00:00Z", Created).
+
+validate_annotations_created_valid_rfc3339_utc_test() ->
+    %% RFC 3339 with Z suffix should be accepted and normalized
+    {ok, Result} = ocibuild_release:validate_annotations(#{
+        ~"org.opencontainers.image.created" => ~"2024-01-01T00:00:00Z"
+    }),
+    Created = maps:get(~"org.opencontainers.image.created", Result),
+    ?assertEqual(~"2024-01-01T00:00:00Z", Created).
+
+validate_annotations_created_valid_rfc3339_with_offset_test() ->
+    %% RFC 3339 with timezone offset should be converted to UTC
+    {ok, Result} = ocibuild_release:validate_annotations(#{
+        ~"org.opencontainers.image.created" => ~"2024-01-01T01:00:00+01:00"
+    }),
+    Created = maps:get(~"org.opencontainers.image.created", Result),
+    ?assertEqual(~"2024-01-01T00:00:00Z", Created).
+
+validate_annotations_created_invalid_format_test() ->
+    ?assertEqual(
+        {error, {invalid_created_timestamp, {invalid_format, ~"not-a-date"}}},
+        ocibuild_release:validate_annotations(#{
+            ~"org.opencontainers.image.created" => ~"not-a-date"
+        })
+    ).
+
+validate_annotations_created_negative_timestamp_test() ->
+    ?assertEqual(
+        {error, {invalid_created_timestamp, {negative_timestamp, ~"-1"}}},
+        ocibuild_release:validate_annotations(#{
+            ~"org.opencontainers.image.created" => ~"-1"
+        })
+    ).
+
+validate_annotations_created_invalid_date_feb30_test() ->
+    %% Feb 30 doesn't exist - should be rejected by calendar validation
+    ?assertEqual(
+        {error, {invalid_created_timestamp, {invalid_format, ~"2024-02-30T00:00:00Z"}}},
+        ocibuild_release:validate_annotations(#{
+            ~"org.opencontainers.image.created" => ~"2024-02-30T00:00:00Z"
+        })
+    ).
+
+validate_annotations_multiple_valid_test() ->
+    {ok, Result} = ocibuild_release:validate_annotations(#{
+        ~"com.example.team" => ~"platform",
+        ~"org.opencontainers.image.title" => ~"My App",
+        ~"org.opencontainers.image.vendor" => ~"Example Inc"
+    }),
+    ?assertEqual(3, maps:size(Result)).
+
+validate_annotations_security_before_protected_test() ->
+    %% Null byte check happens before protected annotation check
+    %% (can't protect if the key is malicious)
+    ?assertEqual(
+        {error, {invalid_annotation, null_byte, <<"org.opencontainers.image.source\0">>}},
+        ocibuild_release:validate_annotations(#{
+            <<"org.opencontainers.image.source\0">> => ~"value"
+        })
+    ).

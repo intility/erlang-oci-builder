@@ -22,7 +22,10 @@ defmodule Ocibuild.MixRelease do
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
             expose: [8080],
-            description: "My awesome application"
+            annotations: %{
+              "org.opencontainers.image.description" => "My awesome application",
+              "com.example.team" => "platform"
+            }
           ]
         ]
       end
@@ -41,9 +44,9 @@ defmodule Ocibuild.MixRelease do
     * `:workdir` - Working directory in container (default: "/app")
     * `:env` - Environment variables map
     * `:expose` - Ports to expose
-    * `:labels` - Image labels map
+    * `:labels` - Image config labels map
+    * `:annotations` - Custom OCI manifest annotations map
     * `:cmd` - Release start command (default: "start")
-    * `:description` - Image description (OCI manifest annotation)
     * `:chunk_size` - Chunk size in MB for uploads (default: 5)
     * `:platform` - Target platforms. Single string like "linux/amd64" or
       comma-separated string like "linux/amd64,linux/arm64" for multi-platform builds.
@@ -102,7 +105,7 @@ defmodule Ocibuild.MixRelease do
       expose: Keyword.get(ocibuild_config, :expose, []),
       labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
       cmd: Keyword.get(ocibuild_config, :cmd, "start") |> to_binary(),
-      description: get_description(ocibuild_config),
+      annotations: get_annotations(ocibuild_config),
       tags: get_tags(ocibuild_config, release.name, release.version),
       output: nil,
       push: get_push(ocibuild_config),
@@ -138,12 +141,11 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
-  # Returns :undefined (atom) or binary for Erlang interop with ocibuild_release
-  defp get_description(ocibuild_config) do
-    case Keyword.get(ocibuild_config, :description) do
-      nil -> :undefined
-      desc -> to_binary(desc)
-    end
+  # Get annotations from config, normalized to binary keys/values
+  defp get_annotations(ocibuild_config) do
+    :ocibuild_release.normalize_annotations(
+      Keyword.get(ocibuild_config, :annotations, %{})
+    )
   end
 
   defp get_tags(ocibuild_config, release_name, version) do

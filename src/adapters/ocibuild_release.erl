@@ -42,8 +42,7 @@ Security features:
     save_image/3,
     push_image/5,
     push_tarball/4,
-    parse_tag/1,
-    add_description/2
+    parse_tag/1
 ]).
 
 %% Public API - Tag Utilities
@@ -104,6 +103,13 @@ Security features:
     is_nil_or_undefined/1
 ]).
 
+%% Public API - Annotation Utilities (used by adapters)
+-export([
+    parse_cli_annotation/1,
+    normalize_annotations/1,
+    validate_annotations/1
+]).
+
 %% Exports for testing
 -ifdef(TEST).
 -export([
@@ -126,6 +132,16 @@ Security features:
 -endif.
 
 -define(DEFAULT_WORKDIR, ~"/app").
+
+%% Protected annotations that cannot be overridden by user-provided annotations.
+%% These are computed from actual values (VCS, base image) and should not be
+%% manually set to prevent misleading metadata about the image's provenance.
+-define(PROTECTED_ANNOTATIONS, [
+    ~"org.opencontainers.image.source",
+    ~"org.opencontainers.image.revision",
+    ~"org.opencontainers.image.base.name",
+    ~"org.opencontainers.image.base.digest"
+]).
 
 %%%===================================================================
 %%% High-level Orchestration
@@ -159,7 +175,6 @@ run(AdapterModule, AdapterState, Opts) ->
         expose := ExposePorts,
         labels := Labels,
         cmd := DefaultCmd,
-        description := Description,
         tags := Tags,
         output := OutputOpt,
         push := PushRegistry,
@@ -172,9 +187,14 @@ run(AdapterModule, AdapterState, Opts) ->
     %% Get optional uid configuration (default applied in configure_release_image)
     Uid = maps:get(uid, Config, undefined),
 
+    %% Get custom annotations (default to empty map)
+    RawAnnotations = maps:get(annotations, Config, #{}),
+
     maybe
         %% Validate at least one tag exists
         true ?= Tags =/= [],
+        %% Validate custom annotations (security + protected keys + created timestamp)
+        {ok, ValidatedAnnotations} ?= validate_annotations(RawAnnotations),
         %% Find release (needed to resolve bare tags)
         {ok, ReleaseName, ReleasePath} ?= AdapterModule:find_release(AdapterState, Opts),
         %% Resolve tags (bare tags use release name as default repo)
@@ -212,7 +232,7 @@ run(AdapterModule, AdapterState, Opts) ->
             expose => ExposePorts,
             labels => Labels,
             cmd => Cmd,
-            description => Description,
+            annotations => ValidatedAnnotations,
             auth => PullAuth,
             uid => Uid,
             vcs_annotations => VcsAnnotations,
@@ -294,7 +314,7 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
 %% based on whether the original request was for multiple platforms.
 %%
 %% Opts must contain: release_name, workdir, env, expose, labels, cmd
-%% Optional: description, auth, progress
+%% Optional: auth, progress
 -spec build_platform_images(
     BaseImage :: binary(),
     Files :: [{binary(), binary(), non_neg_integer()}],
@@ -303,7 +323,6 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
 ) -> {ok, [ocibuild:image()]} | {error, term()}.
 build_platform_images(~"scratch", Files, Platforms, Opts) ->
     %% Scratch base image - create empty images for each platform
-    Description = maps:get(description, Opts, undefined),
     ReleasePath = maps:get(release_path, Opts, ~"."),
     Images = [
         begin
@@ -315,16 +334,13 @@ build_platform_images(~"scratch", Files, Platforms, Opts) ->
             UserAnnotations = maps:get(annotations, Opts, #{}),
             MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
             OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
-            add_description(
-                configure_release_image(ImgWithPlatform, Files, OptsWithAnnotations), Description
-            )
+            configure_release_image(ImgWithPlatform, Files, OptsWithAnnotations)
         end
      || Platform <- Platforms
     ],
     {ok, Images};
 build_platform_images(BaseImage, Files, Platforms, Opts) ->
     PullAuth = maps:get(auth, Opts, #{}),
-    Description = maps:get(description, Opts, undefined),
     ReleasePath = maps:get(release_path, Opts, ~"."),
 
     %% Always use the platforms list - ocibuild:from/3 handles both single and multi
@@ -339,9 +355,7 @@ build_platform_images(BaseImage, Files, Platforms, Opts) ->
                     UserAnnotations = maps:get(annotations, Opts, #{}),
                     MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
                     OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
-                    add_description(
-                        configure_release_image(BaseImg, Files, OptsWithAnnotations), Description
-                    )
+                    configure_release_image(BaseImg, Files, OptsWithAnnotations)
                 end
              || BaseImg <- BaseImages
             ],
@@ -353,9 +367,7 @@ build_platform_images(BaseImage, Files, Platforms, Opts) ->
             UserAnnotations = maps:get(annotations, Opts, #{}),
             MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
             OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
-            Image = add_description(
-                configure_release_image(SingleImage, Files, OptsWithAnnotations), Description
-            ),
+            Image = configure_release_image(SingleImage, Files, OptsWithAnnotations),
             {ok, [Image]};
         {error, _} = Error ->
             Error
@@ -490,7 +502,6 @@ configure_release_image(Image0, Files, Opts) ->
     ExposePorts = maps:get(expose, Opts, []),
     Labels = maps:get(labels, Opts, #{}),
     Cmd = to_binary(maps:get(cmd, Opts, ~"foreground")),
-    Description = maps:get(description, Opts, undefined),
     Uid = maps:get(uid, Opts, undefined),
     Annotations = maps:get(annotations, Opts, #{}),
 
@@ -550,22 +561,18 @@ configure_release_image(Image0, Files, Opts) ->
 
     %% Set user; when no UID is configured, default to 65534 (nobody) for non-root security
     %% Note: Elixir passes `nil` instead of `undefined` when not configured
-    Image8 =
-        case Uid of
-            undefined ->
-                ocibuild:user(Image7, ~"65534");
-            nil ->
-                ocibuild:user(Image7, ~"65534");
-            U when is_integer(U), U >= 0 ->
-                ocibuild:user(Image7, integer_to_binary(U));
-            U when is_integer(U), U < 0 ->
-                erlang:error({invalid_uid, U, "UID must be non-negative"});
-            Other ->
-                erlang:error({invalid_uid_type, Other, "UID must be an integer"})
-        end,
-
-    %% Add description annotation (convenience for OCI description)
-    add_description(Image8, Description).
+    case Uid of
+        undefined ->
+            ocibuild:user(Image7, ~"65534");
+        nil ->
+            ocibuild:user(Image7, ~"65534");
+        U when is_integer(U), U >= 0 ->
+            ocibuild:user(Image7, integer_to_binary(U));
+        U when is_integer(U), U < 0 ->
+            erlang:error({invalid_uid, U, "UID must be non-negative"});
+        Other ->
+            erlang:error({invalid_uid_type, Other, "UID must be an integer"})
+    end.
 
 %% @private Output the image (save and optionally push)
 %% Handles both single image and list of images (multi-platform)
@@ -1561,6 +1568,190 @@ expand_semicolon_tags(TagStr) when is_binary(TagStr) ->
      Trimmed <- [string:trim(Part)],
      Trimmed =/= <<>>].
 
+%%%===================================================================
+%%% Annotation Utilities
+%%%===================================================================
+
+-doc """
+Parse a CLI annotation string in KEY=VALUE format.
+
+Returns `{ok, {Key, Value}}` on success, or `{error, {invalid_annotation_format, Input}}`
+if the string doesn't contain an `=` character.
+
+## Examples
+
+```
+{ok, {~"key", ~"value"}} = ocibuild_release:parse_cli_annotation("key=value").
+{ok, {~"key", ~"value=with=equals"}} = ocibuild_release:parse_cli_annotation("key=value=with=equals").
+{error, {invalid_annotation_format, "no-equals"}} = ocibuild_release:parse_cli_annotation("no-equals").
+```
+""".
+-spec parse_cli_annotation(string()) -> {ok, {binary(), binary()}} | {error, term()}.
+parse_cli_annotation(Str) when is_list(Str) ->
+    case string:split(Str, "=", leading) of
+        [Key, Value] -> {ok, {list_to_binary(Key), list_to_binary(Value)}};
+        _ -> {error, {invalid_annotation_format, Str}}
+    end.
+
+-doc """
+Normalize an annotations map to have binary keys and values.
+
+Handles various input formats from config files (atoms, strings, binaries).
+Returns an empty map if input is not a map.
+
+## Examples
+
+```
+#{~"key" => ~"value"} = ocibuild_release:normalize_annotations(#{"key" => "value"}).
+#{~"key" => ~"value"} = ocibuild_release:normalize_annotations(#{key => value}).
+#{} = ocibuild_release:normalize_annotations(undefined).
+```
+""".
+-spec normalize_annotations(term()) -> #{binary() => binary()}.
+normalize_annotations(Map) when is_map(Map) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            Acc#{to_binary(K) => to_binary(V)}
+        end,
+        #{},
+        Map
+    );
+normalize_annotations(_) ->
+    #{}.
+
+-doc """
+Validate user-provided annotations for security and correctness.
+
+Performs the following checks:
+1. Security validation (null bytes, path traversal) on all keys and values
+2. Protected annotation check - returns error if user tries to override computed annotations
+3. Created timestamp validation - if `org.opencontainers.image.created` is present,
+   validates it's a valid unix timestamp and converts to ISO 8601 format
+
+Protected annotations that cannot be overridden:
+- `org.opencontainers.image.source` - Computed from VCS
+- `org.opencontainers.image.revision` - Computed from VCS
+- `org.opencontainers.image.base.name` - Computed from base image
+- `org.opencontainers.image.base.digest` - Computed from base image
+
+## Examples
+
+```
+{ok, #{~"custom.key" => ~"value"}} = ocibuild_release:validate_annotations(#{~"custom.key" => ~"value"}).
+{error, {protected_annotation, ~"org.opencontainers.image.source"}} =
+    ocibuild_release:validate_annotations(#{~"org.opencontainers.image.source" => ~"evil"}).
+{error, {invalid_annotation, null_byte, _}} =
+    ocibuild_release:validate_annotations(#{<<"bad\0key">> => ~"value"}).
+```
+""".
+-spec validate_annotations(#{binary() => binary()}) ->
+    {ok, #{binary() => binary()}} | {error, term()}.
+validate_annotations(Annotations) when is_map(Annotations) ->
+    case validate_annotations_security(Annotations) of
+        ok ->
+            case validate_protected_annotations(Annotations) of
+                ok ->
+                    process_created_annotation(Annotations);
+                Error ->
+                    Error
+            end;
+        Error ->
+            Error
+    end.
+
+%% @private Validate all annotation keys and values for security issues
+-spec validate_annotations_security(#{binary() => binary()}) -> ok | {error, term()}.
+validate_annotations_security(Annotations) ->
+    maps:fold(
+        fun(Key, Value, ok) ->
+            case ocibuild_validate:validate_user_string(Key) of
+                ok ->
+                    case ocibuild_validate:validate_user_string(Value) of
+                        ok -> ok;
+                        {error, {Type, _}} -> {error, {invalid_annotation, Type, Value}}
+                    end;
+                {error, {Type, _}} ->
+                    {error, {invalid_annotation, Type, Key}}
+            end;
+           (_, _, Error) ->
+            Error
+        end,
+        ok,
+        Annotations
+    ).
+
+%% @private Check that user is not trying to override protected annotations
+-spec validate_protected_annotations(#{binary() => binary()}) -> ok | {error, term()}.
+validate_protected_annotations(Annotations) ->
+    ProtectedKeys = ?PROTECTED_ANNOTATIONS,
+    case find_protected_key(maps:keys(Annotations), ProtectedKeys) of
+        none -> ok;
+        Key -> {error, {protected_annotation, Key}}
+    end.
+
+%% @private Find first protected key in list
+-spec find_protected_key([binary()], [binary()]) -> binary() | none.
+find_protected_key([], _Protected) ->
+    none;
+find_protected_key([Key | Rest], Protected) ->
+    case lists:member(Key, Protected) of
+        true -> Key;
+        false -> find_protected_key(Rest, Protected)
+    end.
+
+%% @private Process and validate the created timestamp annotation
+%% If present, must be a valid unix timestamp or RFC 3339 string
+-spec process_created_annotation(#{binary() => binary()}) ->
+    {ok, #{binary() => binary()}} | {error, term()}.
+process_created_annotation(Annotations) ->
+    case maps:find(~"org.opencontainers.image.created", Annotations) of
+        error ->
+            {ok, Annotations};
+        {ok, Value} ->
+            case parse_timestamp_value(Value) of
+                {ok, IsoTimestamp} ->
+                    {ok, Annotations#{~"org.opencontainers.image.created" => IsoTimestamp}};
+                {error, Reason} ->
+                    {error, {invalid_created_timestamp, Reason}}
+            end
+    end.
+
+%% @private Parse a timestamp value (unix timestamp or RFC 3339) to ISO 8601
+%% Accepts:
+%%   - Unix timestamp as string: "1704067200" -> "2024-01-01T00:00:00Z"
+%%   - RFC 3339 string: "2024-01-01T00:00:00Z" -> "2024-01-01T00:00:00Z"
+%%   - RFC 3339 with offset: "2024-01-01T01:00:00+01:00" -> "2024-01-01T00:00:00Z"
+-spec parse_timestamp_value(binary()) -> {ok, binary()} | {error, term()}.
+parse_timestamp_value(Value) when is_binary(Value) ->
+    %% First try as unix timestamp (integer)
+    case parse_as_unix_timestamp(Value) of
+        {ok, _} = Ok ->
+            Ok;
+        {error, not_integer} ->
+            %% Not an integer, try RFC 3339
+            case ocibuild_time:normalize_rfc3339(Value) of
+                {ok, _} = Ok ->
+                    Ok;
+                {error, badarg} ->
+                    {error, {invalid_format, Value}}
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Try to parse value as unix timestamp
+-spec parse_as_unix_timestamp(binary()) -> {ok, binary()} | {error, term()}.
+parse_as_unix_timestamp(Value) ->
+    try binary_to_integer(Value) of
+        Timestamp when Timestamp >= 0 ->
+            {ok, ocibuild_time:unix_to_iso8601(Timestamp)};
+        _ ->
+            {error, {negative_timestamp, Value}}
+    catch
+        error:badarg ->
+            {error, not_integer}
+    end.
+
 %% Tag format classification type
 -type tag_format() ::
     {bare, Tag :: binary()} |
@@ -1573,6 +1764,8 @@ Validate a tag for security issues.
 Prevents path traversal attacks via malicious tags like `../../../etc:passwd`.
 Also rejects null bytes which could truncate paths in C-based tools.
 
+Uses `ocibuild_validate:validate_user_string/1` for the core security checks.
+
 Examples:
 - `~"myapp:v1.0.0"` -> `ok`
 - `~"../../../etc:passwd"` -> `{error, {invalid_tag, path_traversal, ...}}`
@@ -1580,17 +1773,13 @@ Examples:
 """.
 -spec validate_tag(binary()) -> ok | {error, term()}.
 validate_tag(Tag) ->
-    case binary:match(Tag, <<0>>) of
-        nomatch ->
-            %% Check for path traversal in all components
-            %% Split on both / and : to check all parts
-            AllParts = binary:split(Tag, [~"/", ~":"], [global]),
-            case lists:member(~"..", AllParts) of
-                true -> {error, {invalid_tag, path_traversal, Tag}};
-                false -> ok
-            end;
-        _ ->
-            {error, {invalid_tag, null_byte, Tag}}
+    case ocibuild_validate:validate_user_string(Tag) of
+        ok ->
+            ok;
+        {error, {null_byte, _}} ->
+            {error, {invalid_tag, null_byte, Tag}};
+        {error, {path_traversal, _}} ->
+            {error, {invalid_tag, path_traversal, Tag}}
     end.
 
 -doc """
@@ -1781,19 +1970,6 @@ extract_repo_path(ImageName) ->
                     iolist_to_binary(lists:join(~"/", Rest))
             end
     end.
-
--doc """
-Add an OCI description annotation to an image.
-
-If description is undefined or empty, returns the image unchanged.
-""".
--spec add_description(ocibuild:image(), binary() | undefined) -> ocibuild:image().
-add_description(Image, undefined) ->
-    Image;
-add_description(Image, <<>>) ->
-    Image;
-add_description(Image, Description) when is_binary(Description) ->
-    ocibuild:annotation(Image, ~"org.opencontainers.image.description", Description).
 
 %%%===================================================================
 %%% Authentication
