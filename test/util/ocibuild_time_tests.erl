@@ -240,3 +240,72 @@ consistency_between_functions_test() ->
         FromConvert = ocibuild_time:unix_to_iso8601(Timestamp),
         ?assertEqual(FromGetIso, FromConvert)
     end).
+
+%%%===================================================================
+%%% parse_rfc3339 Tests
+%%%===================================================================
+
+parse_rfc3339_valid_utc_test() ->
+    ?assertEqual({ok, 1704067200}, ocibuild_time:parse_rfc3339(~"2024-01-01T00:00:00Z")).
+
+parse_rfc3339_valid_with_positive_offset_test() ->
+    %% 2024-01-01T01:00:00+01:00 is the same as 2024-01-01T00:00:00Z
+    ?assertEqual({ok, 1704067200}, ocibuild_time:parse_rfc3339(~"2024-01-01T01:00:00+01:00")).
+
+parse_rfc3339_valid_with_negative_offset_test() ->
+    %% 2023-12-31T19:00:00-05:00 is the same as 2024-01-01T00:00:00Z
+    ?assertEqual({ok, 1704067200}, ocibuild_time:parse_rfc3339(~"2023-12-31T19:00:00-05:00")).
+
+parse_rfc3339_epoch_test() ->
+    ?assertEqual({ok, 0}, ocibuild_time:parse_rfc3339(~"1970-01-01T00:00:00Z")).
+
+parse_rfc3339_invalid_format_test() ->
+    ?assertEqual({error, badarg}, ocibuild_time:parse_rfc3339(~"not-a-date")).
+
+parse_rfc3339_invalid_date_feb30_test() ->
+    %% Feb 30 doesn't exist
+    ?assertEqual({error, badarg}, ocibuild_time:parse_rfc3339(~"2024-02-30T00:00:00Z")).
+
+parse_rfc3339_invalid_date_feb29_non_leap_test() ->
+    %% 2023 is not a leap year
+    ?assertEqual({error, badarg}, ocibuild_time:parse_rfc3339(~"2023-02-29T00:00:00Z")).
+
+parse_rfc3339_valid_date_feb29_leap_year_test() ->
+    %% 2024 is a leap year
+    ?assertMatch({ok, _}, ocibuild_time:parse_rfc3339(~"2024-02-29T00:00:00Z")).
+
+parse_rfc3339_invalid_month_test() ->
+    ?assertEqual({error, badarg}, ocibuild_time:parse_rfc3339(~"2024-13-01T00:00:00Z")).
+
+parse_rfc3339_invalid_hour_test() ->
+    %% Note: Erlang's calendar module is lenient about hour 25
+    %% (interprets as 01:00 next day). This test documents that behavior.
+    ?assertMatch({ok, _}, ocibuild_time:parse_rfc3339(~"2024-01-01T25:00:00Z")).
+
+parse_rfc3339_empty_string_test() ->
+    ?assertEqual({error, badarg}, ocibuild_time:parse_rfc3339(~"")).
+
+%%%===================================================================
+%%% normalize_rfc3339 Tests
+%%%===================================================================
+
+normalize_rfc3339_utc_passthrough_test() ->
+    %% UTC timestamp should normalize to same value
+    ?assertEqual({ok, ~"2024-01-01T00:00:00Z"}, ocibuild_time:normalize_rfc3339(~"2024-01-01T00:00:00Z")).
+
+normalize_rfc3339_converts_offset_to_utc_test() ->
+    %% +01:00 offset should be converted to UTC
+    ?assertEqual({ok, ~"2024-01-01T00:00:00Z"}, ocibuild_time:normalize_rfc3339(~"2024-01-01T01:00:00+01:00")).
+
+normalize_rfc3339_converts_negative_offset_test() ->
+    %% -05:00 offset should be converted to UTC
+    ?assertEqual({ok, ~"2024-01-01T00:00:00Z"}, ocibuild_time:normalize_rfc3339(~"2023-12-31T19:00:00-05:00")).
+
+normalize_rfc3339_epoch_test() ->
+    ?assertEqual({ok, ~"1970-01-01T00:00:00Z"}, ocibuild_time:normalize_rfc3339(~"1970-01-01T00:00:00Z")).
+
+normalize_rfc3339_invalid_returns_error_test() ->
+    ?assertEqual({error, badarg}, ocibuild_time:normalize_rfc3339(~"invalid")).
+
+normalize_rfc3339_invalid_date_test() ->
+    ?assertEqual({error, badarg}, ocibuild_time:normalize_rfc3339(~"2024-02-30T00:00:00Z")).

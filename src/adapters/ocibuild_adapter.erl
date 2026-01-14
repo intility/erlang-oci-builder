@@ -83,8 +83,6 @@ error(Format, Args) ->
     labels => #{binary() => binary()},
     %% Release start command (e.g., ~"foreground" for Erlang, ~"start" for Elixir)
     cmd => binary(),
-    %% Image description (OCI annotation)
-    description => binary() | undefined,
     %% Image tag (e.g., ~"myapp:1.0.0")
     tag => binary() | undefined,
     %% Output tarball path
@@ -102,7 +100,9 @@ error(Format, Args) ->
     %% SBOM export path (optional, from --sbom CLI flag)
     sbom => binary() | undefined,
     %% Path to cosign private key for image signing (optional)
-    sign_key => binary() | undefined
+    sign_key => binary() | undefined,
+    %% Custom manifest annotations (key-value map)
+    annotations => #{binary() => binary()}
 }.
 
 -export_type([config/0]).

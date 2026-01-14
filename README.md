@@ -193,7 +193,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 | `--tag`                | `-t`  | Image tag (repeatable for multiple tags)          |
 | `--output`             | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
 | `--push`               | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
-| `--desc`               | `-d`  | Image description (OCI manifest annotation)       |
+| `--annotation`         | `-a`  | Add manifest annotation `KEY=VALUE` (repeatable)  |
 | `--platform`           | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
 | `--base`               |       | Override base image                               |
 | `--release`            |       | Release name (if multiple configured)             |
@@ -274,11 +274,14 @@ push:
         ~"LANG" => ~"C.UTF-8"
     }},
     {expose, [8080, 443]},                     % Ports to expose
-    {labels, #{                                % Image labels
-        ~"org.opencontainers.image.source" => ~"https://github.com/..."
+    {labels, #{                                % Image config labels
+        ~"maintainer" => ~"team@example.com"
+    }},
+    {annotations, #{                           % Custom manifest annotations
+        ~"org.opencontainers.image.description" => ~"My application",
+        ~"com.example.team" => ~"platform"
     }},
     {uid, 65534},                              % User ID (optional, defaults to 65534)
-    {description, "My application"},           % OCI manifest annotation
     {vcs_annotations, true}                    % Auto VCS annotations (default: true)
 ]}.
 ```
@@ -299,11 +302,14 @@ def project do
       cmd: "start",                            # Release command (default: start)
       env: %{"LANG" => "C.UTF-8"},             # Environment variables
       expose: [8080, 443],                     # Ports to expose
-      labels: %{                               # Image labels
-        "org.opencontainers.image.source" => "https://github.com/..."
+      labels: %{                               # Image config labels
+        "maintainer" => "team@example.com"
+      },
+      annotations: %{                          # Custom manifest annotations
+        "org.opencontainers.image.description" => "My application",
+        "com.example.team" => "platform"
       },
       uid: 65534,                              # User ID (optional, defaults to 65534)
-      description: "My application",           # OCI manifest annotation
       vcs_annotations: true                    # Auto VCS annotations (default: true)
     ]
   ]
@@ -386,6 +392,27 @@ ocibuild: [vcs_annotations: false]
 ```
 
 The `created` timestamp respects `SOURCE_DATE_EPOCH` for reproducible builds.
+
+### Custom Annotations
+
+In addition to automatic annotations, you can set custom annotations via CLI or config:
+
+```bash
+# CLI (repeatable for multiple annotations)
+rebar3 ocibuild -t myapp:1.0.0 -a "com.example.team=platform" -a "org.opencontainers.image.description=My app"
+mix ocibuild -t myapp:1.0.0 --annotation "com.example.team=platform"
+
+# Override created timestamp (unix timestamp converted to ISO 8601)
+mix ocibuild -t myapp:1.0.0 -a "org.opencontainers.image.created=1704067200"
+```
+
+**Protected annotations** — these are computed automatically and cannot be overridden:
+- `org.opencontainers.image.source` (from VCS)
+- `org.opencontainers.image.revision` (from VCS)
+- `org.opencontainers.image.base.name` (from base image)
+- `org.opencontainers.image.base.digest` (from base image)
+
+**Merge order:** Auto annotations → Config annotations → CLI annotations (highest priority).
 
 ## How It Works
 

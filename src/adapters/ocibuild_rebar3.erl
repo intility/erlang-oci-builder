@@ -1,5 +1,6 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_rebar3).
+-feature(maybe_expr, enable).
 -moduledoc """
 Rebar3 provider for building OCI container images from releases.
 
@@ -21,7 +22,7 @@ rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
   * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Can be specified multiple times.
   * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
   * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
-  * `-d, --desc` - Image description (OCI manifest annotation)
+  * `-a, --annotation` - Add manifest annotation KEY=VALUE (repeatable)
   * `--base` - Override base image
   * `--release` - Release name (if multiple configured)
   * `--compression` - Layer compression: gzip, zstd, or auto (default: auto)
@@ -37,7 +38,7 @@ Add to your `rebar.config`:
     {env, #{~"LANG" => ~"C.UTF-8"}},
     {expose, [8080]},
     {labels, #{}},
-    {description, "My awesome application"},
+    {annotations, #{<<"org.opencontainers.image.description">> => <<"My awesome application">>}},
     {tag, ["myapp:1.0.0", "myapp:latest"]},  % or a single string: "myapp:1.0.0"
     {compression, auto}  % gzip, zstd, or auto (zstd on OTP 28+, gzip on OTP 27)
 ]}.
@@ -80,7 +81,6 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -eqwalizer({nowarn_function, get_base_image/2}).
 -eqwalizer({nowarn_function, get_app_name/2}).
 -eqwalizer({nowarn_function, get_project_app_name/1}).
--eqwalizer({nowarn_function, get_description/2}).
 -eqwalizer({nowarn_function, get_tags/2}).
 -eqwalizer({nowarn_function, get_output/1}).
 -eqwalizer({nowarn_function, get_sbom_path/1}).
@@ -89,6 +89,7 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -eqwalizer({nowarn_function, get_push_registry/1}).
 -eqwalizer({nowarn_function, get_platform/2}).
 -eqwalizer({nowarn_function, parse_rebar_lock/1}).
+-eqwalizer({nowarn_function, get_annotations/2}).
 
 %% Provider callbacks
 -export([init/1, do/1, format_error/1]).
@@ -131,7 +132,8 @@ init(State) ->
                 {push, $p, "push", string, "Push to registry (e.g., ghcr.io/myorg)"},
                 {base, undefined, "base", string, "Override base image"},
                 {release, undefined, "release", string, "Release name (if multiple)"},
-                {desc, $d, "desc", string, "Image description (manifest annotation)"},
+                {annotation, $a, "annotation", string,
+                    "Add manifest annotation KEY=VALUE (repeatable)"},
                 {chunk_size, undefined, "chunk-size", integer,
                     "Chunk size in MB for uploads (default: 5)"},
                 {platform, $P, "platform", string,
@@ -158,29 +160,24 @@ do(State) ->
     %% Check for tarball argument (push existing image mode)
     PushRegistry = get_push_registry(Args),
     TarballPath = detect_tarball_arg(Rest),
-
     Tags = get_tags(Args, Config),
+
+    %% Push tarball mode takes precedence and doesn't need tags
     case {PushRegistry, TarballPath} of
-        {undefined, _} ->
-            %% No push registry - normal build mode (at least one tag required)
-            case Tags of
-                [] ->
-                    {error, {?MODULE, missing_tag}};
-                _ ->
-                    do_build(State, Args, Config)
-            end;
-        {_Registry, {ok, Path}} ->
-            %% Push tarball mode (standalone, no release needed)
+        {Registry, {ok, Path}} when Registry =/= undefined ->
             do_push_tarball(State, Args, Path);
-        {_Registry, undefined} ->
-            %% Build and push mode (at least one tag required)
-            case Tags of
-                [] ->
-                    {error, {?MODULE, missing_tag}};
-                _ ->
-                    do_build(State, Args, Config)
+        _ ->
+            %% Build mode (with or without push) - validate tags then build
+            maybe
+                ok ?= require_tags(Tags),
+                do_build(State, Args, Config)
             end
     end.
+
+%% Validate that at least one tag is provided
+-spec require_tags([binary()]) -> ok | {error, term()}.
+require_tags([]) -> {error, {?MODULE, missing_tag}};
+require_tags([_ | _]) -> ok.
 
 %% Detect tarball path from positional arguments
 -spec detect_tarball_arg([string()]) -> {ok, string()} | undefined.
@@ -290,7 +287,7 @@ get_config(State) ->
         expose => proplists:get_value(expose, Config, []),
         labels => proplists:get_value(labels, Config, #{}),
         cmd => ~"foreground",
-        description => get_description(Args, Config),
+        annotations => get_annotations(Args, Config),
         tags => get_tags(Args, Config),
         output => get_output(Args),
         push => get_push_registry(Args),
@@ -332,17 +329,36 @@ get_project_app_name(State) ->
             rebar_app_info:name(AppInfo)
     end.
 
-%% @private Get description from args or config
-get_description(Args, Config) ->
-    case proplists:get_value(desc, Args) of
-        undefined ->
-            case proplists:get_value(description, Config) of
-                undefined -> undefined;
-                Descr -> list_to_binary(Descr)
-            end;
-        Descr ->
-            list_to_binary(Descr)
-    end.
+%% @private Get annotations from args and config
+%% CLI annotations override config annotations
+%% Uses ocibuild_release:parse_cli_annotation/1 and normalize_annotations/1 for shared logic
+get_annotations(Args, Config) ->
+    %% Get config annotations first (lower priority)
+    ConfigAnnotations = ocibuild_release:normalize_annotations(
+        proplists:get_value(annotations, Config, #{})
+    ),
+    %% Parse CLI annotations (higher priority)
+    CliAnnotationStrings = proplists:get_all_values(annotation, Args),
+    CliAnnotations = parse_cli_annotations(CliAnnotationStrings),
+    %% Merge: CLI overrides config
+    maps:merge(ConfigAnnotations, CliAnnotations).
+
+%% @private Parse list of CLI annotation strings to a map
+-spec parse_cli_annotations([string()]) -> #{binary() => binary()}.
+parse_cli_annotations(Strings) ->
+    lists:foldl(
+        fun(Str, Acc) ->
+            case ocibuild_release:parse_cli_annotation(Str) of
+                {ok, {Key, Value}} ->
+                    Acc#{Key => Value};
+                {error, Reason} ->
+                    io:format("Warning: Invalid annotation '~s': ~p~n", [Str, Reason]),
+                    Acc
+            end
+        end,
+        #{},
+        Strings
+    ).
 
 %% @private Get tags as a list of binaries from args or config
 %% Args: collects all values for `tag` (supports one or many -t flags)

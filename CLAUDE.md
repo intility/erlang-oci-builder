@@ -167,7 +167,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--tag`        | `-t`  | Image tag (repeatable), e.g., `-t myapp:1.0.0 -t myapp:latest` |
 | `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
 | `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
-| `--desc`       | `-d`  | Image description (OCI manifest annotation)       |
+| `--annotation` | `-a`  | Add manifest annotation `KEY=VALUE` (repeatable)  |
 | `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
 | `--base`       |       | Override base image                               |
 | `--release`    |       | Release name (if multiple configured)             |
@@ -252,8 +252,11 @@ files to support the new functionality.
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
-    {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}},
-    {description, "My application"},
+    {labels, #{<<"maintainer">> => <<"team@example.com">>}},
+    {annotations, #{                        % Custom manifest annotations
+        <<"org.opencontainers.image.description">> => <<"My application">>,
+        <<"com.example.team">> => <<"platform">>
+    }},
     {vcs_annotations, true},   % Automatic VCS annotations (default: true)
     {sign_key, "cosign.key"},  % Optional: path to cosign private key
     {compression, auto}        % gzip, zstd, or auto (default: auto)
@@ -269,7 +272,10 @@ def project do
       base_image: "debian:stable-slim",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080],
-      description: "My application",
+      annotations: %{          # Custom manifest annotations
+        "org.opencontainers.image.description" => "My application",
+        "com.example.team" => "platform"
+      },
       vcs_annotations: true,   # Automatic VCS annotations (default: true)
       sign_key: "cosign.key",  # Optional: path to cosign private key
       compression: :auto       # :gzip, :zstd, or :auto (default: :auto)

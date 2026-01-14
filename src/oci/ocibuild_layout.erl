@@ -441,7 +441,8 @@ validate_entry_type(_Path, directory) -> ok;
 validate_entry_type(Path, Type) ->
     {error, {unsupported_entry_type, list_to_binary(Path), Type}}.
 
-%% Validate a single tar path for traversal attempts
+%% Validate a single tar path for traversal attempts.
+%% Uses ocibuild_validate for the core security checks.
 -spec validate_tar_path(string() | binary()) -> ok | {error, term()}.
 validate_tar_path(Path) when is_list(Path) ->
     validate_tar_path(list_to_binary(Path));
@@ -453,20 +454,16 @@ validate_tar_path(Path) ->
     end.
 
 check_no_null_bytes(Path) ->
-    case binary:match(Path, <<0>>) of
-        {_, _} -> {error, {null_byte_in_path, Path}};
-        nomatch -> ok
+    case ocibuild_validate:no_null_bytes(Path) of
+        ok -> ok;
+        {error, {null_byte, _}} -> {error, {null_byte_in_path, Path}}
     end.
 
-check_not_absolute(<<$/, _/binary>> = Path) -> {error, {absolute_path, Path}};
-check_not_absolute(_) -> ok.
+check_not_absolute(Path) ->
+    ocibuild_validate:no_absolute(Path).
 
 check_no_traversal(Path) ->
-    Components = binary:split(Path, [~"/"], [global]),
-    case lists:member(~"..", Components) of
-        true -> {error, {path_traversal, Path}};
-        false -> ok
-    end.
+    ocibuild_validate:no_traversal(Path).
 
 %% Validate digest format before using it to construct file paths.
 %% Prevents path traversal attacks via malicious digests like "sha256:../../etc/passwd".

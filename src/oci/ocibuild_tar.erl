@@ -174,18 +174,19 @@ parent_dirs(Path, Acc) ->
 %% - No ".." traversal sequences
 %% - No null bytes (could truncate paths in C-based tools)
 %% - No empty paths
+%%
+%% Uses ocibuild_validate for the core security checks.
 -spec validate_path(binary()) -> ok | {error, path_traversal | null_byte | empty_path}.
 validate_path(<<>>) ->
     {error, empty_path};
 validate_path(Path) ->
-    case binary:match(Path, <<0>>) of
-        nomatch ->
-            Components = binary:split(Path, ~"/", [global]),
-            case lists:member(~"..", Components) of
-                true -> {error, path_traversal};
-                false -> ok
+    case ocibuild_validate:no_null_bytes(Path) of
+        ok ->
+            case ocibuild_validate:no_traversal(Path) of
+                ok -> ok;
+                {error, {path_traversal, _}} -> {error, path_traversal}
             end;
-        _ ->
+        {error, {null_byte, _}} ->
             {error, null_byte}
     end.
 
