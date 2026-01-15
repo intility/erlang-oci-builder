@@ -354,57 +354,50 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  # Get annotations from CLI flags and config
-  # CLI annotations override config annotations
-  defp get_annotations(opts, ocibuild_config) do
+  @doc """
+  Get annotations from CLI flags and config.
+
+  CLI annotations override config annotations. Returns a map with binary keys and values.
+  """
+  def get_annotations(opts, ocibuild_config) do
     # Get config annotations first (lower priority)
     config_annotations =
       :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :annotations, %{}))
 
     # Parse CLI annotations (higher priority)
-    cli_annotations = parse_cli_annotations(Keyword.get_values(opts, :annotation))
+    cli_annotations = parse_cli_kv_list(Keyword.get_values(opts, :annotation), "annotation")
 
     # Merge: CLI overrides config
     Map.merge(config_annotations, cli_annotations)
   end
 
-  # Parse list of CLI annotation strings (KEY=VALUE) to a map
-  defp parse_cli_annotations(strings) do
-    Enum.reduce(strings, %{}, fn str, acc ->
-      case :ocibuild_release.parse_kv_arg(to_charlist(str)) do
-        {:ok, {key, value}} ->
-          Map.put(acc, key, value)
+  @doc """
+  Get labels from CLI flags and config.
 
-        {:error, reason} ->
-          IO.warn("Invalid annotation '#{str}': #{inspect(reason)}")
-          acc
-      end
-    end)
-  end
-
-  # Get labels from CLI flags and config
-  # CLI labels override config labels
-  defp get_labels(opts, ocibuild_config) do
+  CLI labels override config labels. Returns a map with binary keys and values.
+  """
+  def get_labels(opts, ocibuild_config) do
     # Get config labels first (lower priority)
     config_labels =
       :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :labels, %{}))
 
     # Parse CLI labels (higher priority)
-    cli_labels = parse_cli_labels(Keyword.get_values(opts, :label))
+    cli_labels = parse_cli_kv_list(Keyword.get_values(opts, :label), "label")
 
     # Merge: CLI overrides config
     Map.merge(config_labels, cli_labels)
   end
 
-  # Parse list of CLI label strings (KEY=VALUE) to a map
-  defp parse_cli_labels(strings) do
+  # Parse list of CLI KEY=VALUE strings to a map
+  # type_name is used for warning messages (e.g., "annotation", "label")
+  defp parse_cli_kv_list(strings, type_name) do
     Enum.reduce(strings, %{}, fn str, acc ->
       case :ocibuild_release.parse_kv_arg(to_charlist(str)) do
         {:ok, {key, value}} ->
           Map.put(acc, key, value)
 
         {:error, reason} ->
-          IO.warn("Invalid label '#{str}': #{inspect(reason)}")
+          IO.warn("Invalid #{type_name} '#{str}': #{inspect(reason)}")
           acc
       end
     end)

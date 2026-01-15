@@ -103,6 +103,7 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -ifdef(TEST).
 -export([find_relx_release/1, get_base_image/2, parse_rebar_lock/1]).
 -export([get_tags/2, normalize_tags/1, normalize_tag/1]).
+-export([get_labels/2, get_annotations/2]).
 -endif.
 
 -define(PROVIDER, ocibuild).
@@ -341,26 +342,9 @@ get_annotations(Args, Config) ->
     ),
     %% Parse CLI annotations (higher priority)
     CliAnnotationStrings = proplists:get_all_values(annotation, Args),
-    CliAnnotations = parse_cli_annotations(CliAnnotationStrings),
+    CliAnnotations = parse_cli_kv_list(CliAnnotationStrings, "annotation"),
     %% Merge: CLI overrides config
     maps:merge(ConfigAnnotations, CliAnnotations).
-
-%% @private Parse list of CLI annotation strings to a map
--spec parse_cli_annotations([string()]) -> #{binary() => binary()}.
-parse_cli_annotations(Strings) ->
-    lists:foldl(
-        fun(Str, Acc) ->
-            case ocibuild_release:parse_kv_arg(Str) of
-                {ok, {Key, Value}} ->
-                    Acc#{Key => Value};
-                {error, Reason} ->
-                    io:format("Warning: Invalid annotation '~s': ~p~n", [Str, Reason]),
-                    Acc
-            end
-        end,
-        #{},
-        Strings
-    ).
 
 %% @private Get labels from args and config
 %% CLI labels override config labels
@@ -372,20 +356,21 @@ get_labels(Args, Config) ->
     ),
     %% Parse CLI labels (higher priority)
     CliLabelStrings = proplists:get_all_values(label, Args),
-    CliLabels = parse_cli_labels(CliLabelStrings),
+    CliLabels = parse_cli_kv_list(CliLabelStrings, "label"),
     %% Merge: CLI overrides config
     maps:merge(ConfigLabels, CliLabels).
 
-%% @private Parse list of CLI label strings to a map
--spec parse_cli_labels([string()]) -> #{binary() => binary()}.
-parse_cli_labels(Strings) ->
+%% @private Parse list of CLI KEY=VALUE strings to a map
+%% TypeName is used for warning messages (e.g., "annotation", "label")
+-spec parse_cli_kv_list([string()], string()) -> #{binary() => binary()}.
+parse_cli_kv_list(Strings, TypeName) ->
     lists:foldl(
         fun(Str, Acc) ->
             case ocibuild_release:parse_kv_arg(Str) of
                 {ok, {Key, Value}} ->
                     Acc#{Key => Value};
                 {error, Reason} ->
-                    io:format("Warning: Invalid label '~s': ~p~n", [Str, Reason]),
+                    io:format("Warning: Invalid ~s '~s': ~p~n", [TypeName, Str, Reason]),
                     Acc
             end
         end,
