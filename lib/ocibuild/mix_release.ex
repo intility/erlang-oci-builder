@@ -38,6 +38,10 @@ defmodule Ocibuild.MixRelease do
 
   ## Configuration Options
 
+  Note: This module runs as a release step during `mix release`, so all options
+  must be configured in `mix.exs`. For CLI-based overrides (e.g., `--label`,
+  `--annotation`), use `mix ocibuild` instead.
+
     * `:base_image` - Base image (default: "debian:stable-slim")
     * `:tag` - Image tag or list of tags (default: release_name:release_version)
     * `:push` - Registry to push to (e.g., "ghcr.io/myorg"). Omit to skip push.
