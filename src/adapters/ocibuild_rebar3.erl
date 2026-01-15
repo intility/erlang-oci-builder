@@ -134,6 +134,8 @@ init(State) ->
                 {release, undefined, "release", string, "Release name (if multiple)"},
                 {annotation, $a, "annotation", string,
                     "Add manifest annotation KEY=VALUE (repeatable)"},
+                {label, $l, "label", string,
+                    "Add image label KEY=VALUE (repeatable)"},
                 {chunk_size, undefined, "chunk-size", integer,
                     "Chunk size in MB for uploads (default: 5)"},
                 {platform, $P, "platform", string,
@@ -285,7 +287,7 @@ get_config(State) ->
         workdir => proplists:get_value(workdir, Config, ?DEFAULT_WORKDIR),
         env => proplists:get_value(env, Config, #{}),
         expose => proplists:get_value(expose, Config, []),
-        labels => proplists:get_value(labels, Config, #{}),
+        labels => get_labels(Args, Config),
         cmd => ~"foreground",
         annotations => get_annotations(Args, Config),
         tags => get_tags(Args, Config),
@@ -331,10 +333,10 @@ get_project_app_name(State) ->
 
 %% @private Get annotations from args and config
 %% CLI annotations override config annotations
-%% Uses ocibuild_release:parse_cli_annotation/1 and normalize_annotations/1 for shared logic
+%% Uses ocibuild_release:parse_kv_arg/1 and normalize_kv_map/1 for shared logic
 get_annotations(Args, Config) ->
     %% Get config annotations first (lower priority)
-    ConfigAnnotations = ocibuild_release:normalize_annotations(
+    ConfigAnnotations = ocibuild_release:normalize_kv_map(
         proplists:get_value(annotations, Config, #{})
     ),
     %% Parse CLI annotations (higher priority)
@@ -348,11 +350,42 @@ get_annotations(Args, Config) ->
 parse_cli_annotations(Strings) ->
     lists:foldl(
         fun(Str, Acc) ->
-            case ocibuild_release:parse_cli_annotation(Str) of
+            case ocibuild_release:parse_kv_arg(Str) of
                 {ok, {Key, Value}} ->
                     Acc#{Key => Value};
                 {error, Reason} ->
                     io:format("Warning: Invalid annotation '~s': ~p~n", [Str, Reason]),
+                    Acc
+            end
+        end,
+        #{},
+        Strings
+    ).
+
+%% @private Get labels from args and config
+%% CLI labels override config labels
+%% Uses ocibuild_release:parse_kv_arg/1 for shared KEY=VALUE parsing
+get_labels(Args, Config) ->
+    %% Get config labels first (lower priority)
+    ConfigLabels = ocibuild_release:normalize_kv_map(
+        proplists:get_value(labels, Config, #{})
+    ),
+    %% Parse CLI labels (higher priority)
+    CliLabelStrings = proplists:get_all_values(label, Args),
+    CliLabels = parse_cli_labels(CliLabelStrings),
+    %% Merge: CLI overrides config
+    maps:merge(ConfigLabels, CliLabels).
+
+%% @private Parse list of CLI label strings to a map
+-spec parse_cli_labels([string()]) -> #{binary() => binary()}.
+parse_cli_labels(Strings) ->
+    lists:foldl(
+        fun(Str, Acc) ->
+            case ocibuild_release:parse_kv_arg(Str) of
+                {ok, {Key, Value}} ->
+                    Acc#{Key => Value};
+                {error, Reason} ->
+                    io:format("Warning: Invalid label '~s': ~p~n", [Str, Reason]),
                     Acc
             end
         end,

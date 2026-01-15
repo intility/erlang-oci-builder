@@ -22,6 +22,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
     * `-c, --cmd` - Release start command (default: "start"). Use "daemon" for background
     * `-a, --annotation` - Add manifest annotation KEY=VALUE (repeatable)
+    * `-l, --label` - Add image label KEY=VALUE (repeatable)
     * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
     * `-P, --platform` - Target platforms (e.g., linux/amd64 or linux/amd64,linux/arm64)
     * `--base` - Override base image
@@ -77,7 +78,7 @@ defmodule Mix.Tasks.Ocibuild do
   def run(args) do
     {opts, remaining, _invalid} =
       OptionParser.parse(args,
-        aliases: [t: :tag, p: :push, o: :output, c: :cmd, a: :annotation, P: :platform],
+        aliases: [t: :tag, p: :push, o: :output, c: :cmd, a: :annotation, l: :label, P: :platform],
         switches: [
           tag: [:string, :keep],
           output: :string,
@@ -86,6 +87,7 @@ defmodule Mix.Tasks.Ocibuild do
           release: :string,
           cmd: :string,
           annotation: [:string, :keep],
+          label: [:string, :keep],
           chunk_size: :integer,
           platform: :string,
           uid: :integer,
@@ -231,7 +233,7 @@ defmodule Mix.Tasks.Ocibuild do
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),
-      labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
+      labels: get_labels(opts, ocibuild_config),
       cmd: get_opt(opts, :cmd, ocibuild_config, :cmd, "start") |> to_binary(),
       annotations: get_annotations(opts, ocibuild_config),
       tags: get_tags(opts, ocibuild_config, release_name, config[:version]),
@@ -357,9 +359,7 @@ defmodule Mix.Tasks.Ocibuild do
   defp get_annotations(opts, ocibuild_config) do
     # Get config annotations first (lower priority)
     config_annotations =
-      :ocibuild_release.normalize_annotations(
-        Keyword.get(ocibuild_config, :annotations, %{})
-      )
+      :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :annotations, %{}))
 
     # Parse CLI annotations (higher priority)
     cli_annotations = parse_cli_annotations(Keyword.get_values(opts, :annotation))
@@ -371,12 +371,40 @@ defmodule Mix.Tasks.Ocibuild do
   # Parse list of CLI annotation strings (KEY=VALUE) to a map
   defp parse_cli_annotations(strings) do
     Enum.reduce(strings, %{}, fn str, acc ->
-      case :ocibuild_release.parse_cli_annotation(to_charlist(str)) do
+      case :ocibuild_release.parse_kv_arg(to_charlist(str)) do
         {:ok, {key, value}} ->
           Map.put(acc, key, value)
 
         {:error, reason} ->
           IO.warn("Invalid annotation '#{str}': #{inspect(reason)}")
+          acc
+      end
+    end)
+  end
+
+  # Get labels from CLI flags and config
+  # CLI labels override config labels
+  defp get_labels(opts, ocibuild_config) do
+    # Get config labels first (lower priority)
+    config_labels =
+      :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :labels, %{}))
+
+    # Parse CLI labels (higher priority)
+    cli_labels = parse_cli_labels(Keyword.get_values(opts, :label))
+
+    # Merge: CLI overrides config
+    Map.merge(config_labels, cli_labels)
+  end
+
+  # Parse list of CLI label strings (KEY=VALUE) to a map
+  defp parse_cli_labels(strings) do
+    Enum.reduce(strings, %{}, fn str, acc ->
+      case :ocibuild_release.parse_kv_arg(to_charlist(str)) do
+        {:ok, {key, value}} ->
+          Map.put(acc, key, value)
+
+        {:error, reason} ->
+          IO.warn("Invalid label '#{str}': #{inspect(reason)}")
           acc
       end
     end)

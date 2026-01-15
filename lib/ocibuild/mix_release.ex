@@ -103,7 +103,7 @@ defmodule Ocibuild.MixRelease do
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),
-      labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
+      labels: get_labels(ocibuild_config),
       cmd: Keyword.get(ocibuild_config, :cmd, "start") |> to_binary(),
       annotations: get_annotations(ocibuild_config),
       tags: get_tags(ocibuild_config, release.name, release.version),
@@ -143,9 +143,12 @@ defmodule Ocibuild.MixRelease do
 
   # Get annotations from config, normalized to binary keys/values
   defp get_annotations(ocibuild_config) do
-    :ocibuild_release.normalize_annotations(
-      Keyword.get(ocibuild_config, :annotations, %{})
-    )
+    :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :annotations, %{}))
+  end
+
+  # Get labels from config, normalized to binary keys/values
+  defp get_labels(ocibuild_config) do
+    :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :labels, %{}))
   end
 
   defp get_tags(ocibuild_config, release_name, version) do

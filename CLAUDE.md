@@ -168,6 +168,7 @@ Both `rebar3 ocibuild` and `mix ocibuild` support:
 | `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
 | `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
 | `--annotation` | `-a`  | Add manifest annotation `KEY=VALUE` (repeatable)  |
+| `--label`      | `-l`  | Add image label `KEY=VALUE` (repeatable)          |
 | `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
 | `--base`       |       | Override base image                               |
 | `--release`    |       | Release name (if multiple configured)             |

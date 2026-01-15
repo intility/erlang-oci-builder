@@ -103,10 +103,10 @@ Security features:
     is_nil_or_undefined/1
 ]).
 
-%% Public API - Annotation Utilities (used by adapters)
+%% Public API - Key-Value Utilities (used by adapters for annotations and labels)
 -export([
-    parse_cli_annotation/1,
-    normalize_annotations/1,
+    parse_kv_arg/1,
+    normalize_kv_map/1,
     validate_annotations/1
 ]).
 
@@ -1569,46 +1569,48 @@ expand_semicolon_tags(TagStr) when is_binary(TagStr) ->
      Trimmed =/= <<>>].
 
 %%%===================================================================
-%%% Annotation Utilities
+%%% Key-Value Utilities (Annotations and Labels)
 %%%===================================================================
 
 -doc """
-Parse a CLI annotation string in KEY=VALUE format.
+Parse a CLI argument string in KEY=VALUE format.
 
-Returns `{ok, {Key, Value}}` on success, or `{error, {invalid_annotation_format, Input}}`
+Used for parsing `--annotation` and `--label` CLI arguments.
+Returns `{ok, {Key, Value}}` on success, or `{error, {invalid_kv_format, Input}}`
 if the string doesn't contain an `=` character.
 
 ## Examples
 
 ```
-{ok, {~"key", ~"value"}} = ocibuild_release:parse_cli_annotation("key=value").
-{ok, {~"key", ~"value=with=equals"}} = ocibuild_release:parse_cli_annotation("key=value=with=equals").
-{error, {invalid_annotation_format, "no-equals"}} = ocibuild_release:parse_cli_annotation("no-equals").
+{ok, {~"key", ~"value"}} = ocibuild_release:parse_kv_arg("key=value").
+{ok, {~"key", ~"value=with=equals"}} = ocibuild_release:parse_kv_arg("key=value=with=equals").
+{error, {invalid_kv_format, "no-equals"}} = ocibuild_release:parse_kv_arg("no-equals").
 ```
 """.
--spec parse_cli_annotation(string()) -> {ok, {binary(), binary()}} | {error, term()}.
-parse_cli_annotation(Str) when is_list(Str) ->
+-spec parse_kv_arg(string()) -> {ok, {binary(), binary()}} | {error, term()}.
+parse_kv_arg(Str) when is_list(Str) ->
     case string:split(Str, "=", leading) of
         [Key, Value] -> {ok, {list_to_binary(Key), list_to_binary(Value)}};
-        _ -> {error, {invalid_annotation_format, Str}}
+        _ -> {error, {invalid_kv_format, Str}}
     end.
 
 -doc """
-Normalize an annotations map to have binary keys and values.
+Normalize a key-value map to have binary keys and values.
 
-Handles various input formats from config files (atoms, strings, binaries).
+Used for normalizing annotations and labels from config files.
+Handles various input formats (atoms, strings, binaries).
 Returns an empty map if input is not a map.
 
 ## Examples
 
 ```
-#{~"key" => ~"value"} = ocibuild_release:normalize_annotations(#{"key" => "value"}).
-#{~"key" => ~"value"} = ocibuild_release:normalize_annotations(#{key => value}).
-#{} = ocibuild_release:normalize_annotations(undefined).
+#{~"key" => ~"value"} = ocibuild_release:normalize_kv_map(#{"key" => "value"}).
+#{~"key" => ~"value"} = ocibuild_release:normalize_kv_map(#{key => value}).
+#{} = ocibuild_release:normalize_kv_map(undefined).
 ```
 """.
--spec normalize_annotations(term()) -> #{binary() => binary()}.
-normalize_annotations(Map) when is_map(Map) ->
+-spec normalize_kv_map(term()) -> #{binary() => binary()}.
+normalize_kv_map(Map) when is_map(Map) ->
     maps:fold(
         fun(K, V, Acc) ->
             Acc#{to_binary(K) => to_binary(V)}
@@ -1616,7 +1618,7 @@ normalize_annotations(Map) when is_map(Map) ->
         #{},
         Map
     );
-normalize_annotations(_) ->
+normalize_kv_map(_) ->
     #{}.
 
 -doc """
