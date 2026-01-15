@@ -4,12 +4,6 @@ Shared validation utilities for security checks.
 
 This module provides reusable validation functions for checking user-provided
 inputs for common security issues like null bytes and path traversal attacks.
-
-These functions are used throughout the codebase:
-- `ocibuild_tar` - validates file paths in tar archives
-- `ocibuild_release` - validates image tags
-- `ocibuild_layout` - validates tar extraction paths
-- Annotation validation for user-provided manifest annotations
 """.
 
 -export([
