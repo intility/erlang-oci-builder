@@ -270,4 +270,102 @@ defmodule Mix.Tasks.OcibuildTest do
       assert TestHelpers.get_app_version(version: :"1.0.0") == "1.0.0"
     end
   end
+
+  describe "get_labels/2" do
+    test "single CLI label" do
+      opts = [label: "maintainer=team@example.com"]
+      config = []
+      assert Mix.Tasks.Ocibuild.get_labels(opts, config) == %{"maintainer" => "team@example.com"}
+    end
+
+    test "multiple CLI labels" do
+      opts = [label: "key1=value1", label: "key2=value2"]
+      config = []
+
+      assert Mix.Tasks.Ocibuild.get_labels(opts, config) == %{
+               "key1" => "value1",
+               "key2" => "value2"
+             }
+    end
+
+    test "config labels" do
+      opts = []
+      config = [labels: %{"maintainer" => "team@example.com"}]
+      assert Mix.Tasks.Ocibuild.get_labels(opts, config) == %{"maintainer" => "team@example.com"}
+    end
+
+    test "CLI labels override config labels" do
+      opts = [label: "maintainer=cli@example.com"]
+      config = [labels: %{"maintainer" => "config@example.com"}]
+      assert Mix.Tasks.Ocibuild.get_labels(opts, config) == %{"maintainer" => "cli@example.com"}
+    end
+
+    test "empty when no labels" do
+      assert Mix.Tasks.Ocibuild.get_labels([], []) == %{}
+    end
+
+    test "equals sign in value" do
+      opts = [label: "equation=a=b+c"]
+      assert Mix.Tasks.Ocibuild.get_labels(opts, []) == %{"equation" => "a=b+c"}
+    end
+
+    test "merge CLI and config labels" do
+      opts = [label: "cli_key=cli_val", label: "shared=from_cli"]
+      config = [labels: %{"config_key" => "config_val", "shared" => "from_config"}]
+
+      expected = %{
+        "cli_key" => "cli_val",
+        "config_key" => "config_val",
+        "shared" => "from_cli"
+      }
+
+      assert Mix.Tasks.Ocibuild.get_labels(opts, config) == expected
+    end
+
+    test "config with atom keys" do
+      opts = []
+      config = [labels: %{maintainer: "team@example.com"}]
+      assert Mix.Tasks.Ocibuild.get_labels(opts, config) == %{"maintainer" => "team@example.com"}
+    end
+  end
+
+  describe "get_annotations/2" do
+    test "single CLI annotation" do
+      opts = [annotation: "org.opencontainers.image.description=My App"]
+      config = []
+
+      assert Mix.Tasks.Ocibuild.get_annotations(opts, config) == %{
+               "org.opencontainers.image.description" => "My App"
+             }
+    end
+
+    test "multiple CLI annotations" do
+      opts = [annotation: "key1=value1", annotation: "key2=value2"]
+      config = []
+
+      assert Mix.Tasks.Ocibuild.get_annotations(opts, config) == %{
+               "key1" => "value1",
+               "key2" => "value2"
+             }
+    end
+
+    test "config annotations" do
+      opts = []
+      config = [annotations: %{"com.example.team" => "platform"}]
+
+      assert Mix.Tasks.Ocibuild.get_annotations(opts, config) == %{
+               "com.example.team" => "platform"
+             }
+    end
+
+    test "CLI annotations override config annotations" do
+      opts = [annotation: "key=from_cli"]
+      config = [annotations: %{"key" => "from_config"}]
+      assert Mix.Tasks.Ocibuild.get_annotations(opts, config) == %{"key" => "from_cli"}
+    end
+
+    test "empty when no annotations" do
+      assert Mix.Tasks.Ocibuild.get_annotations([], []) == %{}
+    end
+  end
 end
