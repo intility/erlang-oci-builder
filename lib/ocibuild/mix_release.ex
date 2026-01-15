@@ -38,6 +38,10 @@ defmodule Ocibuild.MixRelease do
 
   ## Configuration Options
 
+  Note: This module runs as a release step during `mix release`, so all options
+  must be configured in `mix.exs`. For CLI-based overrides (e.g., `--label`,
+  `--annotation`), use `mix ocibuild` instead.
+
     * `:base_image` - Base image (default: "debian:stable-slim")
     * `:tag` - Image tag or list of tags (default: release_name:release_version)
     * `:push` - Registry to push to (e.g., "ghcr.io/myorg"). Omit to skip push.
@@ -103,7 +107,7 @@ defmodule Ocibuild.MixRelease do
       workdir: Keyword.get(ocibuild_config, :workdir, "/app") |> to_binary(),
       env: Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map(),
       expose: Keyword.get(ocibuild_config, :expose, []),
-      labels: Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map(),
+      labels: get_labels(ocibuild_config),
       cmd: Keyword.get(ocibuild_config, :cmd, "start") |> to_binary(),
       annotations: get_annotations(ocibuild_config),
       tags: get_tags(ocibuild_config, release.name, release.version),
@@ -143,9 +147,12 @@ defmodule Ocibuild.MixRelease do
 
   # Get annotations from config, normalized to binary keys/values
   defp get_annotations(ocibuild_config) do
-    :ocibuild_release.normalize_annotations(
-      Keyword.get(ocibuild_config, :annotations, %{})
-    )
+    :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :annotations, %{}))
+  end
+
+  # Get labels from config, normalized to binary keys/values
+  defp get_labels(ocibuild_config) do
+    :ocibuild_release.normalize_kv_map(Keyword.get(ocibuild_config, :labels, %{}))
   end
 
   defp get_tags(ocibuild_config, release_name, version) do

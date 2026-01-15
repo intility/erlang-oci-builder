@@ -279,6 +279,108 @@ get_tags_config_semicolon_expansion_test() ->
     ?assertEqual([~"myapp:v1", ~"myapp:latest"], ocibuild_rebar3:get_tags(Args, Config)).
 
 %%%===================================================================
+%%% get_labels/2 tests
+%%%===================================================================
+
+get_labels_from_cli_single_test() ->
+    Args = [{label, "maintainer=team@example.com"}],
+    Config = [],
+    ?assertEqual(
+        #{~"maintainer" => ~"team@example.com"},
+        ocibuild_rebar3:get_labels(Args, Config)
+    ).
+
+get_labels_from_cli_multiple_test() ->
+    Args = [{label, "key1=value1"}, {label, "key2=value2"}],
+    Config = [],
+    ?assertEqual(
+        #{~"key1" => ~"value1", ~"key2" => ~"value2"},
+        ocibuild_rebar3:get_labels(Args, Config)
+    ).
+
+get_labels_from_config_test() ->
+    Args = [],
+    Config = [{labels, #{<<"maintainer">> => <<"team@example.com">>}}],
+    ?assertEqual(
+        #{~"maintainer" => ~"team@example.com"},
+        ocibuild_rebar3:get_labels(Args, Config)
+    ).
+
+get_labels_cli_overrides_config_test() ->
+    Args = [{label, "maintainer=cli@example.com"}],
+    Config = [{labels, #{<<"maintainer">> => <<"config@example.com">>}}],
+    ?assertEqual(
+        #{~"maintainer" => ~"cli@example.com"},
+        ocibuild_rebar3:get_labels(Args, Config)
+    ).
+
+get_labels_empty_test() ->
+    Args = [],
+    Config = [],
+    ?assertEqual(#{}, ocibuild_rebar3:get_labels(Args, Config)).
+
+get_labels_equals_in_value_test() ->
+    %% Value can contain equals signs
+    Args = [{label, "equation=a=b+c"}],
+    Config = [],
+    ?assertEqual(
+        #{~"equation" => ~"a=b+c"},
+        ocibuild_rebar3:get_labels(Args, Config)
+    ).
+
+get_labels_merge_cli_and_config_test() ->
+    %% CLI and config labels are merged, CLI overrides on conflict
+    Args = [{label, "cli_key=cli_val"}, {label, "shared=from_cli"}],
+    Config = [{labels, #{<<"config_key">> => <<"config_val">>, <<"shared">> => <<"from_config">>}}],
+    Expected = #{
+        ~"cli_key" => ~"cli_val",
+        ~"config_key" => ~"config_val",
+        ~"shared" => ~"from_cli"
+    },
+    ?assertEqual(Expected, ocibuild_rebar3:get_labels(Args, Config)).
+
+%%%===================================================================
+%%% get_annotations/2 tests
+%%%===================================================================
+
+get_annotations_from_cli_single_test() ->
+    Args = [{annotation, "org.opencontainers.image.description=My App"}],
+    Config = [],
+    ?assertEqual(
+        #{~"org.opencontainers.image.description" => ~"My App"},
+        ocibuild_rebar3:get_annotations(Args, Config)
+    ).
+
+get_annotations_from_cli_multiple_test() ->
+    Args = [{annotation, "key1=value1"}, {annotation, "key2=value2"}],
+    Config = [],
+    ?assertEqual(
+        #{~"key1" => ~"value1", ~"key2" => ~"value2"},
+        ocibuild_rebar3:get_annotations(Args, Config)
+    ).
+
+get_annotations_from_config_test() ->
+    Args = [],
+    Config = [{annotations, #{<<"com.example.team">> => <<"platform">>}}],
+    ?assertEqual(
+        #{~"com.example.team" => ~"platform"},
+        ocibuild_rebar3:get_annotations(Args, Config)
+    ).
+
+get_annotations_cli_overrides_config_test() ->
+    Args = [{annotation, "key=from_cli"}],
+    Config = [{annotations, #{<<"key">> => <<"from_config">>}}],
+    ?assertEqual(
+        #{~"key" => ~"from_cli"},
+        ocibuild_rebar3:get_annotations(Args, Config)
+    ).
+
+get_annotations_empty_test() ->
+    Args = [],
+    Config = [],
+    ?assertEqual(#{}, ocibuild_rebar3:get_annotations(Args, Config)).
+
+%%%===================================================================
 %%% Helper functions
 %%%===================================================================
 

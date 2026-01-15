@@ -1937,72 +1937,72 @@ resolve_tags_list_error_propagates_test() ->
     ).
 
 %%%===================================================================
-%%% Annotation parsing tests (parse_cli_annotation/1)
+%%% Key-value argument parsing tests (parse_kv_arg/1)
 %%%===================================================================
 
-parse_cli_annotation_valid_test() ->
+parse_kv_arg_valid_test() ->
     ?assertEqual(
         {ok, {~"com.example.team", ~"platform"}},
-        ocibuild_release:parse_cli_annotation("com.example.team=platform")
+        ocibuild_release:parse_kv_arg("com.example.team=platform")
     ).
 
-parse_cli_annotation_with_equals_in_value_test() ->
+parse_kv_arg_with_equals_in_value_test() ->
     %% Equals sign in value should be preserved
     ?assertEqual(
         {ok, {~"com.example.config", ~"key=value"}},
-        ocibuild_release:parse_cli_annotation("com.example.config=key=value")
+        ocibuild_release:parse_kv_arg("com.example.config=key=value")
     ).
 
-parse_cli_annotation_empty_value_test() ->
+parse_kv_arg_empty_value_test() ->
     %% Empty value is valid
     ?assertEqual(
         {ok, {~"com.example.key", <<>>}},
-        ocibuild_release:parse_cli_annotation("com.example.key=")
+        ocibuild_release:parse_kv_arg("com.example.key=")
     ).
 
-parse_cli_annotation_invalid_no_equals_test() ->
+parse_kv_arg_invalid_no_equals_test() ->
     ?assertEqual(
-        {error, {invalid_annotation_format, "no-equals-sign"}},
-        ocibuild_release:parse_cli_annotation("no-equals-sign")
+        {error, {invalid_kv_format, "no-equals-sign"}},
+        ocibuild_release:parse_kv_arg("no-equals-sign")
     ).
 
-parse_cli_annotation_invalid_empty_test() ->
+parse_kv_arg_invalid_empty_test() ->
     ?assertEqual(
-        {error, {invalid_annotation_format, ""}},
-        ocibuild_release:parse_cli_annotation("")
+        {error, {invalid_kv_format, ""}},
+        ocibuild_release:parse_kv_arg("")
     ).
 
-parse_cli_annotation_url_value_test() ->
+parse_kv_arg_url_value_test() ->
     %% URL values should be preserved
     ?assertEqual(
         {ok, {~"org.opencontainers.image.url", ~"https://example.com/path"}},
-        ocibuild_release:parse_cli_annotation("org.opencontainers.image.url=https://example.com/path")
+        ocibuild_release:parse_kv_arg("org.opencontainers.image.url=https://example.com/path")
     ).
 
 %%%===================================================================
-%%% Annotation normalization tests (normalize_annotations/1)
+%%% Key-value map normalization tests (normalize_kv_map/1)
 %%%===================================================================
 
-normalize_annotations_binary_keys_test() ->
+normalize_kv_map_binary_keys_test() ->
     ?assertEqual(
         #{~"key" => ~"value"},
-        ocibuild_release:normalize_annotations(#{~"key" => ~"value"})
+        ocibuild_release:normalize_kv_map(#{~"key" => ~"value"})
     ).
 
-normalize_annotations_string_keys_test() ->
+normalize_kv_map_string_keys_test() ->
     ?assertEqual(
         #{~"key" => ~"value"},
-        ocibuild_release:normalize_annotations(#{"key" => "value"})
+        ocibuild_release:normalize_kv_map(#{"key" => "value"})
     ).
 
-normalize_annotations_atom_keys_test() ->
+normalize_kv_map_atom_keys_test() ->
     ?assertEqual(
         #{~"key" => ~"value"},
-        ocibuild_release:normalize_annotations(#{key => value})
+        ocibuild_release:normalize_kv_map(#{key => value})
     ).
 
-normalize_annotations_mixed_test() ->
-    Result = ocibuild_release:normalize_annotations(#{
+normalize_kv_map_mixed_test() ->
+    Result = ocibuild_release:normalize_kv_map(#{
         "string_key" => "string_value",
         atom_key => atom_value,
         ~"binary_key" => ~"binary_value"
@@ -2011,17 +2011,17 @@ normalize_annotations_mixed_test() ->
     ?assertEqual(~"atom_value", maps:get(~"atom_key", Result)),
     ?assertEqual(~"binary_value", maps:get(~"binary_key", Result)).
 
-normalize_annotations_empty_map_test() ->
-    ?assertEqual(#{}, ocibuild_release:normalize_annotations(#{})).
+normalize_kv_map_empty_map_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_kv_map(#{})).
 
-normalize_annotations_not_a_map_test() ->
-    ?assertEqual(#{}, ocibuild_release:normalize_annotations(not_a_map)).
+normalize_kv_map_not_a_map_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_kv_map(not_a_map)).
 
-normalize_annotations_undefined_test() ->
-    ?assertEqual(#{}, ocibuild_release:normalize_annotations(undefined)).
+normalize_kv_map_undefined_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_kv_map(undefined)).
 
-normalize_annotations_nil_test() ->
-    ?assertEqual(#{}, ocibuild_release:normalize_annotations(nil)).
+normalize_kv_map_nil_test() ->
+    ?assertEqual(#{}, ocibuild_release:normalize_kv_map(nil)).
 
 %%%===================================================================
 %%% Annotation validation tests (validate_annotations/1)
