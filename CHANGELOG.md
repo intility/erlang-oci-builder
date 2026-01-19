@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.1 - 2026-01-19
+
+### Bug Fixes
+
+- **Fixed token exchange requesting excessive scope** ([#41](https://github.com/intility/erlang-oci-builder/issues/41)): When pulling base images from private registries, token exchange now requests only `pull` scope instead of `pull,push`. This fixes authentication failures when the caller has read access to the base image but not write access.
+  - Pull operations (`pull_manifest`, `pull_blob`, `check_blob_exists`) now request `pull` scope only
+  - Push operations continue to request `pull,push` scope as before
+  - New `operation_scope()` type (`pull | push`) threads through the auth chain
+
+- **Fixed multiple Accept headers not being sent correctly**: Combined multiple `Accept` header values into a single comma-separated header, fixing manifest fetching from registries like GHCR that require proper Accept header handling for OCI index manifests.
+
+### Improvements
+
+- **Unified registry authentication**: Removed special-case Docker Hub authentication code. All registries (including Docker Hub) now use the same standard OCI distribution authentication flow via WWW-Authenticate challenge discovery. This reduces code complexity while maintaining full compatibility.
+
 ## 0.10.0 - 2026-01-15
 
 ### Breaking Changes
