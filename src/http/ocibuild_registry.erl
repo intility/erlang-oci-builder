@@ -158,14 +158,14 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
                     "~s/v2/~s/manifests/~s",
                     [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Ref)]
                 ),
+            %% Combine Accept types into single header (httpc may not handle multiple Accept headers correctly)
+            AcceptTypes = "application/vnd.oci.image.index.v1+json, "
+                          "application/vnd.docker.distribution.manifest.list.v2+json, "
+                          "application/vnd.oci.image.manifest.v1+json, "
+                          "application/vnd.docker.distribution.manifest.v2+json",
             Headers =
                 auth_headers(Token) ++
-                    [
-                        {"Accept", "application/vnd.oci.image.index.v1+json"},
-                        {"Accept", "application/vnd.docker.distribution.manifest.list.v2+json"},
-                        {"Accept", "application/vnd.oci.image.manifest.v1+json"},
-                        {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}
-                    ],
+                    [{"Accept", AcceptTypes}],
 
             %% Report manifest phase
             maybe_report_progress(ProgressFn, #{
