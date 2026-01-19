@@ -75,7 +75,12 @@ See: https://github.com/opencontainers/distribution-spec
     total_layers => non_neg_integer()
 }.
 
--export_type([progress_callback/0, progress_info/0, pull_opts/0, push_opts/0, upload_session/0]).
+%% Operation scope for token exchange
+%% - pull: Only read access needed (for pulling base images)
+%% - push: Read/write access needed (for pushing images)
+-type operation_scope() :: pull | push.
+
+-export_type([progress_callback/0, progress_info/0, pull_opts/0, push_opts/0, upload_session/0, operation_scope/0]).
 
 -define(DEFAULT_TIMEOUT, 30000).
 %% Default httpc profile for fallback mode (non-worker context)
@@ -144,8 +149,8 @@ pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
     NormalizedRepo = normalize_repo(Registry, Repo),
     ProgressFn = maps:get(progress, Opts, undefined),
 
-    %% Get auth token if needed
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Get auth token if needed - pull only needs read access
+    case get_auth_token(Registry, NormalizedRepo, Auth, pull) of
         {ok, Token} ->
             %% Fetch manifest (accept both single manifests and manifest lists)
             ManifestUrl =
@@ -310,7 +315,8 @@ pull_blob_internal(
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Pull blob only needs read access
+    case get_auth_token(Registry, NormalizedRepo, Auth, pull) of
         {ok, Token} ->
             Url = io_lib:format(
                 "~s/v2/~s/blobs/~s",
@@ -350,7 +356,8 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Check blob exists only needs read access
+    case get_auth_token(Registry, NormalizedRepo, Auth, pull) of
         {ok, Token} ->
             Url = io_lib:format(
                 "~s/v2/~s/blobs/~s",
@@ -380,7 +387,8 @@ push(Image, Registry, Repo, Tag, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Push requires read+write access
+    case get_auth_token(Registry, NormalizedRepo, Auth, push) of
         {ok, Token} ->
             %% Push layers
             case push_layers(Image, BaseUrl, NormalizedRepo, Token, Opts) of
@@ -423,7 +431,8 @@ push_multi(Images, Registry, Repo, Tag, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Push requires read+write access
+    case get_auth_token(Registry, NormalizedRepo, Auth, push) of
         {ok, Token} ->
             %% Push each platform image and collect manifest info
             case push_platform_images(Images, BaseUrl, NormalizedRepo, Token, Opts, []) of
@@ -702,7 +711,8 @@ push_blobs(Registry, Repo, Tag, Blobs, Auth, Opts) ->
     ManifestData = maps:get(manifest, Blobs),
 
     maybe
-        {ok, Token} ?= get_auth_token(Registry, NormalizedRepo, Auth),
+        %% Push requires read+write access
+        {ok, Token} ?= get_auth_token(Registry, NormalizedRepo, Auth, push),
         ok ?= push_blob_list(maps:get(layers, Blobs), BaseUrl, NormalizedRepo, Token, Opts),
         ok ?= push_blob(BaseUrl, NormalizedRepo, ConfigDigest, ConfigData, Token),
         push_manifest_raw(ManifestData, BaseUrl, NormalizedRepo, Tag, Token)
@@ -728,7 +738,8 @@ push_blobs_multi(Registry, Repo, Tag, BlobsList, Auth, Opts) ->
     NormalizedRepo = normalize_repo(Registry, Repo),
 
     maybe
-        {ok, Token} ?= get_auth_token(Registry, NormalizedRepo, Auth),
+        %% Push requires read+write access
+        {ok, Token} ?= get_auth_token(Registry, NormalizedRepo, Auth, push),
         {ok, ManifestDescriptors} ?= push_blobs_platforms(BlobsList, BaseUrl, NormalizedRepo, Token, Opts),
         push_image_index(BaseUrl, NormalizedRepo, Tag, Token, ManifestDescriptors)
     end.
@@ -917,7 +928,8 @@ push_referrer(ArtifactData, _ArtifactType, Registry, Repo, SubjectDigest, Subjec
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Push requires read+write access
+    case get_auth_token(Registry, NormalizedRepo, Auth, push) of
         {ok, Token} ->
             %% Push the artifact blob
             ArtifactDigest = ocibuild_digest:sha256(ArtifactData),
@@ -1051,7 +1063,8 @@ push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSiz
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
-    case get_auth_token(Registry, NormalizedRepo, Auth) of
+    %% Push requires read+write access
+    case get_auth_token(Registry, NormalizedRepo, Auth, push) of
         {ok, Token} ->
             %% Push the payload blob (simplesigning JSON)
             PayloadDigest = ocibuild_digest:sha256(PayloadJson),
@@ -1314,21 +1327,24 @@ normalize_arch(Arch) ->
         _ -> ~"amd64"
     end.
 
-%% Get authentication token
--spec get_auth_token(binary(), binary(), map()) ->
+%% Get authentication token with explicit scope
+%% OpScope determines whether to request pull-only or pull+push access:
+%% - pull: Only read access needed (for pulling base images)
+%% - push: Read+write access needed (for pushing images)
+-spec get_auth_token(binary(), binary(), map(), operation_scope()) ->
     {ok, binary() | {basic, binary()} | none} | {error, term()}.
 %% Direct token takes priority for all registries
-get_auth_token(_Registry, _Repo, #{token := Token}) ->
+get_auth_token(_Registry, _Repo, #{token := Token}, _OpScope) ->
     {ok, Token};
 %% Docker Hub with username/password requires token exchange via known auth server
-get_auth_token(~"docker.io", Repo, #{username := _, password := _} = Auth) ->
-    docker_hub_auth(Repo, Auth);
+get_auth_token(~"docker.io", Repo, #{username := _, password := _} = Auth, OpScope) ->
+    docker_hub_auth(Repo, Auth, OpScope);
 %% All other registries: discover auth via WWW-Authenticate challenge
-get_auth_token(Registry, Repo, #{username := _, password := _} = Auth) ->
-    discover_auth(Registry, Repo, Auth);
+get_auth_token(Registry, Repo, #{username := _, password := _} = Auth, OpScope) ->
+    discover_auth(Registry, Repo, Auth, OpScope);
 %% No auth provided - try anonymous access
-get_auth_token(Registry, Repo, #{}) ->
-    discover_auth(Registry, Repo, #{}).
+get_auth_token(Registry, Repo, #{}, OpScope) ->
+    discover_auth(Registry, Repo, #{}, OpScope).
 
 %% Normalize Docker Hub repository name
 %% Single-component names like "alpine" need "library/" prefix
@@ -1344,12 +1360,13 @@ normalize_docker_hub_repo(Repo) ->
     end.
 
 %% Docker Hub specific authentication
--spec docker_hub_auth(binary(), map()) -> {ok, binary()} | {error, term()}.
-docker_hub_auth(Repo, Auth) ->
+%% OpScope determines whether to request pull-only or pull+push access
+-spec docker_hub_auth(binary(), map(), operation_scope()) -> {ok, binary()} | {error, term()}.
+docker_hub_auth(Repo, Auth, OpScope) ->
     %% Docker Hub requires getting a token from auth.docker.io
     %% Normalize repo name (add library/ prefix for official images)
     NormalizedRepo = normalize_docker_hub_repo(Repo),
-    Scope = "repository:" ++ binary_to_list(NormalizedRepo) ++ ":pull,push",
+    Scope = make_scope_string(NormalizedRepo, OpScope),
     Url =
         "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
             encode_scope(Scope),
@@ -1384,9 +1401,18 @@ docker_hub_auth(Repo, Auth) ->
 %% Note: Some registries (like GHCR) allow anonymous pull (returning 200 for /v2/)
 %% but require authentication for push. When credentials are provided, we always
 %% try to get a token using well-known endpoints for such registries.
+%%
+%% Wrapper for backward compatibility - defaults to push scope for existing callers
 -spec discover_auth(binary(), binary(), map()) ->
     {ok, binary() | {basic, binary()} | none} | {error, term()}.
 discover_auth(Registry, Repo, Auth) ->
+    discover_auth(Registry, Repo, Auth, push).
+
+%% Discover authentication with explicit scope parameter
+%% OpScope determines whether to request pull-only or pull+push access
+-spec discover_auth(binary(), binary(), map(), operation_scope()) ->
+    {ok, binary() | {basic, binary()} | none} | {error, term()}.
+discover_auth(Registry, Repo, Auth, OpScope) ->
     BaseUrl = registry_url(Registry),
     V2Url = BaseUrl ++ "/v2/",
 
@@ -1405,10 +1431,10 @@ discover_auth(Registry, Repo, Auth) ->
                     %% Otherwise use well-known token endpoint
                     case get_www_authenticate(RespHeaders) of
                         {ok, WwwAuth} ->
-                            handle_www_authenticate(WwwAuth, Repo, Auth);
+                            handle_www_authenticate(WwwAuth, Repo, Auth, OpScope);
                         error ->
                             %% Use well-known token endpoint for registry
-                            use_wellknown_token_endpoint(Registry, Repo, Auth)
+                            use_wellknown_token_endpoint(Registry, Repo, Auth, OpScope)
                     end;
                 _ ->
                     {ok, none}
@@ -1417,7 +1443,7 @@ discover_auth(Registry, Repo, Auth) ->
             %% Auth required - parse WWW-Authenticate challenge
             case get_www_authenticate(RespHeaders) of
                 {ok, WwwAuth} ->
-                    handle_www_authenticate(WwwAuth, Repo, Auth);
+                    handle_www_authenticate(WwwAuth, Repo, Auth, OpScope);
                 error ->
                     {error, no_www_authenticate_header}
             end;
@@ -1428,12 +1454,13 @@ discover_auth(Registry, Repo, Auth) ->
     end.
 
 %% Handle WWW-Authenticate header (Bearer or Basic)
--spec handle_www_authenticate(string(), binary(), map()) ->
+%% OpScope determines whether to request pull-only or pull+push access
+-spec handle_www_authenticate(string(), binary(), map(), operation_scope()) ->
     {ok, binary() | {basic, binary()} | none} | {error, term()}.
-handle_www_authenticate(WwwAuth, Repo, Auth) ->
+handle_www_authenticate(WwwAuth, Repo, Auth, OpScope) ->
     case parse_www_authenticate(WwwAuth) of
         {bearer, Challenge} ->
-            exchange_token(Challenge, Repo, Auth);
+            exchange_token(Challenge, Repo, Auth, OpScope);
         basic ->
             case Auth of
                 #{username := User, password := Pass} ->
@@ -1447,17 +1474,18 @@ handle_www_authenticate(WwwAuth, Repo, Auth) ->
     end.
 
 %% Well-known token endpoints for registries that allow anonymous /v2/ access
--spec use_wellknown_token_endpoint(binary(), binary(), map()) ->
+%% OpScope determines whether to request pull-only or pull+push access
+-spec use_wellknown_token_endpoint(binary(), binary(), map(), operation_scope()) ->
     {ok, binary() | {basic, binary()}} | {error, term()}.
-use_wellknown_token_endpoint(~"ghcr.io", Repo, Auth) ->
+use_wellknown_token_endpoint(~"ghcr.io", Repo, Auth, OpScope) ->
     %% GHCR token endpoint - use standard OAuth2 token exchange
     Challenge = #{~"realm" => "https://ghcr.io/token", ~"service" => "ghcr.io"},
-    exchange_token(Challenge, Repo, Auth);
-use_wellknown_token_endpoint(~"quay.io", Repo, Auth) ->
+    exchange_token(Challenge, Repo, Auth, OpScope);
+use_wellknown_token_endpoint(~"quay.io", Repo, Auth, OpScope) ->
     %% Quay.io token endpoint
     Challenge = #{~"realm" => "https://quay.io/v2/auth", ~"service" => "quay.io"},
-    exchange_token(Challenge, Repo, Auth);
-use_wellknown_token_endpoint(Registry, _Repo, _Auth) ->
+    exchange_token(Challenge, Repo, Auth, OpScope);
+use_wellknown_token_endpoint(Registry, _Repo, _Auth, _OpScope) ->
     %% Unknown registry - can't get token without WWW-Authenticate
     {error, {no_token_endpoint_for_registry, Registry}}.
 
@@ -1528,12 +1556,13 @@ parse_auth_param(Str) ->
     end.
 
 %% Exchange credentials for a Bearer token at the realm URL
--spec exchange_token(#{binary() := string()}, binary(), map()) ->
+%% OpScope determines whether to request pull-only or pull+push access
+-spec exchange_token(#{binary() := string()}, binary(), map(), operation_scope()) ->
     {ok, binary()} | {error, term()}.
-exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth) ->
+exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth, OpScope) ->
     %% Build token URL with query params
     Service = maps:get(~"service", Challenge, ""),
-    Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
+    Scope = make_scope_string(Repo, OpScope),
 
     %% Build query string
     QueryParts = [
@@ -1577,6 +1606,15 @@ exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth) ->
         {error, _Reason} = Err ->
             Err
     end.
+
+%% Build scope string for token exchange based on operation type
+%% pull: Only requests read access (for base image pulls)
+%% push: Requests read/write access (for pushing images)
+-spec make_scope_string(binary(), operation_scope()) -> string().
+make_scope_string(Repo, pull) ->
+    "repository:" ++ binary_to_list(Repo) ++ ":pull";
+make_scope_string(Repo, push) ->
+    "repository:" ++ binary_to_list(Repo) ++ ":pull,push".
 
 %% Encode scope parameter for auth token requests
 %% Uses uri_string:quote for proper encoding
