@@ -188,13 +188,21 @@ push_auth_test_() ->
         {"push auth token", fun get_push_auth_token_test/0},
         {"push auth username password", fun get_push_auth_username_password_test/0},
         {"push auth username only", fun get_push_auth_username_only_test/0},
-        {"push auth password only", fun get_push_auth_password_only_test/0}
+        {"push auth password only", fun get_push_auth_password_only_test/0},
+        {"push auth empty string username", fun get_push_auth_empty_string_username_test/0},
+        {"push auth empty string password", fun get_push_auth_empty_string_password_test/0},
+        {"push auth empty string both", fun get_push_auth_empty_string_both_test/0},
+        {"push auth empty string token", fun get_push_auth_empty_string_token_test/0}
     ]}.
 
 pull_auth_test_() ->
     {foreach, fun setup_pull_auth/0, fun cleanup_pull_auth/1, [
         {"pull auth empty", fun get_pull_auth_empty_test/0},
-        {"pull auth username password", fun get_pull_auth_username_password_test/0}
+        {"pull auth username password", fun get_pull_auth_username_password_test/0},
+        {"pull auth empty string username", fun get_pull_auth_empty_string_username_test/0},
+        {"pull auth empty string password", fun get_pull_auth_empty_string_password_test/0},
+        {"pull auth empty string both", fun get_pull_auth_empty_string_both_test/0},
+        {"pull auth empty string token", fun get_pull_auth_empty_string_token_test/0}
     ]}.
 
 %%%===================================================================
@@ -346,6 +354,67 @@ get_pull_auth_username_password_test() ->
     os:putenv("OCIBUILD_PULL_PASSWORD", "pullpass"),
     Auth = ocibuild_release:get_pull_auth(),
     ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, Auth).
+
+%%%===================================================================
+%%% Empty string credential tests (GitHub Actions / CI compatibility)
+%%% Issue #43: Empty strings should be treated as unset for anonymous access
+%%%===================================================================
+
+%% Push auth - empty string tests
+
+get_push_auth_empty_string_username_test() ->
+    %% Empty username should fall back to anonymous (no auth)
+    os:putenv("OCIBUILD_PUSH_USERNAME", ""),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
+    ?assertEqual(#{}, ocibuild_release:get_push_auth()).
+
+get_push_auth_empty_string_password_test() ->
+    %% Empty password should fall back to anonymous (no auth)
+    os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", ""),
+    ?assertEqual(#{}, ocibuild_release:get_push_auth()).
+
+get_push_auth_empty_string_both_test() ->
+    %% Both empty should fall back to anonymous (no auth)
+    os:putenv("OCIBUILD_PUSH_USERNAME", ""),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", ""),
+    ?assertEqual(#{}, ocibuild_release:get_push_auth()).
+
+get_push_auth_empty_string_token_test() ->
+    %% Empty token should fall back to username/password check
+    os:putenv("OCIBUILD_PUSH_TOKEN", ""),
+    os:putenv("OCIBUILD_PUSH_USERNAME", "myuser"),
+    os:putenv("OCIBUILD_PUSH_PASSWORD", "mypass"),
+    %% Should use username/password since token is empty
+    ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, ocibuild_release:get_push_auth()).
+
+%% Pull auth - empty string tests
+
+get_pull_auth_empty_string_username_test() ->
+    %% Empty username should fall back to anonymous (no auth)
+    os:putenv("OCIBUILD_PULL_USERNAME", ""),
+    os:putenv("OCIBUILD_PULL_PASSWORD", "mypass"),
+    ?assertEqual(#{}, ocibuild_release:get_pull_auth()).
+
+get_pull_auth_empty_string_password_test() ->
+    %% Empty password should fall back to anonymous (no auth)
+    os:putenv("OCIBUILD_PULL_USERNAME", "myuser"),
+    os:putenv("OCIBUILD_PULL_PASSWORD", ""),
+    ?assertEqual(#{}, ocibuild_release:get_pull_auth()).
+
+get_pull_auth_empty_string_both_test() ->
+    %% Both empty should fall back to anonymous (no auth)
+    os:putenv("OCIBUILD_PULL_USERNAME", ""),
+    os:putenv("OCIBUILD_PULL_PASSWORD", ""),
+    ?assertEqual(#{}, ocibuild_release:get_pull_auth()).
+
+get_pull_auth_empty_string_token_test() ->
+    %% Empty token should fall back to username/password check
+    os:putenv("OCIBUILD_PULL_TOKEN", ""),
+    os:putenv("OCIBUILD_PULL_USERNAME", "pulluser"),
+    os:putenv("OCIBUILD_PULL_PASSWORD", "pullpass"),
+    %% Should use username/password since token is empty
+    ?assertEqual(#{username => ~"pulluser", password => ~"pullpass"}, ocibuild_release:get_pull_auth()).
 
 %%%===================================================================
 %%% Format bytes tests
