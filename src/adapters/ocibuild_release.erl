@@ -2010,27 +2010,39 @@ extract_repo_path(ImageName) ->
 %%% Authentication
 %%%===================================================================
 
+%% @private Check if an environment variable value is empty or unset.
+%% Returns true for unset (false) or empty string (""/[]).
+%% This handles the common CI/CD case where optional inputs result in
+%% empty strings rather than unset variables (e.g., GitHub Actions).
+-spec is_env_empty(false | string()) -> boolean().
+is_env_empty(false) -> true;
+is_env_empty("") -> true;
+is_env_empty(_) -> false.
+
 -doc """
 Get authentication credentials for pushing images.
 
 Reads from environment variables:
 - `OCIBUILD_PUSH_TOKEN` - Bearer token (takes priority)
 - `OCIBUILD_PUSH_USERNAME` / `OCIBUILD_PUSH_PASSWORD` - Basic auth
+
+Empty string values are treated as unset, enabling anonymous access.
+This handles CI/CD systems like GitHub Actions where optional inputs
+result in empty strings rather than unset variables.
 """.
 -spec get_push_auth() -> map().
 get_push_auth() ->
-    case os:getenv("OCIBUILD_PUSH_TOKEN") of
+    Token = os:getenv("OCIBUILD_PUSH_TOKEN"),
+    case is_env_empty(Token) of
         false ->
-            case {os:getenv("OCIBUILD_PUSH_USERNAME"), os:getenv("OCIBUILD_PUSH_PASSWORD")} of
-                {false, _} ->
-                    #{};
-                {_, false} ->
-                    #{};
-                {User, Pass} ->
-                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
-            end;
-        Token ->
-            #{token => list_to_binary(Token)}
+            #{token => list_to_binary(Token)};
+        true ->
+            User = os:getenv("OCIBUILD_PUSH_USERNAME"),
+            Pass = os:getenv("OCIBUILD_PUSH_PASSWORD"),
+            case is_env_empty(User) orelse is_env_empty(Pass) of
+                true -> #{};
+                false -> #{username => list_to_binary(User), password => list_to_binary(Pass)}
+            end
     end.
 
 -doc """
@@ -2039,21 +2051,24 @@ Get authentication credentials for pulling base images.
 Reads from environment variables:
 - `OCIBUILD_PULL_TOKEN` - Bearer token (takes priority)
 - `OCIBUILD_PULL_USERNAME` / `OCIBUILD_PULL_PASSWORD` - Basic auth
+
+Empty string values are treated as unset, enabling anonymous access.
+This handles CI/CD systems like GitHub Actions where optional inputs
+result in empty strings rather than unset variables.
 """.
 -spec get_pull_auth() -> map().
 get_pull_auth() ->
-    case os:getenv("OCIBUILD_PULL_TOKEN") of
+    Token = os:getenv("OCIBUILD_PULL_TOKEN"),
+    case is_env_empty(Token) of
         false ->
-            case {os:getenv("OCIBUILD_PULL_USERNAME"), os:getenv("OCIBUILD_PULL_PASSWORD")} of
-                {false, _} ->
-                    #{};
-                {_, false} ->
-                    #{};
-                {User, Pass} ->
-                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
-            end;
-        Token ->
-            #{token => list_to_binary(Token)}
+            #{token => list_to_binary(Token)};
+        true ->
+            User = os:getenv("OCIBUILD_PULL_USERNAME"),
+            Pass = os:getenv("OCIBUILD_PULL_PASSWORD"),
+            case is_env_empty(User) orelse is_env_empty(Pass) of
+                true -> #{};
+                false -> #{username => list_to_binary(User), password => list_to_binary(Pass)}
+            end
     end.
 
 %%%===================================================================
