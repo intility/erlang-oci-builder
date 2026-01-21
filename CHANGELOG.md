@@ -5,7 +5,8 @@
 
 ### Bug Fixes
 
-* Revert version from 0.10.2 to 0.10.1 ([3685339](https://github.com/intility/erlang-oci-builder/commit/368533910ae6a7fbba2f8f8fa1d800f7b4cd304e))
+* **registry:** empty string credentials cause 401 unauthorized instead of using anonymous access ([#44](https://github.com/intility/erlang-oci-builder/pull/44)) ([f8fdcb8](https://github.com/intility/erlang-oci-builder/commit/f8fdcb8))
+
 
 ## 0.10.1 - 2026-01-19
 
