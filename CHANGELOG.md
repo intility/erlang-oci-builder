@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/intility/erlang-oci-builder/compare/v0.10.1...v0.10.2) (2026-01-21)
+
+
+### Bug Fixes
+
+* Revert version from 0.10.2 to 0.10.1 ([3685339](https://github.com/intility/erlang-oci-builder/commit/368533910ae6a7fbba2f8f8fa1d800f7b4cd304e))
+
 ## 0.10.1 - 2026-01-19
 
 ### Bug Fixes
