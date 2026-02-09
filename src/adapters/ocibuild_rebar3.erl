@@ -149,8 +149,7 @@ init(State) ->
                     "Path to cosign private key for image signing"},
                 {compression, undefined, "compression", string,
                     "Layer compression: gzip, zstd, or auto (default: auto)"}
-            ]},
-            {profiles, [default, prod]}
+            ]}
         ]),
     {ok, rebar_state:add_provider(State, Provider)}.
 
