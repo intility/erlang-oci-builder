@@ -529,11 +529,13 @@ configure_release_image(Image0, Files, Opts) ->
     %% Set working directory
     Image2 = ocibuild:workdir(Image1a, Workdir),
 
-    %% Set entrypoint and clear inherited Cmd from base image
+    %% Set entrypoint to the release binary and cmd to the start command.
+    %% Keeping them separate allows container orchestrators (e.g. Fly.io
+    %% release_command) to override CMD while preserving ENTRYPOINT.
     ReleaseNameBin = to_binary(ReleaseName),
     EntrypointPath = <<Workdir/binary, "/bin/", ReleaseNameBin/binary>>,
-    Image3a = ocibuild:entrypoint(Image2, [EntrypointPath, Cmd]),
-    Image3 = ocibuild:cmd(Image3a, []),
+    Image3a = ocibuild:entrypoint(Image2, [EntrypointPath]),
+    Image3 = ocibuild:cmd(Image3a, [Cmd]),
 
     %% Set environment variables
     Image4 =
