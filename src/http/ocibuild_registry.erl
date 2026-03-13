@@ -41,7 +41,7 @@ See: https://github.com/opencontainers/distribution-spec
 
 %% Security functions - exported for testing
 -ifdef(TEST).
--export([sanitize_error_body/1, redact_sensitive/1]).
+-export([sanitize_error_body/1, redact_sensitive/1, validate_realm_url/1]).
 -endif.
 
 %% Progress callback types
@@ -1518,56 +1518,71 @@ parse_auth_param(Str) ->
             error
     end.
 
+%% Validate that the realm URL uses HTTPS to prevent SSRF via HTTP metadata endpoints
+%% (e.g. http://169.254.169.254, http://localhost:2375)
+-spec validate_realm_url(string()) -> ok | {error, insecure_realm_url}.
+validate_realm_url(Realm) ->
+    case uri_string:parse(Realm) of
+        #{scheme := "https"} -> ok;
+        _ -> {error, insecure_realm_url}
+    end.
+
 %% Exchange credentials for a Bearer token at the realm URL
 %% OpScope determines whether to request pull-only or pull+push access
 -spec exchange_token(#{binary() := string()}, binary(), map(), operation_scope()) ->
     {ok, binary()} | {error, term()}.
 exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth, OpScope) ->
-    %% Build token URL with query params
-    Service = maps:get(~"service", Challenge, ""),
-    Scope = make_scope_string(Repo, OpScope),
+    %% Reject non-HTTPS realm URLs to prevent SSRF (e.g. to cloud metadata endpoints)
+    case validate_realm_url(Realm) of
+        {error, _} = Err ->
+            Err;
+        ok ->
+            %% Build token URL with query params
+            Service = maps:get(~"service", Challenge, ""),
+            Scope = make_scope_string(Repo, OpScope),
 
-    %% Build query string
-    QueryParts = [
-        "service=" ++ uri_string:quote(Service),
-        "scope=" ++ encode_scope(Scope)
-    ],
-    QueryString = string:join(QueryParts, "&"),
+            %% Build query string
+            QueryParts = [
+                "service=" ++ uri_string:quote(Service),
+                "scope=" ++ encode_scope(Scope)
+            ],
+            QueryString = string:join(QueryParts, "&"),
 
-    %% Append query to realm URL
-    TokenUrl =
-        case string:find(Realm, "?") of
-            nomatch -> Realm ++ "?" ++ QueryString;
-            _ -> Realm ++ "&" ++ QueryString
-        end,
+            %% Append query to realm URL
+            TokenUrl =
+                case string:find(Realm, "?") of
+                    nomatch -> Realm ++ "?" ++ QueryString;
+                    _ -> Realm ++ "&" ++ QueryString
+                end,
 
-    %% Add basic auth header if credentials provided
-    Headers =
-        case Auth of
-            #{username := User, password := Pass} ->
-                Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-                [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
-            _ ->
-                []
-        end,
+            %% Add basic auth header if credentials provided
+            Headers =
+                case Auth of
+                    #{username := User, password := Pass} ->
+                        Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                        [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
+                    _ ->
+                        []
+                end,
 
-    case ?MODULE:http_get(TokenUrl, Headers) of
-        {ok, Body} ->
-            Response = ocibuild_json:decode(Body),
-            %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
-            case maps:find(~"token", Response) of
-                {ok, Token} ->
-                    {ok, Token};
-                error ->
-                    case maps:find(~"access_token", Response) of
+            case ?MODULE:http_get(TokenUrl, Headers) of
+                {ok, Body} ->
+                    Response = ocibuild_json:decode(Body),
+                    %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
+                    case maps:find(~"token", Response) of
                         {ok, Token} ->
                             {ok, Token};
                         error ->
-                            {error, no_token_in_response}
-                    end
-            end;
-        {error, _Reason} = Err ->
-            Err
+                            case maps:find(~"access_token", Response) of
+                                {ok, Token} ->
+                                    {ok, Token};
+                                error ->
+                                    {error, no_token_in_response}
+                            end
+                    end;
+                {error, _Reason} = Err ->
+                    Err
+            end
     end.
 
 %% Build scope string for token exchange based on operation type

@@ -102,6 +102,15 @@ chunked_helper_test_() ->
         {"parse_range_header rejects invalid input", fun parse_range_header_invalid_test/0}
     ].
 
+%% validate_realm_url tests (pure function, no mocking needed)
+validate_realm_url_test_() ->
+    [
+        {"accepts HTTPS realm", fun validate_realm_url_https_test/0},
+        {"rejects HTTP realm (SSRF)", fun validate_realm_url_http_test/0},
+        {"rejects metadata endpoint realm (SSRF)", fun validate_realm_url_metadata_test/0},
+        {"rejects localhost HTTP realm (SSRF)", fun validate_realm_url_localhost_test/0}
+    ].
+
 %% Note: http_get_with_content_type is tested indirectly through tag_from_digest tests
 %% Direct testing of http_get_with_content_type would require mocking httpc,
 %% which is difficult due to it being an OTP gen_server-based module.
@@ -931,3 +940,27 @@ redact_json_password_test() ->
     Result = ocibuild_registry:redact_sensitive(Input),
     ?assertNot(binary:match(Result, ~"mysecretpassword") =/= nomatch),
     ?assert(binary:match(Result, ~"[REDACTED]") =/= nomatch).
+
+%%%===================================================================
+%%% validate_realm_url tests
+%%%===================================================================
+
+validate_realm_url_https_test() ->
+    ?assertEqual(ok, ocibuild_registry:validate_realm_url("https://auth.docker.io/token")).
+
+validate_realm_url_http_test() ->
+    ?assertEqual({error, insecure_realm_url}, ocibuild_registry:validate_realm_url("http://auth.example.com/token")).
+
+validate_realm_url_metadata_test() ->
+    %% AWS instance metadata endpoint used in SSRF attacks
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+    ).
+
+validate_realm_url_localhost_test() ->
+    %% Docker socket and other local services
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("http://localhost:2375/v1/")
+    ).
