@@ -109,7 +109,8 @@ validate_realm_url_test_() ->
         {"rejects HTTP realm (SSRF)", fun validate_realm_url_http_test/0},
         {"rejects metadata endpoint realm (SSRF)", fun validate_realm_url_metadata_test/0},
         {"rejects localhost HTTP realm (SSRF)", fun validate_realm_url_localhost_test/0},
-        {"rejects HTTPS URL with no host (malformed)", fun validate_realm_url_no_host_test/0}
+        {"rejects HTTPS URL with no host (malformed)", fun validate_realm_url_no_host_test/0},
+        {"rejects unparseable realm without crashing", fun validate_realm_url_parse_error_test/0}
     ].
 
 %% Note: http_get_with_content_type is tested indirectly through tag_from_digest tests
@@ -971,4 +972,11 @@ validate_realm_url_no_host_test() ->
     ?assertEqual(
         {error, insecure_realm_url},
         ocibuild_registry:validate_realm_url("https:/no-host-path")
+    ).
+
+validate_realm_url_parse_error_test() ->
+    %% Completely unparseable input from untrusted WWW-Authenticate header must not crash
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("\x00\xff malformed")
     ).

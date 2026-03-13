@@ -33,7 +33,7 @@ See: https://github.com/opencontainers/distribution-spec
 
 %% Internal HTTP functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3, http_put/4]).
--export([http_get_with_content_type/2]).
+-export([http_get_with_content_type/2, http_get_for_token/2]).
 
 %% Internal functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
@@ -1521,11 +1521,14 @@ parse_auth_param(Str) ->
 %% Validate that the realm URL uses HTTPS and has a non-empty host.
 %% This prevents SSRF via HTTP metadata endpoints (e.g. http://169.254.169.254)
 %% and rejects malformed URLs like "https:/path" that parse with scheme but no host.
+%% Wraps uri_string:parse/1 in try/catch since realm comes from an untrusted header.
 -spec validate_realm_url(string()) -> ok | {error, insecure_realm_url}.
 validate_realm_url(Realm) ->
-    case uri_string:parse(Realm) of
+    try uri_string:parse(Realm) of
         #{scheme := "https", host := Host} when Host =/= "" -> ok;
         _ -> {error, insecure_realm_url}
+    catch
+        _:_ -> {error, insecure_realm_url}
     end.
 
 %% Exchange credentials for a Bearer token at the realm URL
@@ -1566,7 +1569,7 @@ exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth, OpScope) ->
                         []
                 end,
 
-            case http_get_for_token(TokenUrl, Headers) of
+            case ?MODULE:http_get_for_token(TokenUrl, Headers) of
                 {ok, Body} ->
                     Response = ocibuild_json:decode(Body),
                     %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
