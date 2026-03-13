@@ -91,7 +91,11 @@ registry_test_() ->
         {"tag_from_digest success", fun tag_from_digest_success_test/0},
         {"tag_from_digest with index manifest", fun tag_from_digest_index_manifest_test/0},
         {"tag_from_digest fetch error", fun tag_from_digest_fetch_error_test/0},
-        {"tag_from_digest push error", fun tag_from_digest_push_error_test/0}
+        {"tag_from_digest push error", fun tag_from_digest_push_error_test/0},
+        %% exchange_token tests
+        {"exchange_token rejects HTTP realm", fun exchange_token_http_realm_test/0},
+        {"exchange_token propagates redirect error", fun exchange_token_redirect_error_test/0},
+        {"exchange_token returns token on success", fun exchange_token_success_test/0}
     ]}.
 
 %% Chunked upload helper function tests (no mocking needed)
@@ -100,6 +104,17 @@ chunked_helper_test_() ->
         {"format_content_range formats correctly", fun format_content_range_test/0},
         {"parse_range_header parses valid input", fun parse_range_header_valid_test/0},
         {"parse_range_header rejects invalid input", fun parse_range_header_invalid_test/0}
+    ].
+
+%% validate_realm_url tests (pure function, no mocking needed)
+validate_realm_url_test_() ->
+    [
+        {"accepts HTTPS realm", fun validate_realm_url_https_test/0},
+        {"rejects HTTP realm (SSRF)", fun validate_realm_url_http_test/0},
+        {"rejects metadata endpoint realm (SSRF)", fun validate_realm_url_metadata_test/0},
+        {"rejects localhost HTTP realm (SSRF)", fun validate_realm_url_localhost_test/0},
+        {"rejects HTTPS URL with no host (malformed)", fun validate_realm_url_no_host_test/0},
+        {"rejects unparseable realm without crashing", fun validate_realm_url_parse_error_test/0}
     ].
 
 %% Note: http_get_with_content_type is tested indirectly through tag_from_digest tests
@@ -931,3 +946,74 @@ redact_json_password_test() ->
     Result = ocibuild_registry:redact_sensitive(Input),
     ?assertNot(binary:match(Result, ~"mysecretpassword") =/= nomatch),
     ?assert(binary:match(Result, ~"[REDACTED]") =/= nomatch).
+
+%%%===================================================================
+%%% validate_realm_url tests
+%%%===================================================================
+
+validate_realm_url_https_test() ->
+    ?assertEqual(ok, ocibuild_registry:validate_realm_url("https://auth.docker.io/token")).
+
+validate_realm_url_http_test() ->
+    ?assertEqual({error, insecure_realm_url}, ocibuild_registry:validate_realm_url("http://auth.example.com/token")).
+
+validate_realm_url_metadata_test() ->
+    %% AWS instance metadata endpoint used in SSRF attacks
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+    ).
+
+validate_realm_url_localhost_test() ->
+    %% Docker socket and other local services
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("http://localhost:2375/v1/")
+    ).
+
+validate_realm_url_no_host_test() ->
+    %% "https:/path" parses with scheme but no host - must be rejected
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("https:/no-host-path")
+    ).
+
+validate_realm_url_parse_error_test() ->
+    %% Completely unparseable input from untrusted WWW-Authenticate header must not crash
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("\x00\xff malformed")
+    ).
+
+%%%===================================================================
+%%% exchange_token tests
+%%%===================================================================
+
+exchange_token_http_realm_test() ->
+    %% A WWW-Authenticate header with an HTTP realm must be rejected without
+    %% making any HTTP request (SSRF guard via validate_realm_url/1).
+    %% No http_get_for_token mock needed - it should never be called.
+    Challenge = #{~"realm" => "http://evil.example.com/token", ~"service" => "evil.example.com"},
+    Result = ocibuild_registry:exchange_token(Challenge, ~"myorg/myapp", #{}, push),
+    ?assertEqual({error, insecure_realm_url}, Result).
+
+exchange_token_redirect_error_test() ->
+    %% When http_get_for_token/2 returns a redirect error, exchange_token/4 must
+    %% propagate it rather than silently succeeding.
+    meck:expect(ocibuild_registry, http_get_for_token, fun(_Url, _Headers) ->
+        {error, redirect_not_allowed_for_token_exchange}
+    end),
+    Challenge = #{~"realm" => "https://auth.example.com/token", ~"service" => "example.com"},
+    Result = ocibuild_registry:exchange_token(Challenge, ~"myorg/myapp", #{}, push),
+    ?assertEqual({error, redirect_not_allowed_for_token_exchange}, Result).
+
+exchange_token_success_test() ->
+    %% Successful token exchange: http_get_for_token/2 returns JSON with a token field.
+    Token = ~"my-bearer-token",
+    meck:expect(ocibuild_registry, http_get_for_token, fun(_Url, _Headers) ->
+        Body = ocibuild_json:encode(#{~"token" => Token}),
+        {ok, Body}
+    end),
+    Challenge = #{~"realm" => "https://auth.example.com/token", ~"service" => "example.com"},
+    Result = ocibuild_registry:exchange_token(Challenge, ~"myorg/myapp", #{}, push),
+    ?assertEqual({ok, Token}, Result).
