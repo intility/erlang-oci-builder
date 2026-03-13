@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/intility/erlang-oci-builder/compare/v0.10.2...v0.10.3) (2026-03-13)
+
+
+### Features
+
+* **registry:** add HTTPS validation for authentication realm URLs ([#50](https://github.com/intility/erlang-oci-builder/issues/50)) ([edc14db](https://github.com/intility/erlang-oci-builder/commit/edc14db2da284634efe68400ba14c226f7620e94))
+
 ## [0.10.2](https://github.com/intility/erlang-oci-builder/compare/v0.10.1...v0.10.2) (2026-01-21)
 
 
