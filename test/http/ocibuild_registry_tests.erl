@@ -91,7 +91,11 @@ registry_test_() ->
         {"tag_from_digest success", fun tag_from_digest_success_test/0},
         {"tag_from_digest with index manifest", fun tag_from_digest_index_manifest_test/0},
         {"tag_from_digest fetch error", fun tag_from_digest_fetch_error_test/0},
-        {"tag_from_digest push error", fun tag_from_digest_push_error_test/0}
+        {"tag_from_digest push error", fun tag_from_digest_push_error_test/0},
+        %% exchange_token tests
+        {"exchange_token rejects HTTP realm", fun exchange_token_http_realm_test/0},
+        {"exchange_token propagates redirect error", fun exchange_token_redirect_error_test/0},
+        {"exchange_token returns token on success", fun exchange_token_success_test/0}
     ]}.
 
 %% Chunked upload helper function tests (no mocking needed)
@@ -980,3 +984,36 @@ validate_realm_url_parse_error_test() ->
         {error, insecure_realm_url},
         ocibuild_registry:validate_realm_url("\x00\xff malformed")
     ).
+
+%%%===================================================================
+%%% exchange_token tests
+%%%===================================================================
+
+exchange_token_http_realm_test() ->
+    %% A WWW-Authenticate header with an HTTP realm must be rejected without
+    %% making any HTTP request (SSRF guard via validate_realm_url/1).
+    %% No http_get_for_token mock needed - it should never be called.
+    Challenge = #{~"realm" => "http://evil.example.com/token", ~"service" => "evil.example.com"},
+    Result = ocibuild_registry:exchange_token(Challenge, ~"myorg/myapp", #{}, push),
+    ?assertEqual({error, insecure_realm_url}, Result).
+
+exchange_token_redirect_error_test() ->
+    %% When http_get_for_token/2 returns a redirect error, exchange_token/4 must
+    %% propagate it rather than silently succeeding.
+    meck:expect(ocibuild_registry, http_get_for_token, fun(_Url, _Headers) ->
+        {error, redirect_not_allowed_for_token_exchange}
+    end),
+    Challenge = #{~"realm" => "https://auth.example.com/token", ~"service" => "example.com"},
+    Result = ocibuild_registry:exchange_token(Challenge, ~"myorg/myapp", #{}, push),
+    ?assertEqual({error, redirect_not_allowed_for_token_exchange}, Result).
+
+exchange_token_success_test() ->
+    %% Successful token exchange: http_get_for_token/2 returns JSON with a token field.
+    Token = ~"my-bearer-token",
+    meck:expect(ocibuild_registry, http_get_for_token, fun(_Url, _Headers) ->
+        Body = ocibuild_json:encode(#{~"token" => Token}),
+        {ok, Body}
+    end),
+    Challenge = #{~"realm" => "https://auth.example.com/token", ~"service" => "example.com"},
+    Result = ocibuild_registry:exchange_token(Challenge, ~"myorg/myapp", #{}, push),
+    ?assertEqual({ok, Token}, Result).

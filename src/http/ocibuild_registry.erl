@@ -41,7 +41,7 @@ See: https://github.com/opencontainers/distribution-spec
 
 %% Security functions - exported for testing
 -ifdef(TEST).
--export([sanitize_error_body/1, redact_sensitive/1, validate_realm_url/1]).
+-export([sanitize_error_body/1, redact_sensitive/1, validate_realm_url/1, exchange_token/4]).
 -endif.
 
 %% Progress callback types
