@@ -1518,12 +1518,13 @@ parse_auth_param(Str) ->
             error
     end.
 
-%% Validate that the realm URL uses HTTPS to prevent SSRF via HTTP metadata endpoints
-%% (e.g. http://169.254.169.254, http://localhost:2375)
+%% Validate that the realm URL uses HTTPS and has a non-empty host.
+%% This prevents SSRF via HTTP metadata endpoints (e.g. http://169.254.169.254)
+%% and rejects malformed URLs like "https:/path" that parse with scheme but no host.
 -spec validate_realm_url(string()) -> ok | {error, insecure_realm_url}.
 validate_realm_url(Realm) ->
     case uri_string:parse(Realm) of
-        #{scheme := "https"} -> ok;
+        #{scheme := "https", host := Host} when Host =/= "" -> ok;
         _ -> {error, insecure_realm_url}
     end.
 
@@ -1565,7 +1566,7 @@ exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth, OpScope) ->
                         []
                 end,
 
-            case ?MODULE:http_get(TokenUrl, Headers) of
+            case http_get_for_token(TokenUrl, Headers) of
                 {ok, Body} ->
                     Response = ocibuild_json:decode(Body),
                     %% Try "token" first (Docker/GHCR), then "access_token" (some registries)
@@ -2417,6 +2418,26 @@ ssl_opts() ->
             {match_fun, public_key:pkix_verify_hostname_match_fun(https)}
         ]}
     ].
+
+%% HTTP GET for token exchange only - does NOT follow redirects.
+%% Redirects during token exchange could bypass HTTPS realm validation (SSRF via redirect).
+-spec http_get_for_token(string(), [{string(), string()}]) -> {ok, binary()} | {error, term()}.
+http_get_for_token(Url, Headers) ->
+    Profile = get_httpc_profile(),
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(get, Request, HttpOpts, Opts, Profile) of
+        {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
+            {ok, Body};
+        {ok, {{_, Status, _}, _, _}} when Status >= 300, Status < 400 ->
+            {error, redirect_not_allowed_for_token_exchange};
+        {ok, {{_, Status, Reason}, _, _}} ->
+            {error, {http_error, Status, Reason}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 -spec http_get(string(), [{string(), string()}]) -> {ok, binary()} | {error, term()}.
 http_get(Url, Headers) ->

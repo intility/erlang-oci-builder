@@ -108,7 +108,8 @@ validate_realm_url_test_() ->
         {"accepts HTTPS realm", fun validate_realm_url_https_test/0},
         {"rejects HTTP realm (SSRF)", fun validate_realm_url_http_test/0},
         {"rejects metadata endpoint realm (SSRF)", fun validate_realm_url_metadata_test/0},
-        {"rejects localhost HTTP realm (SSRF)", fun validate_realm_url_localhost_test/0}
+        {"rejects localhost HTTP realm (SSRF)", fun validate_realm_url_localhost_test/0},
+        {"rejects HTTPS URL with no host (malformed)", fun validate_realm_url_no_host_test/0}
     ].
 
 %% Note: http_get_with_content_type is tested indirectly through tag_from_digest tests
@@ -963,4 +964,11 @@ validate_realm_url_localhost_test() ->
     ?assertEqual(
         {error, insecure_realm_url},
         ocibuild_registry:validate_realm_url("http://localhost:2375/v1/")
+    ).
+
+validate_realm_url_no_host_test() ->
+    %% "https:/path" parses with scheme but no host - must be rejected
+    ?assertEqual(
+        {error, insecure_realm_url},
+        ocibuild_registry:validate_realm_url("https:/no-host-path")
     ).
