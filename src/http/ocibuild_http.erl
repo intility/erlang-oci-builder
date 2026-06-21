@@ -38,7 +38,8 @@ start() ->
     case whereis(ocibuild_http_sup) of
         undefined ->
             case ocibuild_http_sup:start_link() of
-                {ok, _Pid} ->
+                {ok, Pid} ->
+                    unlink(Pid),
                     ok;
                 {error, {already_started, _Pid}} ->
                     ok;
@@ -64,21 +65,15 @@ stop() ->
         undefined ->
             ok;
         SupPid ->
-            %% Unlink to avoid getting exit signal
             unlink(SupPid),
-            Ref = erlang:monitor(process, SupPid),
-            %% Try to stop pool first for cleaner shutdown
-            case whereis(ocibuild_http_pool) of
-                undefined -> ok;
-                PoolPid ->
-                    catch gen_server:stop(PoolPid, shutdown, 1000)
-            end,
-            exit(SupPid, shutdown),
-            receive
-                {'DOWN', Ref, process, SupPid, _} -> ok
-            after 3000 ->
-                erlang:demonitor(Ref, [flush]),
-                ok
+            try gen_server:stop(SupPid, shutdown, 5000) of
+                ok -> ok
+            catch
+                exit:timeout ->
+                    exit(SupPid, kill),
+                    ok;
+                exit:_ ->
+                    ok
             end
     end.
 
