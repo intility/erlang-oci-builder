@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/intility/erlang-oci-builder/compare/v0.10.3...v0.10.4) (2026-06-21)
+
+
+### Bug Fixes
+
+* **http:** stop SSL application during shutdown to prevent CI hangs ([#52](https://github.com/intility/erlang-oci-builder/issues/52)) ([75b0a5a](https://github.com/intility/erlang-oci-builder/commit/75b0a5ab32fa3312b839f7740031c6eaf7c4d827))
+
 ## [0.10.3](https://github.com/intility/erlang-oci-builder/compare/v0.10.2...v0.10.3) (2026-03-13)
 
 
