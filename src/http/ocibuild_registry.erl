@@ -2407,7 +2407,9 @@ stop_httpc() ->
                 erlang:demonitor(Ref, [flush]),
                 ok
             end
-    end.
+    end,
+    _ = ssl:stop(),
+    ok.
 
 %% Get SSL options for HTTPS requests
 -spec ssl_opts() -> [ssl:tls_client_option()].
