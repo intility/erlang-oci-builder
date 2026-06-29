@@ -2408,8 +2408,32 @@ stop_httpc() ->
                 ok
             end
     end,
-    _ = ssl:stop(),
+    %% Kill any orphaned httpc processes registered with our naming convention
+    %% (httpc_ocibuild_*). Workers start standalone httpc via inets:start/3 with
+    %% stand_alone mode, which places them outside any OTP application supervision
+    %% tree. Normally workers link to their httpc and both die together, but a
+    %% race between supervisor shutdown and worker cleanup can leave httpc alive.
+    %% On OTP 28+, init:stop() waits for ALL processes to terminate, so any
+    %% surviving standalone httpc will block VM shutdown indefinitely.
+    cleanup_orphaned_httpc(),
     ok.
+
+-spec cleanup_orphaned_httpc() -> ok.
+cleanup_orphaned_httpc() ->
+    Prefix = "httpc_ocibuild_",
+    Orphans = [N || N <- registered(), lists:prefix(Prefix, atom_to_list(N))],
+    lists:foreach(fun kill_registered/1, Orphans).
+
+-spec kill_registered(atom()) -> ok.
+kill_registered(Name) ->
+    case whereis(Name) of
+        Pid when is_pid(Pid) ->
+            _ = (catch unregister(Name)),
+            exit(Pid, kill),
+            ok;
+        undefined ->
+            ok
+    end.
 
 %% Get SSL options for HTTPS requests
 -spec ssl_opts() -> [ssl:tls_client_option()].
