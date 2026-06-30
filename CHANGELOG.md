@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/intility/erlang-oci-builder/compare/v0.10.4...v0.10.5) (2026-06-30)
+
+
+### Bug Fixes
+
+* **http:** kill orphaned httpc processes instead of stopping SSL ([#55](https://github.com/intility/erlang-oci-builder/issues/55)) ([076f80d](https://github.com/intility/erlang-oci-builder/commit/076f80de9085d2584a70253947d61999f76f9db9))
+
 ## [0.10.4](https://github.com/intility/erlang-oci-builder/compare/v0.10.3...v0.10.4) (2026-06-21)
 
 
