@@ -31,11 +31,21 @@ stop_is_idempotent_test() ->
 %%% Tests for ocibuild_registry:stop_httpc/0
 %%%===================================================================
 
-stop_httpc_stops_ssl_test() ->
+stop_httpc_does_not_stop_ssl_test() ->
+    %% stop_httpc must NOT stop SSL or its dependencies (crypto, asn1, public_key).
+    %% Stopping applications is unsafe when ocibuild is used as a library inside
+    %% another app that depends on them.
+    WasRunning = lists:keymember(ssl, 1, application:which_applications()),
     ssl:start(),
-    ?assertMatch({ok, _}, application:ensure_all_started(ssl)),
     ocibuild_registry:stop_httpc(),
-    ?assertEqual({error, {not_started, ssl}}, ssl:stop()).
+    %% SSL should still be running
+    ?assert(lists:keymember(ssl, 1, application:which_applications())),
+    ?assert(lists:keymember(crypto, 1, application:which_applications())),
+    %% Only stop SSL if we started it
+    case WasRunning of
+        true -> ok;
+        false -> ssl:stop()
+    end.
 
 stop_httpc_when_nothing_running_test() ->
     ?assertEqual(ok, ocibuild_registry:stop_httpc()).
@@ -45,3 +55,19 @@ stop_httpc_stops_supervisor_test() ->
     ?assertNotEqual(undefined, whereis(ocibuild_http_sup)),
     ocibuild_registry:stop_httpc(),
     ?assertEqual(undefined, whereis(ocibuild_http_sup)).
+
+stop_httpc_kills_orphaned_processes_test() ->
+    %% Simulate orphaned httpc processes (e.g., from a crashed worker)
+    Orphan1 = spawn(fun() -> receive stop -> ok end end),
+    register(httpc_ocibuild_orphan1, Orphan1),
+    Orphan2 = spawn(fun() -> receive stop -> ok end end),
+    register(httpc_ocibuild_orphan2, Orphan2),
+    ?assert(is_process_alive(Orphan1)),
+    ?assert(is_process_alive(Orphan2)),
+    Ref1 = erlang:monitor(process, Orphan1),
+    Ref2 = erlang:monitor(process, Orphan2),
+    ocibuild_registry:stop_httpc(),
+    receive {'DOWN', Ref1, process, Orphan1, _} -> ok after 1000 -> error(timeout) end,
+    receive {'DOWN', Ref2, process, Orphan2, _} -> ok after 1000 -> error(timeout) end,
+    ?assertEqual(undefined, whereis(httpc_ocibuild_orphan1)),
+    ?assertEqual(undefined, whereis(httpc_ocibuild_orphan2)).
