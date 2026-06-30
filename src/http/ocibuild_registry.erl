@@ -2428,8 +2428,8 @@ cleanup_orphaned_httpc() ->
 kill_registered(Name) ->
     case whereis(Name) of
         Pid when is_pid(Pid) ->
-            _ = (catch unregister(Name)),
-            exit(Pid, kill),
+            catch unregister(Name),
+            catch exit(Pid, kill),
             ok;
         undefined ->
             ok

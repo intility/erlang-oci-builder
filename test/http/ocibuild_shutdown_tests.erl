@@ -35,13 +35,17 @@ stop_httpc_does_not_stop_ssl_test() ->
     %% stop_httpc must NOT stop SSL or its dependencies (crypto, asn1, public_key).
     %% Stopping applications is unsafe when ocibuild is used as a library inside
     %% another app that depends on them.
+    WasRunning = lists:keymember(ssl, 1, application:which_applications()),
     ssl:start(),
     ocibuild_registry:stop_httpc(),
     %% SSL should still be running
     ?assert(lists:keymember(ssl, 1, application:which_applications())),
     ?assert(lists:keymember(crypto, 1, application:which_applications())),
-    %% Clean up for other tests
-    ssl:stop().
+    %% Only stop SSL if we started it
+    case WasRunning of
+        true -> ok;
+        false -> ssl:stop()
+    end.
 
 stop_httpc_when_nothing_running_test() ->
     ?assertEqual(ok, ocibuild_registry:stop_httpc()).
@@ -60,9 +64,10 @@ stop_httpc_kills_orphaned_processes_test() ->
     register(httpc_ocibuild_orphan2, Orphan2),
     ?assert(is_process_alive(Orphan1)),
     ?assert(is_process_alive(Orphan2)),
+    Ref1 = erlang:monitor(process, Orphan1),
+    Ref2 = erlang:monitor(process, Orphan2),
     ocibuild_registry:stop_httpc(),
-    timer:sleep(10),
-    ?assertNot(is_process_alive(Orphan1)),
-    ?assertNot(is_process_alive(Orphan2)),
+    receive {'DOWN', Ref1, process, Orphan1, _} -> ok after 1000 -> error(timeout) end,
+    receive {'DOWN', Ref2, process, Orphan2, _} -> ok after 1000 -> error(timeout) end,
     ?assertEqual(undefined, whereis(httpc_ocibuild_orphan1)),
     ?assertEqual(undefined, whereis(httpc_ocibuild_orphan2)).
