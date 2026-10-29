@@ -12,19 +12,21 @@ defmodule Ocibuild.Lock do
   Get dependencies from mix.lock for smart layer classification.
 
   Returns a list of dependency maps with `:name`, `:version`, and `:source` keys.
-  Returns an empty list if mix.lock doesn't exist or can't be parsed.
+  Hex packages also carry `:deps` (names of the packages they require), and every
+  package carries `:direct` when the project's own deps are known (see
+  `get_dependencies/2`). Returns an empty list if mix.lock doesn't exist or can't be parsed.
 
   ## Examples
 
       iex> Ocibuild.Lock.get_dependencies()
       [
-        %{name: "jason", version: "1.4.0", source: "hex"},
-        %{name: "plug", version: "1.14.0", source: "hex"}
+        %{name: "plug", version: "1.14.0", source: "hex", deps: ["mime"], direct: true},
+        %{name: "mime", version: "2.0.5", source: "hex", deps: [], direct: false}
       ]
   """
-  @spec get_dependencies() :: [%{name: String.t(), version: String.t(), source: String.t()}]
+  @spec get_dependencies() :: [dependency()]
   def get_dependencies do
-    get_dependencies("mix.lock")
+    get_dependencies("mix.lock", project_direct_names())
   end
 
   @doc """
@@ -32,14 +34,24 @@ defmodule Ocibuild.Lock do
 
   This variant is useful for testing or when the lock file is not in the current directory.
   """
-  @spec get_dependencies(Path.t()) :: [
-          %{name: String.t(), version: String.t(), source: String.t()}
-        ]
+  @spec get_dependencies(Path.t()) :: [dependency()]
   def get_dependencies(lock_path) do
+    get_dependencies(lock_path, nil)
+  end
+
+  @doc """
+  Get dependencies from a specific lock file path, marking which ones are direct.
+
+  `direct_names` are the package names declared by the project (`nil` when unknown, in
+  which case the `:direct` key is left out). Mirrors the optional keys of
+  `ocibuild_adapter:dependency()`.
+  """
+  @spec get_dependencies(Path.t(), [String.t()] | nil) :: [dependency()]
+  def get_dependencies(lock_path, direct_names) do
     if File.exists?(lock_path) do
       try do
         lock_map = Mix.Dep.Lock.read(lock_path)
-        parse_lock_map(lock_map)
+        lock_map |> parse_lock_map() |> mark_direct(direct_names)
       rescue
         exception ->
           log_error(
@@ -55,14 +67,22 @@ defmodule Ocibuild.Lock do
     end
   end
 
+  @type dependency() :: %{
+          required(:name) => String.t(),
+          required(:version) => String.t(),
+          required(:source) => String.t(),
+          optional(:deps) => [String.t()],
+          optional(:direct) => boolean()
+        }
+
   # Parse the lock map into a list of dependency info maps
   defp parse_lock_map(lock_map) do
     Enum.map(lock_map, fn
-      {name, {:hex, _, version, _, _, _, _, _}} ->
-        %{name: Atom.to_string(name), version: version, source: "hex"}
+      {name, {:hex, _, version, _, _, deps, _, _}} ->
+        %{name: Atom.to_string(name), version: version, source: "hex", deps: required_deps(deps)}
 
-      {name, {:hex, _, version, _, _, _, _}} ->
-        %{name: Atom.to_string(name), version: version, source: "hex"}
+      {name, {:hex, _, version, _, _, deps, _}} ->
+        %{name: Atom.to_string(name), version: version, source: "hex", deps: required_deps(deps)}
 
       {name, {:git, url, ref, _}} ->
         %{name: Atom.to_string(name), version: ref, source: url}
@@ -70,6 +90,30 @@ defmodule Ocibuild.Lock do
       {name, _} ->
         %{name: Atom.to_string(name), version: "unknown", source: "unknown"}
     end)
+  end
+
+  # Names of the deps a hex package requires. Optional deps are skipped: a package can be
+  # in the lock file because the project uses it directly, not because this one needs it.
+  defp required_deps(deps) do
+    for {name, _requirement, opts} <- deps, !Keyword.get(opts, :optional, false) do
+      Atom.to_string(name)
+    end
+  end
+
+  # Names declared in the project's mix.exs. `nil` for an umbrella root, whose own deps list
+  # does not cover the child apps (the SBOM then treats unreferenced packages as direct).
+  defp project_direct_names do
+    if Mix.Project.umbrella?() do
+      nil
+    else
+      for dep <- Mix.Project.config()[:deps] || [], do: dep |> elem(0) |> Atom.to_string()
+    end
+  end
+
+  defp mark_direct(deps, nil), do: deps
+
+  defp mark_direct(deps, direct_names) do
+    Enum.map(deps, &Map.put(&1, :direct, &1.name in direct_names))
   end
 
   # Log error message using appropriate method based on context

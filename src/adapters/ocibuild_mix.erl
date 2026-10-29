@@ -148,11 +148,25 @@ get_dependencies(State) when is_map(State) ->
 
 %% @private Normalize a dependency map from Elixir format
 normalize_dep(Dep) when is_map(Dep) ->
-    #{
+    Base = #{
         name => to_binary(maps:get(name, Dep, maps:get(~"name", Dep, ~"unknown"))),
         version => to_binary(maps:get(version, Dep, maps:get(~"version", Dep, ~"unknown"))),
         source => to_binary(maps:get(source, Dep, maps:get(~"source", Dep, ~"unknown")))
-    }.
+    },
+    %% Optional graph keys, see ocibuild_adapter:dependency()
+    WithDeps =
+        case dep_key(deps, Dep) of
+            Names when is_list(Names) -> Base#{deps => [to_binary(N) || N <- Names]};
+            _ -> Base
+        end,
+    case dep_key(direct, Dep) of
+        Direct when is_boolean(Direct) -> WithDeps#{direct => Direct};
+        _ -> WithDeps
+    end.
+
+%% @private Look up an atom key, falling back to its binary form
+dep_key(Key, Dep) ->
+    maps:get(Key, Dep, maps:get(atom_to_binary(Key), Dep, undefined)).
 
 %% @private Convert to binary
 to_binary(V) when is_binary(V) -> V;
