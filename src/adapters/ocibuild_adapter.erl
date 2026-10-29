@@ -115,9 +115,9 @@ Optional keys describe the dependency graph for the SBOM:
 - `direct` - `true` if the project declares the package itself, `false` if it is
   only pulled in transitively
 
-Adapters that do not know the graph can leave both out, in which case the SBOM
-lists every dependency as a direct dependency of the app. If only `deps` is
-provided, the direct dependencies are the packages no other package depends on.
+The app is listed as depending on every package that is `direct` or that no other
+package depends on. Adapters that do not know the graph can leave both keys out, in
+which case every dependency is listed as a direct dependency of the app.
 """.
 -type dependency() :: #{
     name := binary(),

@@ -347,3 +347,20 @@ sbom_graph_ignores_unknown_and_self_edges_test() ->
         [{~"cowboy", ~"ranch"}, {~"myapp", ~"cowboy"}],
         depends_on_edges(Deps, #{app_name => ~"myapp"})
     ).
+
+sbom_graph_keeps_orphans_under_app_test() ->
+    %% A git dep has no known deps, so its own dep has no parent edge. It must stay
+    %% listed under the app instead of disappearing from the graph.
+    Deps = [
+        #{
+            name => ~"gitdep",
+            version => ~"abc123",
+            source => ~"https://example.com/gitdep.git",
+            direct => true
+        },
+        #{name => ~"gitdep_child", version => ~"1.0.0", source => ~"hex", direct => false}
+    ],
+    ?assertEqual(
+        [{~"myapp", ~"gitdep"}, {~"myapp", ~"gitdep-child"}],
+        depends_on_edges(Deps, #{app_name => ~"myapp"})
+    ).

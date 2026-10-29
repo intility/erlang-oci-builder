@@ -480,27 +480,21 @@ build_relationships(AppName, Dependencies, Packages) ->
 
     [DescribesRel] ++ DependsOnRels ++ ErtsRels ++ BaseRels.
 
-%% @private Names of the dependencies the app depends on directly.
-%% Uses `direct` flags when an adapter provides them. Otherwise, when only the graph is
-%% known, the packages that no other package depends on. With no graph data at all,
-%% every dependency (flat list).
+%% @private Names of the dependencies the app depends on directly: those flagged `direct`,
+%% plus any package no other package depends on. The second rule keeps a package listed
+%% when an adapter has no graph data for it (e.g. git deps, whose own deps are not in the
+%% lock file), and gives the flat list when no graph data is provided at all.
 -spec root_names([dependency()]) -> [binary()].
 root_names(Deps) ->
-    case lists:any(fun(D) -> maps:is_key(direct, D) end, Deps) of
-        true ->
-            [N || #{name := N} = D <- Deps, maps:get(direct, D, false) =:= true];
-        false ->
-            case lists:any(fun(D) -> maps:is_key(deps, D) end, Deps) of
-                false ->
-                    [N || #{name := N} <- Deps];
-                true ->
-                    Referenced = sets:from_list([
-                        C
-                     || #{name := N} = D <- Deps, C <- maps:get(deps, D, []), C =/= N
-                    ]),
-                    [N || #{name := N} <- Deps, not sets:is_element(N, Referenced)]
-            end
-    end.
+    Referenced = sets:from_list([
+        C
+     || #{name := N} = D <- Deps, C <- maps:get(deps, D, []), C =/= N
+    ]),
+    [
+        N
+     || #{name := N} = D <- Deps,
+        maps:get(direct, D, false) =:= true orelse not sets:is_element(N, Referenced)
+    ].
 
 %% @private SPDX ID for a dependency (same scheme as build_dependency_package/1)
 -spec dep_id(binary()) -> binary().
