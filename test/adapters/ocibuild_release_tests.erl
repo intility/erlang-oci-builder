@@ -2219,3 +2219,45 @@ validate_annotations_security_before_protected_test() ->
             <<"org.opencontainers.image.source\0">> => ~"value"
         })
     ).
+
+%%%===================================================================
+%%% SBOM: only list dependencies that ship in the release
+%%%===================================================================
+
+filter_shipped_deps_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"drops deps not in release lib/", fun() -> filter_shipped_deps_drops_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"keeps all when lib/ unreadable", fun() ->
+                filter_shipped_deps_no_lib_test(TmpDir)
+            end}
+        end,
+        fun(_TmpDir) ->
+            {"keeps all when no release path", fun filter_shipped_deps_undefined_test/0}
+        end
+    ]}.
+
+filter_shipped_deps_drops_test(TmpDir) ->
+    %% credo is in the lock file (dev only) but not in the release
+    ok = filelib:ensure_path(filename:join([TmpDir, "lib", "cowboy-2.10.0"])),
+    ok = filelib:ensure_path(filename:join([TmpDir, "lib", "myapp-1.0.0"])),
+    ok = filelib:ensure_path(filename:join([TmpDir, "lib", "credo_extra-1.0.0"])),
+    Deps = [
+        #{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"},
+        #{name => ~"credo", version => ~"1.7.0", source => ~"hex"}
+    ],
+    ?assertEqual(
+        [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+        ocibuild_release:filter_shipped_deps(Deps, TmpDir)
+    ).
+
+filter_shipped_deps_no_lib_test(TmpDir) ->
+    %% Fail open: an unreadable release must not silently empty the SBOM
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    ?assertEqual(Deps, ocibuild_release:filter_shipped_deps(Deps, TmpDir)).
+
+filter_shipped_deps_undefined_test() ->
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    ?assertEqual(Deps, ocibuild_release:filter_shipped_deps(Deps, undefined)).
