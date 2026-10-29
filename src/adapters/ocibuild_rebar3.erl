@@ -597,18 +597,24 @@ parse_rebar_lock(LockFile) ->
     end.
 
 %% @private Parse a single dependency entry from rebar.lock
--spec parse_dep_entry(tuple()) ->
-    #{name := binary(), version := binary(), source := binary()}.
-parse_dep_entry({Name, {pkg, _PkgName, Version}, _Depth}) ->
-    #{name => Name, version => Version, source => ~"hex"};
-parse_dep_entry({Name, {git, Url, {ref, Ref}}, _Depth}) ->
-    #{name => Name, version => to_binary(Ref), source => to_binary(Url)};
-parse_dep_entry({Name, {git, Url, {tag, Tag}}, _Depth}) ->
-    #{name => Name, version => to_binary(Tag), source => to_binary(Url)};
-parse_dep_entry({Name, {git, Url, {branch, Branch}}, _Depth}) ->
-    #{name => Name, version => to_binary(Branch), source => to_binary(Url)};
-parse_dep_entry({Name, _, _Depth}) ->
-    #{name => Name, version => ~"unknown", source => ~"unknown"}.
+%% The third element is the level in the dependency tree: 0 for deps declared in
+%% rebar.config, higher for transitive deps. rebar.lock has no edges between packages.
+-spec parse_dep_entry(tuple()) -> ocibuild_adapter:dependency().
+parse_dep_entry({Name, {pkg, _PkgName, Version}, Level}) ->
+    #{name => Name, version => Version, source => ~"hex", direct => Level =:= 0};
+parse_dep_entry({Name, {git, Url, {ref, Ref}}, Level}) ->
+    #{name => Name, version => to_binary(Ref), source => to_binary(Url), direct => Level =:= 0};
+parse_dep_entry({Name, {git, Url, {tag, Tag}}, Level}) ->
+    #{name => Name, version => to_binary(Tag), source => to_binary(Url), direct => Level =:= 0};
+parse_dep_entry({Name, {git, Url, {branch, Branch}}, Level}) ->
+    #{
+        name => Name,
+        version => to_binary(Branch),
+        source => to_binary(Url),
+        direct => Level =:= 0
+    };
+parse_dep_entry({Name, _, Level}) ->
+    #{name => Name, version => ~"unknown", source => ~"unknown", direct => Level =:= 0}.
 
 %% @private Convert to binary
 to_binary(V) when is_binary(V) -> V;

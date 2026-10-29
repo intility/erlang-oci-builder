@@ -1247,7 +1247,7 @@ Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko a
 **SBOM Contents:**
 - Application name + version
 - Dependencies from `rebar.lock` / `mix.lock` that ship in the release (name, version, source)
-- Dependency graph: the app depends on its direct dependencies, and each dependency on its own (adapters supply `deps` and `direct`, see `ocibuild_adapter:dependency()`; without them the list is flat)
+- Dependency graph: the app depends on its direct dependencies, and each dependency on its own (adapters supply `deps` and `direct`, see `ocibuild_adapter:dependency()`; where an adapter gives no `deps`, they are read from each dep's `.app` file in the release; without any graph data the list is flat)
 - ERTS version (if included)
 - OTP version
 - Base image reference + digest
