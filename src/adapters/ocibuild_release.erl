@@ -77,7 +77,8 @@ Security features:
 -ifdef(TEST).
 -export([
     push_signature_referrer/7,
-    filter_shipped_deps/2
+    filter_shipped_deps/2,
+    add_release_app_deps/2
 ]).
 -endif.
 
@@ -3094,8 +3095,9 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
         },
 
         %% Generate SBOM
+        ShippedDeps = filter_shipped_deps(Dependencies, ReleasePath),
         {ok, SbomJson} = ocibuild_sbom:generate(
-            filter_shipped_deps(Dependencies, ReleasePath), SbomOpts
+            add_release_app_deps(ShippedDeps, ReleasePath), SbomOpts
         ),
 
         %% Add SBOM as layer using ocibuild:add_layer to properly update config
@@ -3132,6 +3134,45 @@ filter_shipped_deps(Deps, ReleasePath) ->
         {error, _} ->
             Deps
     end.
+
+%% @private Fill in the dependency edges for deps whose adapter did not provide any, from the
+%% `applications` of each dep's .app file in the release. This works for any adapter that
+%% ships OTP apps. Names that are not packages in the SBOM (kernel, stdlib, ...) are ignored
+%% when the relationships are built. Deps that already have a `deps` key are left alone.
+-spec add_release_app_deps([map()], file:filename() | undefined) -> [map()].
+add_release_app_deps(Deps, undefined) ->
+    Deps;
+add_release_app_deps(Deps, ReleasePath) ->
+    LibPath = filename:join(ReleasePath, "lib"),
+    case file:list_dir(LibPath) of
+        {ok, Entries} ->
+            Dirs = maps:from_list([{lib_dir_app_name(E), E} || E <- Entries]),
+            [add_app_deps(D, Dirs, LibPath) || D <- Deps];
+        {error, _} ->
+            Deps
+    end.
+
+-spec add_app_deps(map(), #{binary() => file:filename()}, file:filename()) -> map().
+add_app_deps(#{deps := _} = Dep, _Dirs, _LibPath) ->
+    Dep;
+add_app_deps(#{name := Name} = Dep, Dirs, LibPath) ->
+    case Dirs of
+        #{Name := Dir} ->
+            AppFile = filename:join([LibPath, Dir, "ebin", <<Name/binary, ".app">>]),
+            case file:consult(AppFile) of
+                {ok, [{application, _, Props}]} when is_list(Props) ->
+                    Apps =
+                        proplists:get_value(applications, Props, []) ++
+                            proplists:get_value(included_applications, Props, []),
+                    Dep#{deps => [atom_to_binary(A, utf8) || A <- Apps, is_atom(A)]};
+                _ ->
+                    Dep
+            end;
+        _ ->
+            Dep
+    end;
+add_app_deps(Dep, _Dirs, _LibPath) ->
+    Dep.
 
 %% @private "cowboy-2.10.0" -> <<"cowboy">>. App names contain no hyphens, so the
 %% first hyphen starts the version.

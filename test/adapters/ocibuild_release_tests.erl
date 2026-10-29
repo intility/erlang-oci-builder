@@ -2263,3 +2263,59 @@ filter_shipped_deps_no_lib_test(TmpDir) ->
 filter_shipped_deps_undefined_test() ->
     Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
     ?assertEqual(Deps, ocibuild_release:filter_shipped_deps(Deps, undefined)).
+
+%%%===================================================================
+%%% SBOM: dependency edges from the release's .app files
+%%%===================================================================
+
+release_app_deps_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"reads applications from .app files", fun() -> release_app_deps_reads_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"keeps all when lib/ unreadable", fun() -> release_app_deps_no_lib_test(TmpDir) end}
+        end,
+        fun(_TmpDir) ->
+            {"keeps all when no release path", fun release_app_deps_undefined_test/0}
+        end
+    ]}.
+
+write_app_file(LibDir, Name, Vsn, Props) ->
+    EbinDir = filename:join([LibDir, <<Name/binary, "-", Vsn/binary>>, "ebin"]),
+    ok = filelib:ensure_path(EbinDir),
+    Term = {application, binary_to_atom(Name), Props},
+    ok = file:write_file(
+        filename:join(EbinDir, <<Name/binary, ".app">>), io_lib:format("~p.~n", [Term])
+    ).
+
+release_app_deps_reads_test(TmpDir) ->
+    LibDir = filename:join(TmpDir, "lib"),
+    write_app_file(LibDir, ~"cowboy", ~"2.10.0", [
+        {vsn, "2.10.0"},
+        {applications, [kernel, stdlib, ranch, cowlib]},
+        {included_applications, [extra]}
+    ]),
+    write_app_file(LibDir, ~"ranch", ~"1.8.0", [{applications, [kernel, stdlib]}]),
+    Deps = [
+        %% No deps key: filled in from cowboy.app
+        #{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"},
+        %% Adapter already provided deps: left alone
+        #{name => ~"ranch", version => ~"1.8.0", source => ~"hex", deps => []},
+        %% Not in the release: left alone
+        #{name => ~"gone", version => ~"1.0.0", source => ~"hex"}
+    ],
+    [Cowboy, Ranch, Gone] = ocibuild_release:add_release_app_deps(Deps, TmpDir),
+    ?assertEqual(
+        [~"kernel", ~"stdlib", ~"ranch", ~"cowlib", ~"extra"], maps:get(deps, Cowboy)
+    ),
+    ?assertEqual([], maps:get(deps, Ranch)),
+    ?assertNot(maps:is_key(deps, Gone)).
+
+release_app_deps_no_lib_test(TmpDir) ->
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    ?assertEqual(Deps, ocibuild_release:add_release_app_deps(Deps, TmpDir)).
+
+release_app_deps_undefined_test() ->
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    ?assertEqual(Deps, ocibuild_release:add_release_app_deps(Deps, undefined)).

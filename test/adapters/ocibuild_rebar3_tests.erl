@@ -123,6 +123,23 @@ parse_rebar_lock_new_format_test() ->
     ?assertEqual(~"cowlib", maps:get(name, Cowlib)),
     ?assertEqual(~"2.12.1", maps:get(version, Cowlib)).
 
+parse_rebar_lock_direct_flag_test() ->
+    %% The lock file level is 0 for deps declared in rebar.config, >0 for transitive deps
+    LockContent = <<
+        "{\"1.2.0\",[{<<\"cowboy\">>,{pkg,<<\"cowboy\">>,<<\"2.10.0\">>},0},"
+        "{<<\"cowlib\">>,{pkg,<<\"cowlib\">>,<<\"2.12.1\">>},1},"
+        "{<<\"gitdep\">>,{git,\"https://example.com/g.git\",{ref,\"abc\"}},0}]}.\n"
+    >>,
+    TmpFile = make_temp_lock_file("rebar_direct", LockContent),
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    file:delete(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    Direct = maps:from_list([{maps:get(name, D), maps:get(direct, D)} || D <- Deps]),
+    ?assertEqual(
+        #{~"cowboy" => true, ~"cowlib" => false, ~"gitdep" => true},
+        Direct
+    ).
+
 parse_rebar_lock_old_format_test() ->
     %% Old format: just a list without version tuple
     LockContent = <<
