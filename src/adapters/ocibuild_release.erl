@@ -76,7 +76,8 @@ Security features:
 %% Exported for testing
 -ifdef(TEST).
 -export([
-    push_signature_referrer/7
+    push_signature_referrer/7,
+    filter_shipped_deps/2
 ]).
 -endif.
 
@@ -3091,7 +3092,9 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
         },
 
         %% Generate SBOM
-        {ok, SbomJson} = ocibuild_sbom:generate(Dependencies, SbomOpts),
+        {ok, SbomJson} = ocibuild_sbom:generate(
+            filter_shipped_deps(Dependencies, ReleasePath), SbomOpts
+        ),
 
         %% Add SBOM as layer using ocibuild:add_layer to properly update config
         %% (updates both layers list and config diff_ids/history)
@@ -3111,6 +3114,29 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
             ),
             Image
     end.
+
+%% @private Keep only lock file deps that are present in the release's lib/ directory.
+%% The lock file also lists dev/test-only deps that are not shipped, which would
+%% make the SBOM claim packages that are not in the image.
+%% Fails open (keeps all deps) when lib/ cannot be read.
+-spec filter_shipped_deps([map()], file:filename() | undefined) -> [map()].
+filter_shipped_deps(Deps, undefined) ->
+    Deps;
+filter_shipped_deps(Deps, ReleasePath) ->
+    case file:list_dir(filename:join(ReleasePath, "lib")) of
+        {ok, Entries} ->
+            Shipped = sets:from_list([lib_dir_app_name(E) || E <- Entries]),
+            [D || #{name := Name} = D <- Deps, sets:is_element(Name, Shipped)];
+        {error, _} ->
+            Deps
+    end.
+
+%% @private "cowboy-2.10.0" -> <<"cowboy">>. App names contain no hyphens, so the
+%% first hyphen starts the version.
+-spec lib_dir_app_name(file:filename()) -> binary().
+lib_dir_app_name(Entry) ->
+    [Name | _] = string:split(unicode:characters_to_binary(Entry), "-"),
+    Name.
 
 %% @private Get source URL from opts (from VCS annotations if available)
 -spec get_source_url_from_opts(map()) -> binary() | undefined.
