@@ -8,7 +8,6 @@ on:
       - "LICENSE*"
       - ".gitignore"
       - ".editorconfig"
-      - "CLAUDE.md"
       - "AGENTS.md"
       - "test/**"
       - ".github/workflows/ci.yaml"
