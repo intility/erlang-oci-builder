@@ -52,11 +52,7 @@ https://github.com/package-url/purl-spec
     otp_version => binary() | undefined
 }.
 
--type dependency() :: #{
-    name := binary(),
-    version := binary(),
-    source := binary()
-}.
+-type dependency() :: ocibuild_adapter:dependency().
 
 -export_type([sbom_opts/0, dependency/0]).
 
@@ -207,7 +203,7 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
 
     %% Build relationships
     SafeAppName = sanitize_spdx_id(AppName),
-    Relationships = build_relationships(SafeAppName, AllPackages),
+    Relationships = build_relationships(SafeAppName, Dependencies, AllPackages),
 
     %% Build the SPDX document
     Sbom = #{
@@ -412,8 +408,10 @@ build_base_image_package({Registry, Repo, Tag}, Digest) ->
     }.
 
 %% @private Build SPDX relationships
--spec build_relationships(binary(), [map()]) -> [map()].
-build_relationships(AppName, Packages) ->
+%% The app depends on its direct dependencies; each dependency depends on its own
+%% dependencies. See `ocibuild_adapter:dependency()` for how the graph is described.
+-spec build_relationships(binary(), [dependency()], [map()]) -> [map()].
+build_relationships(AppName, Dependencies, Packages) ->
     AppRef = <<"SPDXRef-Package-", AppName/binary>>,
 
     %% DESCRIBES relationship from document
@@ -423,28 +421,32 @@ build_relationships(AppName, Packages) ->
         ~"relatedSpdxElement" => AppRef
     },
 
-    %% DEPENDS_ON relationships for dependencies
-    DependsOnRels = lists:filtermap(
-        fun(Pkg) ->
-            PkgId = maps:get(~"SPDXID", Pkg),
-            %% Skip the main app package, ERTS, and base-image
-            case PkgId of
-                <<"SPDXRef-Package-", AppName/binary>> ->
-                    false;
-                ~"SPDXRef-Package-erts" ->
-                    false;
-                ~"SPDXRef-Package-base-image" ->
-                    false;
-                _ ->
-                    {true, #{
-                        ~"spdxElementId" => AppRef,
-                        ~"relationshipType" => ~"DEPENDS_ON",
-                        ~"relatedSpdxElement" => PkgId
-                    }}
-            end
-        end,
-        Packages
-    ),
+    %% Skip anything that would collide with the main app package, ERTS or base-image
+    Reserved = [AppRef, ~"SPDXRef-Package-erts", ~"SPDXRef-Package-base-image"],
+    Deps = [D || #{name := N} = D <- Dependencies, not lists:member(dep_id(N), Reserved)],
+    Known = sets:from_list([maps:get(name, D) || D <- Deps]),
+    Roots = root_names(Deps),
+
+    DependsOn = fun(From, To) ->
+        #{
+            ~"spdxElementId" => From,
+            ~"relationshipType" => ~"DEPENDS_ON",
+            ~"relatedSpdxElement" => To
+        }
+    end,
+
+    %% app -> direct dependencies
+    AppRels = [DependsOn(AppRef, dep_id(N)) || N <- Roots],
+
+    %% dependency -> its dependencies (unknown names, e.g. optional or not shipped, are skipped)
+    DepRels = [
+        DependsOn(dep_id(Name), dep_id(Child))
+     || #{name := Name} = D <- Deps,
+        Child <- lists:uniq(maps:get(deps, D, [])),
+        Child =/= Name,
+        sets:is_element(Child, Known)
+    ],
+    DependsOnRels = AppRels ++ DepRels,
 
     %% RUNTIME_DEPENDENCY_OF for ERTS (if present)
     ErtsRels =
@@ -477,6 +479,33 @@ build_relationships(AppName, Packages) ->
         end,
 
     [DescribesRel] ++ DependsOnRels ++ ErtsRels ++ BaseRels.
+
+%% @private Names of the dependencies the app depends on directly.
+%% Uses `direct` flags when an adapter provides them. Otherwise, when only the graph is
+%% known, the packages that no other package depends on. With no graph data at all,
+%% every dependency (flat list).
+-spec root_names([dependency()]) -> [binary()].
+root_names(Deps) ->
+    case lists:any(fun(D) -> maps:is_key(direct, D) end, Deps) of
+        true ->
+            [N || #{name := N} = D <- Deps, maps:get(direct, D, false) =:= true];
+        false ->
+            case lists:any(fun(D) -> maps:is_key(deps, D) end, Deps) of
+                false ->
+                    [N || #{name := N} <- Deps];
+                true ->
+                    Referenced = sets:from_list([
+                        C
+                     || #{name := N} = D <- Deps, C <- maps:get(deps, D, []), C =/= N
+                    ]),
+                    [N || #{name := N} <- Deps, not sets:is_element(N, Referenced)]
+            end
+    end.
+
+%% @private SPDX ID for a dependency (same scheme as build_dependency_package/1)
+-spec dep_id(binary()) -> binary().
+dep_id(Name) ->
+    <<"SPDXRef-Package-", (sanitize_spdx_id(Name))/binary>>.
 
 %% @private Check if a package with the given SPDX ID exists in the packages list
 -spec has_package_id(binary(), [map()]) -> boolean().

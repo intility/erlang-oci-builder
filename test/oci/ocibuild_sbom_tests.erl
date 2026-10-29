@@ -259,3 +259,91 @@ sbom_created_timestamp_format_test() ->
         {match, _},
         re:run(Created, "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
     ).
+
+%%%===================================================================
+%%% Dependency graph
+%%%===================================================================
+
+%% DEPENDS_ON edges as {From, To} pairs using package names without the SPDXRef prefix
+depends_on_edges(Deps, Opts) ->
+    {ok, SbomJson} = ocibuild_sbom:generate(Deps, Opts),
+    Rels = maps:get(~"relationships", ocibuild_json:decode(SbomJson)),
+    Strip = fun(<<"SPDXRef-Package-", Name/binary>>) -> Name end,
+    lists:sort([
+        {Strip(maps:get(~"spdxElementId", R)), Strip(maps:get(~"relatedSpdxElement", R))}
+     || R <- Rels, maps:get(~"relationshipType", R) =:= ~"DEPENDS_ON"
+    ]).
+
+graph_deps() ->
+    [
+        #{
+            name => ~"plug_cowboy",
+            version => ~"2.7.0",
+            source => ~"hex",
+            deps => [~"cowboy"],
+            direct => true
+        },
+        #{
+            name => ~"cowboy",
+            version => ~"2.10.0",
+            source => ~"hex",
+            deps => [~"ranch", ~"cowlib"],
+            direct => false
+        },
+        #{name => ~"ranch", version => ~"1.8.0", source => ~"hex", deps => [], direct => false},
+        #{name => ~"cowlib", version => ~"2.12.0", source => ~"hex", deps => [], direct => false}
+    ].
+
+sbom_graph_direct_and_transitive_test() ->
+    %% Only direct deps hang off the app; transitive deps hang off their parents
+    ?assertEqual(
+        [
+            {~"cowboy", ~"cowlib"},
+            {~"cowboy", ~"ranch"},
+            {~"myapp", ~"plug-cowboy"},
+            {~"plug-cowboy", ~"cowboy"}
+        ],
+        depends_on_edges(graph_deps(), #{app_name => ~"myapp"})
+    ).
+
+sbom_graph_infers_roots_without_direct_flags_test() ->
+    %% Adapters that know the graph but not the direct deps: roots are the
+    %% packages that no other package depends on
+    Deps = [maps:remove(direct, D) || D <- graph_deps()],
+    ?assertEqual(
+        [
+            {~"cowboy", ~"cowlib"},
+            {~"cowboy", ~"ranch"},
+            {~"myapp", ~"plug-cowboy"},
+            {~"plug-cowboy", ~"cowboy"}
+        ],
+        depends_on_edges(Deps, #{app_name => ~"myapp"})
+    ).
+
+sbom_graph_flat_without_graph_info_test() ->
+    %% Adapters that provide no graph data keep the flat behaviour
+    Deps = [
+        #{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"},
+        #{name => ~"ranch", version => ~"1.8.0", source => ~"hex"}
+    ],
+    ?assertEqual(
+        [{~"myapp", ~"cowboy"}, {~"myapp", ~"ranch"}],
+        depends_on_edges(Deps, #{app_name => ~"myapp"})
+    ).
+
+sbom_graph_ignores_unknown_and_self_edges_test() ->
+    %% Optional or filtered-out deps are not packages in the SBOM, so no edge to them
+    Deps = [
+        #{
+            name => ~"cowboy",
+            version => ~"2.10.0",
+            source => ~"hex",
+            deps => [~"ranch", ~"cowboy", ~"not_shipped"],
+            direct => true
+        },
+        #{name => ~"ranch", version => ~"1.8.0", source => ~"hex", deps => [], direct => false}
+    ],
+    ?assertEqual(
+        [{~"cowboy", ~"ranch"}, {~"myapp", ~"cowboy"}],
+        depends_on_edges(Deps, #{app_name => ~"myapp"})
+    ).
