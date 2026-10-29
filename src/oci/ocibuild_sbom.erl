@@ -60,6 +60,14 @@ https://github.com/package-url/purl-spec
 
 -export_type([sbom_opts/0, dependency/0]).
 
+%% SPDX 2.2 requires these on every package, even when filesAnalyzed is false.
+%% We do not analyze licenses or copyright, so declare that explicitly.
+-define(SPDX_REQUIRED_PACKAGE_FIELDS, #{
+    ~"licenseConcluded" => ~"NOASSERTION",
+    ~"licenseDeclared" => ~"NOASSERTION",
+    ~"copyrightText" => ~"NOASSERTION"
+}).
+
 %%%===================================================================
 %%% Public API
 %%%===================================================================
@@ -192,7 +200,10 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
                 [build_base_image_package(BaseImage, maps:get(base_digest, Opts, undefined))]
         end,
 
-    AllPackages = [MainPackage] ++ DepPackages ++ ErtsPackages ++ BasePackages,
+    AllPackages = [
+        maps:merge(?SPDX_REQUIRED_PACKAGE_FIELDS, P)
+     || P <- [MainPackage] ++ DepPackages ++ ErtsPackages ++ BasePackages
+    ],
 
     %% Build relationships
     SafeAppName = sanitize_spdx_id(AppName),

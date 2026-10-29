@@ -219,3 +219,43 @@ sbom_referrer_manifest_test() ->
     ?assertEqual(~"application/vnd.oci.image.manifest.v1+json", maps:get(~"mediaType", Subject)),
     ?assertEqual(SubjectDigest, maps:get(~"digest", Subject)),
     ?assertEqual(SubjectSize, maps:get(~"size", Subject)).
+
+%%%===================================================================
+%%% SPDX 2.2 mandatory package fields
+%%%===================================================================
+
+sbom_mandatory_package_fields_test() ->
+    %% SPDX 2.2 requires licenseConcluded, licenseDeclared and copyrightText
+    %% on every package, even when filesAnalyzed is false.
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    Opts = #{
+        app_name => ~"myapp",
+        app_version => ~"1.0.0",
+        erts_version => ~"14.0",
+        otp_version => ~"26.0",
+        base_image => {~"docker.io", ~"library/debian", ~"stable"}
+    },
+    {ok, SbomJson} = ocibuild_sbom:generate(Deps, Opts),
+    Packages = maps:get(~"packages", ocibuild_json:decode(SbomJson)),
+    %% app + cowboy + erts + base image
+    ?assertEqual(4, length(Packages)),
+    lists:foreach(
+        fun(Pkg) ->
+            lists:foreach(
+                fun(Field) ->
+                    ?assertEqual(~"NOASSERTION", maps:get(Field, Pkg, missing))
+                end,
+                [~"licenseConcluded", ~"licenseDeclared", ~"copyrightText"]
+            )
+        end,
+        Packages
+    ).
+
+sbom_created_timestamp_format_test() ->
+    %% SPDX requires YYYY-MM-DDThh:mm:ssZ (no fractional seconds, no offset)
+    {ok, SbomJson} = ocibuild_sbom:generate([], #{app_name => ~"myapp"}),
+    Created = maps:get(~"created", maps:get(~"creationInfo", ocibuild_json:decode(SbomJson))),
+    ?assertMatch(
+        {match, _},
+        re:run(Created, "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+    ).
