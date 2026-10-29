@@ -1,9 +1,9 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_sbom).
 -moduledoc """
-SPDX 2.2 Software Bill of Materials (SBOM) generation.
+SPDX 2.3 Software Bill of Materials (SBOM) generation.
 
-Generates SPDX 2.2 (ISO/IEC 5962:2021) compliant SBOMs containing:
+Generates SPDX 2.3 compliant SBOMs containing:
 - Application name and version
 - All dependencies from lock files (via adapter)
 - ERTS version (if bundled)
@@ -27,8 +27,8 @@ Opts = #{
 
 ## SPDX Specification
 
-This module generates SPDX 2.2 JSON format as defined in:
-https://spdx.github.io/spdx-spec/v2.2.2/
+This module generates SPDX 2.3 JSON format as defined in:
+https://spdx.github.io/spdx-spec/v2.3/
 
 Package URLs (PURLs) follow the specification:
 https://github.com/package-url/purl-spec
@@ -60,7 +60,7 @@ https://github.com/package-url/purl-spec
 
 -export_type([sbom_opts/0, dependency/0]).
 
-%% SPDX 2.2 requires these on every package, even when filesAnalyzed is false.
+%% SPDX requires these on every package, even when filesAnalyzed is false.
 %% We do not analyze licenses or copyright, so declare that explicitly.
 -define(SPDX_REQUIRED_PACKAGE_FIELDS, #{
     ~"licenseConcluded" => ~"NOASSERTION",
@@ -141,7 +141,7 @@ build_referrer_manifest(ArtifactDigest, ArtifactSize, SubjectDigest, SubjectSize
     }.
 
 -doc """
-Generate an SPDX 2.2 SBOM from dependencies and options.
+Generate an SPDX 2.3 SBOM from dependencies and options.
 
 The SBOM includes:
 - Document metadata (name, namespace, creation info)
@@ -211,7 +211,7 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
 
     %% Build the SPDX document
     Sbom = #{
-        ~"spdxVersion" => ~"SPDX-2.2",
+        ~"spdxVersion" => ~"SPDX-2.3",
         ~"SPDXID" => ~"SPDXRef-DOCUMENT",
         ~"name" => DocName,
         ~"dataLicense" => ~"CC0-1.0",

@@ -77,7 +77,7 @@ src/
 │   ├── ocibuild_index.erl        # OCI image index for multi-platform images
 │   ├── ocibuild_layout.erl       # OCI image layout export (directory/tarball)
 │   ├── ocibuild_tar.erl          # In-memory TAR archive builder (POSIX ustar)
-│   └── ocibuild_sbom.erl         # SPDX 2.2 SBOM generation
+│   └── ocibuild_sbom.erl         # SPDX 2.3 SBOM generation
 │
 ├── adapters/                 # Build system adapters
 │   ├── ocibuild_adapter.erl      # Behaviour for adapters (rebar3, Mix, etc.)
@@ -1050,7 +1050,7 @@ Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko a
 
 **Module:** `ocibuild_sbom.erl`
 
-**Format:** SPDX 2.2 (ISO/IEC 5962:2021) - no CycloneDX, keep it simple.
+**Format:** SPDX 2.3 (JSON).
 
 **SBOM Contents:**
 - Application name + version
@@ -1082,7 +1082,7 @@ rebar3 ocibuild --push ghcr.io/myorg --sbom myapp.spdx.json
 1. **New module** (`ocibuild_sbom.erl`):
    ```erlang
    -spec generate(Deps, AppInfo, Opts) -> {ok, binary()} | {error, term()}.
-   %% Generates SPDX 2.2 JSON
+   %% Generates SPDX 2.3 JSON
    ```
 
 2. **Lock file parsing via adapter** (`ocibuild_adapter.erl`):
@@ -1110,10 +1110,10 @@ rebar3 ocibuild --push ghcr.io/myorg --sbom myapp.spdx.json
    - Link via `subject` field to image manifest
    - Uses [OCI Referrers API](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers)
 
-**SPDX 2.2 Structure:**
+**SPDX 2.3 Structure:**
 ```json
 {
-  "spdxVersion": "SPDX-2.2",
+  "spdxVersion": "SPDX-2.3",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "myapp-1.0.0",
   "packages": [

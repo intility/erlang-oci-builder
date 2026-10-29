@@ -30,7 +30,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command.                                    |
 | **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.                                         |
 | **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.                                             |
-| **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.                                   |
+| **SBOM generation**           | ✅     | SPDX 2.3 SBOM embedded at `/sbom.spdx.json` and attached via referrers.                                   |
 | **Image signing**             | ✅     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
 | **Zstd compression**          | ✅     | Automatic zstd on OTP 28+ (20-50% smaller, faster). Falls back to gzip on OTP 27.                         |
 

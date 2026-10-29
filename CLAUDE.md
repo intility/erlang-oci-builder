@@ -79,7 +79,7 @@ src/
 │   ├── ocibuild_index.erl        → OCI image index for multi-platform
 │   ├── ocibuild_layout.erl       → Export to directory/tarball
 │   ├── ocibuild_tar.erl          → In-memory TAR builder (POSIX ustar)
-│   └── ocibuild_sbom.erl         → SPDX 2.2 SBOM generation
+│   └── ocibuild_sbom.erl         → SPDX 2.3 SBOM generation
 │
 ├── adapters/                 → Build system adapters
 │   ├── ocibuild_adapter.erl      → Behaviour for adapters
@@ -155,7 +155,7 @@ ocibuild_http_sup (one_for_one)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH), automatic VCS annotations (Git, GitHub Actions, GitLab CI, Azure DevOps), SBOM generation (SPDX 2.2 embedded in image layer and attached via OCI referrers API), zstd compression (automatic on OTP 28+, configurable via `--compression` flag).
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH), automatic VCS annotations (Git, GitHub Actions, GitLab CI, Azure DevOps), SBOM generation (SPDX 2.3 embedded in image layer and attached via OCI referrers API), zstd compression (automatic on OTP 28+, configurable via `--compression` flag).
 
 **Not Implemented:** Resumable uploads, keyless signing (Sigstore/Fulcio).
 

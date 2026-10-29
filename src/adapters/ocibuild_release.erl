@@ -3056,7 +3056,7 @@ export_sbom_file(AdapterModule, Images, SbomPath) when is_binary(SbomPath) ->
     ok.
 
 %% @private Add SBOM layer to image
-%% Generates SPDX 2.2 SBOM and adds as a layer at /sbom.spdx.json
+%% Generates SPDX 2.3 SBOM and adds as a layer at /sbom.spdx.json
 %% Also stores the SBOM JSON in the image map for later referrer push
 -spec add_sbom_layer(
     ocibuild:image(), binary() | atom(), [map()], file:filename() | undefined, map()
