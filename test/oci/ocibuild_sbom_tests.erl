@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_sbom_tests).
 -moduledoc """
-Tests for ocibuild_sbom module - SPDX 2.2 SBOM generation.
+Tests for ocibuild_sbom module - SPDX 2.3 SBOM generation.
 """.
 
 -include_lib("eunit/include/eunit.hrl").
@@ -16,7 +16,7 @@ sbom_basic_test() ->
     Opts = #{app_name => ~"myapp", app_version => ~"1.0.0"},
     {ok, SbomJson} = ocibuild_sbom:generate(Deps, Opts),
     Sbom = ocibuild_json:decode(SbomJson),
-    ?assertEqual(~"SPDX-2.2", maps:get(~"spdxVersion", Sbom)),
+    ?assertEqual(~"SPDX-2.3", maps:get(~"spdxVersion", Sbom)),
     ?assertEqual(~"SPDXRef-DOCUMENT", maps:get(~"SPDXID", Sbom)),
     ?assertEqual(~"CC0-1.0", maps:get(~"dataLicense", Sbom)),
     ?assertEqual(~"myapp-1.0.0", maps:get(~"name", Sbom)).
@@ -221,11 +221,11 @@ sbom_referrer_manifest_test() ->
     ?assertEqual(SubjectSize, maps:get(~"size", Subject)).
 
 %%%===================================================================
-%%% SPDX 2.2 mandatory package fields
+%%% SPDX 2.3 mandatory package fields
 %%%===================================================================
 
 sbom_mandatory_package_fields_test() ->
-    %% SPDX 2.2 requires licenseConcluded, licenseDeclared and copyrightText
+    %% SPDX requires licenseConcluded, licenseDeclared and copyrightText
     %% on every package, even when filesAnalyzed is false.
     Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
     Opts = #{
