@@ -255,9 +255,10 @@ build_scratch_image_test() ->
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
     ?assertEqual(
-        [~"/app/bin/myapp", ~"foreground"],
+        [~"/app/bin/myapp"],
         maps:get(~"Entrypoint", InnerConfig)
     ),
+    ?assertEqual([~"foreground"], maps:get(~"Cmd", InnerConfig)),
     ?assertEqual(~"/app", maps:get(~"WorkingDir", InnerConfig)).
 
 build_with_env_test() ->
@@ -508,9 +509,10 @@ build_image_with_custom_cmd_test() ->
     InnerConfig = maps:get(~"config", Config),
     %% Should use custom cmd "start" instead of default "foreground"
     ?assertEqual(
-        [~"/app/bin/myapp", ~"start"],
+        [~"/app/bin/myapp"],
         maps:get(~"Entrypoint", InnerConfig)
-    ).
+    ),
+    ?assertEqual([~"start"], maps:get(~"Cmd", InnerConfig)).
 
 %%%===================================================================
 %%% chunk_size validation tests

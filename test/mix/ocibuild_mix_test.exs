@@ -54,7 +54,8 @@ defmodule OcibuildMixTest do
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
-      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp", "foreground"]
+      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp"]
+      assert :maps.get("Cmd", inner_config) == ["foreground"]
       assert :maps.get("WorkingDir", inner_config) == "/app"
     end
 
@@ -186,8 +187,9 @@ defmodule OcibuildMixTest do
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
-      # Entrypoint should include the custom cmd
-      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp", "daemon"]
+      # Custom cmd goes to Cmd
+      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp"]
+      assert :maps.get("Cmd", inner_config) == ["daemon"]
     end
 
     test "builds image with start cmd (Elixir default)" do
@@ -204,7 +206,8 @@ defmodule OcibuildMixTest do
 
       config = :maps.get(:config, image)
       inner_config = :maps.get("config", config)
-      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp", "start"]
+      assert :maps.get("Entrypoint", inner_config) == ["/app/bin/myapp"]
+      assert :maps.get("Cmd", inner_config) == ["start"]
     end
 
     test "builds image with valid chunk_size" do
