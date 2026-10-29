@@ -166,4 +166,69 @@ defmodule Ocibuild.LockTest do
       assert plug_crypto.version == "2.0.0"
     end
   end
+  describe "get_dependencies/2 (dependency graph)" do
+    setup do
+      tmp_dir = TestHelpers.make_temp_dir("lock_graph_test")
+      on_exit(fn -> TestHelpers.cleanup_temp_dir(tmp_dir) end)
+      %{lock_path: Path.join(tmp_dir, "mix.lock")}
+    end
+
+    test "reports each package's required deps and the direct flag", %{lock_path: lock_path} do
+      File.write!(lock_path, """
+      %{
+        "plug_cowboy": {:hex, :plug_cowboy, "2.7.0", "h1", [:mix], [{:cowboy, "~> 2.7", [hex: :cowboy, repo: "hexpm", optional: false]}, {:plug, "~> 1.14", [hex: :plug, repo: "hexpm", optional: false]}], "hexpm", "h2"},
+        "cowboy": {:hex, :cowboy, "2.10.0", "h1", [:rebar3], [{:ranch, "1.8.0", [hex: :ranch, repo: "hexpm", optional: false]}], "hexpm"},
+        "ranch": {:hex, :ranch, "1.8.0", "h1", [:rebar3], [], "hexpm", "h2"}
+      }
+      """)
+
+      deps = Lock.get_dependencies(lock_path, ["plug_cowboy"])
+      by_name = Map.new(deps, &{&1.name, &1})
+
+      assert Enum.sort(by_name["plug_cowboy"].deps) == ["cowboy", "plug"]
+      assert by_name["plug_cowboy"].direct
+      assert by_name["cowboy"].deps == ["ranch"]
+      refute by_name["cowboy"].direct
+      assert by_name["ranch"].deps == []
+    end
+
+    test "ignores optional deps", %{lock_path: lock_path} do
+      File.write!(lock_path, """
+      %{
+        "plug": {:hex, :plug, "1.14.0", "h1", [:mix], [{:mime, "~> 2.0", [hex: :mime, repo: "hexpm", optional: false]}, {:telemetry, "~> 1.0", [hex: :telemetry, repo: "hexpm", optional: true]}], "hexpm", "h2"}
+      }
+      """)
+
+      [plug] = Lock.get_dependencies(lock_path, ["plug"])
+      assert plug.deps == ["mime"]
+    end
+
+    test "git and unknown entries have no deps key", %{lock_path: lock_path} do
+      File.write!(lock_path, """
+      %{
+        "my_dep": {:git, "https://github.com/example/my_dep.git", "abc123", []},
+        "local_dep": {:path, "../local", []}
+      }
+      """)
+
+      deps = Lock.get_dependencies(lock_path, ["my_dep"])
+      git = Enum.find(deps, &(&1.name == "my_dep"))
+      local = Enum.find(deps, &(&1.name == "local_dep"))
+
+      refute Map.has_key?(git, :deps)
+      assert git.direct
+      refute Map.has_key?(local, :deps)
+      refute local.direct
+    end
+
+    test "omits the direct flag when the direct deps are unknown", %{lock_path: lock_path} do
+      File.write!(lock_path, """
+      %{"jason": {:hex, :jason, "1.4.0", "h1", [:mix], [], "hexpm", "h2"}}
+      """)
+
+      [jason] = Lock.get_dependencies(lock_path, nil)
+      assert jason.deps == []
+      refute Map.has_key?(jason, :direct)
+    end
+  end
 end

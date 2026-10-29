@@ -166,6 +166,26 @@ get_dependencies_with_atom_keys_test() ->
     ?assertEqual(~"1.7.0", maps:get(version, Phoenix)),
     ?assertEqual(~"hex", maps:get(source, Phoenix)).
 
+get_dependencies_keeps_graph_keys_test() ->
+    State = #{
+        dependencies => [
+            #{
+                name => ~"plug_cowboy",
+                version => ~"2.7.0",
+                source => ~"hex",
+                deps => [~"cowboy", ~"plug"],
+                direct => true
+            },
+            %% No graph data (e.g. a git dep): keys stay absent, not defaulted
+            #{name => ~"gitdep", version => ~"abc", source => ~"https://example.com/g.git"}
+        ]
+    },
+    {ok, [PlugCowboy, GitDep]} = ocibuild_mix:get_dependencies(State),
+    ?assertEqual([~"cowboy", ~"plug"], maps:get(deps, PlugCowboy)),
+    ?assertEqual(true, maps:get(direct, PlugCowboy)),
+    ?assertNot(maps:is_key(deps, GitDep)),
+    ?assertNot(maps:is_key(direct, GitDep)).
+
 get_dependencies_undefined_test() ->
     State = #{},
     ?assertEqual({error, not_available}, ocibuild_mix:get_dependencies(State)).
