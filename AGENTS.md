@@ -1,6 +1,7 @@
 # ocibuild Development Guide
 
 This document provides a comprehensive overview of the `ocibuild` project for continuing development.
+It is the single guidance file for contributors and AI coding agents (Claude Code and others).
 
 ## Project Overview
 
@@ -49,8 +50,40 @@ Legend: ✅ Implemented | ⏳ Planned (P# = Priority) | ❌ Not implemented
 
 ### Code style
 
-- Always prefer using `maybe` instead of deeply nested `case...of`
-- Prefer Markdown style comments instead of EDoc (deprecated).
+- Always use the `~` sigil for binary literals.
+- Prefer Markdown style docs and docstrings instead of EDoc (deprecated).
+- Always prefer using `maybe` instead of deeply nested `case...of` for sequential fallible operations.
+
+#### Maybe expressions and eqWalizer
+
+eqWalizer has [limited support for `maybe` expressions](https://github.com/WhatsApp/eqwalizer/issues/55) and produces false-positive type errors. When writing functions that use `maybe`:
+
+1. Add `-feature(maybe_expr, enable).` at the top of the module (after `-module`).
+2. Add `-eqwalizer({nowarn_function, function_name/arity}).` for each function using `maybe`.
+
+```erlang
+-module(mymodule).
+-feature(maybe_expr, enable).
+
+%% eqWalizer has limited support for maybe expressions
+-eqwalizer({nowarn_function, my_function/1}).
+
+-spec my_function(map()) -> {ok, term()} | {error, term()}.
+my_function(Input) ->
+    maybe
+        {ok, A} ?= step_one(Input),
+        {ok, B} ?= step_two(A),
+        {ok, B}
+    end.
+```
+
+See `src/oci/ocibuild_layout.erl` for examples of this pattern.
+
+### Current Status
+
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting, chunked uploads for large layers, multi-platform images (OCI image index), reproducible builds (SOURCE_DATE_EPOCH), automatic VCS annotations (Git, GitHub Actions, GitLab CI, Azure DevOps), SBOM generation (SPDX 2.3, embedded in image layer and attached via OCI referrers API), zstd compression (automatic on OTP 28+, configurable via `--compression` flag).
+
+**Not Implemented:** Resumable uploads, keyless signing (Sigstore/Fulcio).
 
 ---
 
@@ -181,6 +214,16 @@ ocibuild_http_sup (one_for_one)
 - **Process dict for profile** - Workers set `ocibuild_httpc_profile` in process dict
 - **Fail-fast errors** - One worker failure terminates all workers and returns error
 - **Clean VM shutdown** - Fixes CI timeout issues where httpc processes blocked VM exit
+
+### Core Design Decisions
+
+1. **In-memory TAR**: `ocibuild_tar.erl` implements POSIX ustar format manually because `:erl_tar` requires file I/O.
+2. **Two Digests per Layer**: OCI requires `digest` (compressed) for manifests and `diff_id` (uncompressed) for config.
+3. **OTP 27+ Target**: Uses native `json` module with fallback for OTP 25+.
+4. **Zero Dependencies**: Only OTP stdlib (crypto, zlib, inets, ssl).
+5. **Layer Caching**: Base image layers cached in `_build/ocibuild_cache/` for faster rebuilds.
+6. **Adapter Pattern**: Build system integrations implement `ocibuild_adapter` behaviour to onboard new BEAM build systems (Gleam, LFE, etc.) with minimal effort.
+7. **OTP-supervised HTTP**: Each HTTP worker owns its own httpc profile for isolation; clean shutdown via OTP supervision cascade.
 
 ---
 
@@ -566,6 +609,152 @@ Caches downloaded base image layers locally to avoid re-downloading on every bui
 
 ---
 
+## CLI Reference
+
+Both `rebar3 ocibuild` and `mix ocibuild` support:
+
+| Option         | Short | Description                                       |
+|----------------|-------|---------------------------------------------------|
+| `--tag`        | `-t`  | Image tag (repeatable), e.g., `-t myapp:1.0.0 -t myapp:latest` |
+| `--output`     | `-o`  | Output tarball path (default: `<tag>.tar.gz`)     |
+| `--push`       | `-p`  | Push to registry, e.g., `ghcr.io/myorg`           |
+| `--annotation` | `-a`  | Add manifest annotation `KEY=VALUE` (repeatable)  |
+| `--label`      | `-l`  | Add image label `KEY=VALUE` (repeatable)          |
+| `--platform`   | `-P`  | Target platforms, e.g., `linux/amd64,linux/arm64` |
+| `--base`       |       | Override base image                               |
+| `--release`    |       | Release name (if multiple configured)             |
+| `--cmd`        | `-c`  | Release start command (Elixir only)               |
+| `--uid`        |       | User ID to run as (default: 65534 for nobody)     |
+| `--chunk-size` |       | Chunk size in MB for uploads (default: 5)         |
+| `--no-vcs-annotations` | | Disable automatic VCS annotations            |
+| `--sbom`       |       | Export SBOM to file path (SBOM always in image)   |
+| `--sign-key`   |       | Path to cosign private key for image signing      |
+| `--compression`|       | Layer compression: `gzip`, `zstd`, or `auto`      |
+
+### Multiple Tags
+
+Push the same image with multiple tags in a single command:
+
+```bash
+rebar3 ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
+mix ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
+```
+
+This is efficient: the first tag does a full upload, additional tags just reference the same manifest.
+
+### Push Existing Tarball
+
+You can push a pre-built OCI tarball without rebuilding by providing a tarball path after `--push`:
+
+```bash
+# Push existing tarball (uses embedded tag)
+rebar3 ocibuild --push ghcr.io/myorg myimage.tar.gz
+mix ocibuild --push ghcr.io/myorg myimage.tar.gz
+
+# Push with multiple tag overrides
+rebar3 ocibuild --push ghcr.io/myorg -t myapp:2.0.0 -t myapp:latest myimage.tar.gz
+```
+
+This is useful for CI/CD pipelines where build and push are separate steps.
+
+### Output Examples
+
+**Save only** (no `--push`):
+```
+Building OCI image: myapp
+Using release: myapp at _build/prod/rel/myapp
+Collected 142 files from release
+Saving image to myapp-1.0.0.tar.gz
+  Layer 1/1 cached (28.7 MB)
+Tagged: myapp:1.0.0
+Tagged: myapp:latest
+Digest: sha256:50efd4f1995...
+
+To load the image:
+  podman load < myapp-1.0.0.tar.gz
+```
+
+**Push to registry**:
+```
+Building OCI image: myapp
+Using release: myapp at _build/prod/rel/myapp
+Collected 142 files from release
+Pushing: ghcr.io/myorg/myapp:1.0.0
+  Layer 1/3 (erts, amd64)  : [==============================] 100%  45.2 MB
+  Layer 2/3 (deps, amd64)  : [==============================] 100%  12.8 MB
+  Layer 3/3 (app, amd64)   : [==============================] 100%   2.0 MB
+Tagged: ghcr.io/myorg/myapp:1.0.0
+Tagged: ghcr.io/myorg/myapp:latest
+Digest: sha256:abc123def456...
+```
+
+The final `Digest:` line is suitable for CI/CD pipelines to capture the image digest.
+
+Whenever updating the CLI, remember to update `src/adapters/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` to support the new functionality.
+
+---
+
+## Configuration
+
+### rebar.config (Erlang)
+
+```erlang
+{ocibuild, [
+    {base_image, "debian:stable-slim"},
+    {tag, "myapp:1.0.0"},                   % String or list; or use CLI -t flags
+    {workdir, "/app"},
+    {env, #{<<"LANG">> => <<"C.UTF-8">>}},
+    {expose, [8080]},
+    {labels, #{<<"maintainer">> => <<"team@example.com">>}},
+    {annotations, #{                        % Custom manifest annotations
+        <<"org.opencontainers.image.description">> => <<"My application">>,
+        <<"com.example.team">> => <<"platform">>
+    }},
+    {vcs_annotations, true},   % Automatic VCS annotations (default: true)
+    {sign_key, "cosign.key"},  % Optional: path to cosign private key
+    {compression, auto}        % gzip, zstd, or auto (default: auto)
+]}.
+```
+
+### mix.exs (Elixir)
+
+```elixir
+def project do
+  [
+    ocibuild: [
+      base_image: "debian:stable-slim",
+      env: %{"LANG" => "C.UTF-8"},
+      expose: [8080],
+      annotations: %{          # Custom manifest annotations
+        "org.opencontainers.image.description" => "My application",
+        "com.example.team" => "platform"
+      },
+      vcs_annotations: true,   # Automatic VCS annotations (default: true)
+      sign_key: "cosign.key",  # Optional: path to cosign private key
+      compression: :auto       # :gzip, :zstd, or :auto (default: :auto)
+    ]
+  ]
+end
+```
+
+### Automatic Release Step (Elixir)
+
+```elixir
+releases: [
+  myapp: [
+    steps: [:assemble, &Ocibuild.MixRelease.build_image/1]
+  ]
+]
+```
+
+### Authentication
+
+Environment variables:
+- Push: `OCIBUILD_PUSH_USERNAME`/`OCIBUILD_PUSH_PASSWORD` or `OCIBUILD_PUSH_TOKEN`
+- Pull (optional): `OCIBUILD_PULL_USERNAME`/`OCIBUILD_PULL_PASSWORD` or `OCIBUILD_PULL_TOKEN`
+
+---
+
 ## Testing
 
 ### Running Tests
@@ -579,6 +768,9 @@ mix test
 
 # Single test
 rebar3 eunit --test=ocibuild_tests:test_name_test
+
+# Single Elixir test by line
+mix test test/mix/ocibuild_mix_test.exs:42
 
 # Run tests for a specific module
 rebar3 eunit --module=ocibuild_mix_tests
@@ -1303,12 +1495,53 @@ Note: `User` defaults to `"65534"` (nobody) for non-root security. Override with
 
 ## Development Workflow
 
+### Build and Format
+
+```bash
+# With rebar3 (Erlang)
+rebar3 compile
+
+# With mix (Elixir)
+mix compile
+
+# Format with erlfmt
+rebar3 fmt -w
+```
+
+### Files to Read First
+
+1. `src/ocibuild.erl` - Public API
+2. `src/adapters/ocibuild_adapter.erl` - Adapter behaviour definition
+3. `src/adapters/ocibuild_release.erl` - Shared release handling functions
+4. `src/http/ocibuild_http.erl` - HTTP supervision facade
+5. `src/oci/ocibuild_tar.erl` - Core tar implementation
+6. `test/ocibuild_tests.erl` - Usage examples
+
 ### Adding a New Feature
 
 1. Write tests first in `test/ocibuild_tests.erl`
 2. Implement in appropriate module
 3. Update public API in `ocibuild.erl` if needed
-4. Update this document
+4. Update this document and `README.md`. This applies to any important new feature or major change to existing functionality.
+
+### Add a New Image Configuration Option
+
+1. Add export to `ocibuild.erl`
+2. Implement function using `set_config_field/3`
+3. Add test to `ocibuild_tests.erl`
+
+### Implement a New Build System Adapter
+
+1. Create a new module implementing `ocibuild_adapter` behaviour
+2. Implement required callbacks:
+   - `get_config/1` - Extract configuration from build system state
+   - `find_release/2` - Locate the release directory
+   - `info/2`, `console/2`, `error/2` - Logging functions
+3. Use `ocibuild_release` functions for shared functionality:
+   - `get_pull_auth/0`, `get_push_auth/0` - Authentication
+   - `make_progress_callback/0`, `clear_progress_line/0` - Progress display
+   - `save_image/3`, `push_image/5` - Output operations
+   - `parse_tag/1` - Utilities
 
 ### Debugging Tips
 
@@ -1324,6 +1557,9 @@ io:format("Digest: ~s~n", [maps:get(digest, Layer)]).
 Tar = ocibuild_tar:create([{~"/test.txt", ~"content", 8#644}]),
 file:write_file("/tmp/test.tar", Tar).
 % Then: tar -tvf /tmp/test.tar
+
+% Test registry integration (interactive)
+{ok, Image} = ocibuild:from(<<"alpine:3.19">>).
 ```
 
 ### Publishing to Hex.pm
