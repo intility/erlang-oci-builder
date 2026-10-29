@@ -105,7 +105,29 @@ error(Format, Args) ->
     annotations => #{binary() => binary()}
 }.
 
--export_type([config/0]).
+-doc """
+A dependency of the release, as reported by an adapter's `get_dependencies/1`.
+
+Required keys: `name`, `version` and `source` (`hex`/`hexpm` or a git URL).
+
+Optional keys describe the dependency graph for the SBOM:
+- `deps` - names of the packages this package depends on (from the lock file)
+- `direct` - `true` if the project declares the package itself, `false` if it is
+  only pulled in transitively
+
+The app is listed as depending on every package that is `direct` or that no other
+package depends on. Adapters that do not know the graph can leave both keys out, in
+which case every dependency is listed as a direct dependency of the app.
+""".
+-type dependency() :: #{
+    name := binary(),
+    version := binary(),
+    source := binary(),
+    deps => [binary()],
+    direct => boolean()
+}.
+
+-export_type([config/0, dependency/0]).
 
 %%%===================================================================
 %%% Behaviour Callbacks
@@ -173,14 +195,13 @@ is disabled and all files go into a single layer (backward compatible behavior).
 Returns a list of dependency maps with name, version, and source.
 This data is used for:
 1. Smart layer classification (deps layer vs app layer)
-2. Future SBOM generation (P6)
+2. SBOM generation (package list and dependency graph)
 
 For rebar3: Parse `rebar.lock` file.
 For Mix: Parse `mix.lock` file.
 """.
 -callback get_dependencies(State :: term()) ->
-    {ok, [#{name := binary(), version := binary(), source := binary()}]}
-    | {error, term()}.
+    {ok, [dependency()]} | {error, term()}.
 
 %% Mark optional callbacks - adapters don't have to implement these
 -optional_callbacks([get_app_version/1, get_dependencies/1]).
