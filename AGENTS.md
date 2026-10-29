@@ -1050,7 +1050,7 @@ Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko a
 
 **Module:** `ocibuild_sbom.erl`
 
-**Format:** SPDX 2.3 - no CycloneDX, keep it simple.
+**Format:** SPDX 2.3 (JSON).
 
 **SBOM Contents:**
 - Application name + version
