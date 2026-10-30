@@ -159,6 +159,35 @@ parse_rebar_lock_checksum_test() ->
     %% only Hex packages get a checksum, whatever the hash section says
     ?assertNot(maps:is_key(checksum, maps:get(~"gitdep", By))).
 
+parse_rebar_lock_licenses_test() ->
+    LockContent = <<
+        "{\"1.2.0\",[{<<\"ranch\">>,{pkg,<<\"ranch\">>,<<\"1.8.0\">>},1},"
+        "{<<\"plain\">>,{pkg,<<\"plain\">>,<<\"1.0.0\">>},0},"
+        "{<<\"missing\">>,{pkg,<<\"missing\">>,<<\"1.0.0\">>},0},"
+        "{<<\"gitdep\">>,{git,\"https://example.com/g.git\",{ref,\"abc\"}},0}]}.\n"
+    >>,
+    TmpFile = make_temp_lock_file("rebar_licenses", LockContent),
+    DepsDir = filename:join(filename:dirname(TmpFile), "lib"),
+    ok = filelib:ensure_path(filename:join(DepsDir, "ranch")),
+    ok = filelib:ensure_path(filename:join(DepsDir, "plain")),
+    ok = file:write_file(
+        filename:join([DepsDir, "ranch", "hex_metadata.config"]),
+        "{<<\"name\">>,<<\"ranch\">>}.\n{<<\"licenses\">>,[<<\"ISC\">>]}.\n"
+    ),
+    ok = file:write_file(
+        filename:join([DepsDir, "plain", "hex_metadata.config"]), "{<<\"name\">>,<<\"plain\">>}.\n"
+    ),
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile, DepsDir),
+    {ok, NoDir} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    By = maps:from_list([{maps:get(name, D), D} || D <- Deps]),
+    ?assertEqual([~"ISC"], maps:get(licenses, maps:get(~"ranch", By))),
+    ?assertNot(maps:is_key(licenses, maps:get(~"plain", By))),
+    ?assertNot(maps:is_key(licenses, maps:get(~"missing", By))),
+    ?assertNot(maps:is_key(licenses, maps:get(~"gitdep", By))),
+    %% without a deps dir nothing is read
+    ?assertNot(lists:any(fun(D) -> maps:is_key(licenses, D) end, NoDir)).
+
 parse_rebar_lock_old_format_test() ->
     %% Old format: just a list without version tuple
     LockContent = <<
