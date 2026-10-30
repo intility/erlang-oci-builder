@@ -1,6 +1,8 @@
 %%% @doc
-%%% SPDX license identifiers (generated from the SPDX license list via license-expression 30.4.4),
-%%% keyed by the lower-cased id so lookups are case-insensitive. Exceptions are excluded.
+%%% Lookup table from a license string (lower-cased, so matching is case-insensitive) to its
+%%% SPDX id. It holds the SPDX license list (generated via license-expression 30.4.4,
+%%% exceptions excluded), plus spellings seen in package metadata that are not SPDX ids and the
+%%% deprecated SPDX ids mapped to their replacement. Only add an alias when it is unambiguous.
 %%% @end
 -module(ocibuild_spdx_licenses).
 
@@ -13,6 +15,25 @@ lookup(LowerId) ->
 -spec ids() -> #{binary() => binary()}.
 ids() ->
     #{
+        %% aliases
+        ~"mit license" => ~"MIT",
+        ~"apache 2.0" => ~"Apache-2.0",
+        ~"apache2.0" => ~"Apache-2.0",
+        ~"apache license 2.0" => ~"Apache-2.0",
+        ~"apache 2" => ~"Apache-2.0",
+        ~"bsd 2-clause" => ~"BSD-2-Clause",
+        ~"bsd 3-clause" => ~"BSD-3-Clause",
+        ~"gpl-2.0" => ~"GPL-2.0-only",
+        ~"gpl-2.0+" => ~"GPL-2.0-or-later",
+        ~"gpl-3.0" => ~"GPL-3.0-only",
+        ~"gpl-3.0+" => ~"GPL-3.0-or-later",
+        ~"lgpl-2.1" => ~"LGPL-2.1-only",
+        ~"lgpl-2.1+" => ~"LGPL-2.1-or-later",
+        ~"lgpl-3.0" => ~"LGPL-3.0-only",
+        ~"lgpl-3.0+" => ~"LGPL-3.0-or-later",
+        ~"agpl-3.0" => ~"AGPL-3.0-only",
+        ~"agpl-3.0+" => ~"AGPL-3.0-or-later",
+        %% SPDX license list
         ~"0bsd" => ~"0BSD",
         ~"3d-slicer-1.0" => ~"3D-Slicer-1.0",
         ~"aal" => ~"AAL",

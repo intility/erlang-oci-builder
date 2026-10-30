@@ -365,44 +365,14 @@ build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
 %%% Licenses
 %%%===================================================================
 
-%% Spellings seen in package metadata that are not SPDX ids, plus the deprecated SPDX ids
-%% (mapped to the replacement SPDX gives for them), keyed by the lower-cased string. Exact
-%% SPDX ids are looked up in ocibuild_spdx_licenses. Anything else becomes a LicenseRef (see
-%% normalize_license/1), so a spelling is only added when it is unambiguous.
--define(LICENSE_ALIASES, #{
-    ~"mit license" => ~"MIT",
-    ~"apache 2.0" => ~"Apache-2.0",
-    ~"apache2.0" => ~"Apache-2.0",
-    ~"apache license 2.0" => ~"Apache-2.0",
-    ~"apache 2" => ~"Apache-2.0",
-    ~"bsd 2-clause" => ~"BSD-2-Clause",
-    ~"bsd 3-clause" => ~"BSD-3-Clause",
-    ~"gpl-2.0" => ~"GPL-2.0-only",
-    ~"gpl-2.0+" => ~"GPL-2.0-or-later",
-    ~"gpl-3.0" => ~"GPL-3.0-only",
-    ~"gpl-3.0+" => ~"GPL-3.0-or-later",
-    ~"lgpl-2.1" => ~"LGPL-2.1-only",
-    ~"lgpl-2.1+" => ~"LGPL-2.1-or-later",
-    ~"lgpl-3.0" => ~"LGPL-3.0-only",
-    ~"lgpl-3.0+" => ~"LGPL-3.0-or-later",
-    ~"agpl-3.0" => ~"AGPL-3.0-only",
-    ~"agpl-3.0+" => ~"AGPL-3.0-or-later"
-}).
-
 %% @private The SPDX id for a license string from package metadata, or a LicenseRef (with the
 %% original text kept) when it is not a recognised SPDX id.
 -spec normalize_license(binary()) -> {spdx, binary()} | {ref, binary(), binary()}.
 normalize_license(Raw) ->
     Trimmed = string:trim(Raw),
-    Lower = string:lowercase(Trimmed),
-    case maps:find(Lower, ?LICENSE_ALIASES) of
-        {ok, Id} ->
-            {spdx, Id};
-        error ->
-            case ocibuild_spdx_licenses:lookup(Lower) of
-                {ok, Id} -> {spdx, Id};
-                error -> {ref, <<"LicenseRef-", (sanitize_spdx_id(Trimmed))/binary>>, Trimmed}
-            end
+    case ocibuild_spdx_licenses:lookup(string:lowercase(Trimmed)) of
+        {ok, Id} -> {spdx, Id};
+        error -> {ref, <<"LicenseRef-", (sanitize_spdx_id(Trimmed))/binary>>, Trimmed}
     end.
 
 %% @private License strings of a dependency, ignoring blanks.
