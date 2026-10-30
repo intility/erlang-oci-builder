@@ -325,21 +325,42 @@ build_dependency_package(#{name := Name, version := Version} = Dep) ->
         ]
     }.
 
-%% @private Build download location URL from dependency
+%% @private Build the SPDX download location of a dependency: the Hex tarball, or
+%% `git+<scheme>://host/path.git@<ref>` for git dependencies.
 -spec build_download_location(dependency()) -> binary().
 build_download_location(#{name := Name, version := Version, source := Source}) ->
     case Source of
         S when S =:= ~"hex"; S =:= ~"hexpm" ->
             %% Hex packages (rebar3 uses "hex", Mix uses "hexpm")
-            <<"https://hex.pm/packages/", Name/binary, "/", Version/binary>>;
+            <<"https://repo.hex.pm/tarballs/", Name/binary, "-", Version/binary, ".tar">>;
         Url when is_binary(Url) ->
-            %% Git URL or other source
-            Url;
+            git_download_location(Url, Version);
         _ ->
             ~"NOASSERTION"
     end;
 build_download_location(_) ->
     ~"NOASSERTION".
+
+%% @private Convert a git URL and ref to an SPDX `git+` download location.
+%% Anything that is not a recognisable git URL (e.g. a path dep) is NOASSERTION.
+-spec git_download_location(binary(), binary()) -> binary().
+git_download_location(Url, Ref) ->
+    case parse_git_url(Url) of
+        {ok, {Host, Repo}} ->
+            Scheme =
+                case Url of
+                    <<"http://", _/binary>> -> ~"git+http://";
+                    <<"https://", _/binary>> -> ~"git+https://";
+                    _ -> ~"git+ssh://git@"
+                end,
+            Location = <<Scheme/binary, Host/binary, "/", Repo/binary, ".git">>,
+            case Ref of
+                ~"unknown" -> Location;
+                _ -> <<Location/binary, "@", Ref/binary>>
+            end;
+        error ->
+            ~"NOASSERTION"
+    end.
 
 %% @private Build ERTS package
 -spec build_erts_package(binary(), binary() | undefined) -> map().
