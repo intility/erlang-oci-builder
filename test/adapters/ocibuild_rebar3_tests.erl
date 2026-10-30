@@ -140,6 +140,25 @@ parse_rebar_lock_direct_flag_test() ->
         Direct
     ).
 
+parse_rebar_lock_checksum_test() ->
+    %% pkg_hash_ext holds the SHA-256 of the Hex tarball (upper case in the lock file)
+    LockContent = <<
+        "{\"1.2.0\",[{<<\"ranch\">>,{pkg,<<\"ranch\">>,<<\"1.8.0\">>},1},"
+        "{<<\"nosum\">>,{pkg,<<\"nosum\">>,<<\"1.0.0\">>},0},"
+        "{<<\"gitdep\">>,{git,\"https://example.com/g.git\",{ref,\"abc\"}},0}]}.\n"
+        "[{pkg_hash,[{<<\"ranch\">>,<<\"AAAA\">>}]},"
+        "{pkg_hash_ext,[{<<\"ranch\">>,<<\"49FBCFD3\">>},{<<\"gitdep\">>,<<\"BEEF\">>}]}].\n"
+    >>,
+    TmpFile = make_temp_lock_file("rebar_checksum", LockContent),
+    {ok, Deps} = ocibuild_rebar3:parse_rebar_lock(TmpFile),
+    file:delete(TmpFile),
+    cleanup_temp_dir(filename:dirname(TmpFile)),
+    By = maps:from_list([{maps:get(name, D), D} || D <- Deps]),
+    ?assertEqual(~"49fbcfd3", maps:get(checksum, maps:get(~"ranch", By))),
+    ?assertNot(maps:is_key(checksum, maps:get(~"nosum", By))),
+    %% only Hex packages get a checksum, whatever the hash section says
+    ?assertNot(maps:is_key(checksum, maps:get(~"gitdep", By))).
+
 parse_rebar_lock_old_format_test() ->
     %% Old format: just a list without version tuple
     LockContent = <<
