@@ -249,6 +249,55 @@ app_supplier_test_() ->
     ].
 
 %%%===================================================================
+%%% SPDX ID Collision Tests
+%%%===================================================================
+
+id_collisions_test() ->
+    %% foo_bar and foo-bar sanitize to the same ID; erts and base_image hit reserved IDs;
+    %% "myapp" is the app's own ID; "dup" is listed twice.
+    Dep = fun(N) -> #{name => N, version => ~"1.0.0", source => ~"hex"} end,
+    Names = [~"foo_bar", ~"foo-bar", ~"erts", ~"base_image", ~"myapp", ~"dup", ~"dup"],
+    Opts = #{
+        app_name => ~"myapp",
+        app_version => ~"1.0.0",
+        erts_version => ~"14.2",
+        base_image => {~"ghcr.io", ~"myorg/base", ~"v1"}
+    },
+    {ok, Json} = ocibuild_sbom:generate([Dep(N) || N <- Names], Opts),
+    Sbom = ocibuild_json:decode(Json),
+    Pkgs = maps:get(~"packages", Sbom),
+    Ids = [maps:get(~"SPDXID", P) || P <- Pkgs],
+    %% every ID is unique, and the repeated "dup" produced one package
+    ?assertEqual(length(Ids), length(lists:uniq(Ids))),
+    ?assertEqual(1, length([P || P <- Pkgs, maps:get(~"name", P) =:= ~"dup"])),
+    %% the real ERTS package keeps the reserved ID
+    [Erts] = [P || P <- Pkgs, maps:get(~"SPDXID", P) =:= ~"SPDXRef-Package-erts"],
+    ?assertEqual(~"erts", maps:get(~"name", Erts)),
+    ?assertEqual(~"14.2", maps:get(~"versionInfo", Erts)),
+    %% every relationship refers to a package in the document
+    Known = sets:from_list([~"SPDXRef-DOCUMENT" | Ids]),
+    lists:foreach(
+        fun(R) ->
+            ?assert(sets:is_element(maps:get(~"spdxElementId", R), Known)),
+            ?assert(sets:is_element(maps:get(~"relatedSpdxElement", R), Known))
+        end,
+        maps:get(~"relationships", Sbom)
+    ).
+
+id_collisions_are_deterministic_test() ->
+    Deps = [#{name => N, version => ~"1", source => ~"hex"} || N <- [~"foo_bar", ~"foo-bar"]],
+    Opts = #{app_name => ~"myapp", app_version => ~"1.0.0"},
+    Ids = fun() ->
+        {ok, Json} = ocibuild_sbom:generate(Deps, Opts),
+        [maps:get(~"SPDXID", P) || P <- maps:get(~"packages", ocibuild_json:decode(Json))]
+    end,
+    ?assertEqual(
+        [~"SPDXRef-Package-myapp", ~"SPDXRef-Package-foo-bar", ~"SPDXRef-Package-foo-bar-2"],
+        Ids()
+    ),
+    ?assertEqual(Ids(), Ids()).
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 

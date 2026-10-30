@@ -177,7 +177,20 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
 
     %% Build packages list
     MainPackage = build_package(AppName, VersionStr, Opts),
-    DepPackages = [build_dependency_package(D) || D <- Dependencies],
+    SafeAppName = sanitize_spdx_id(AppName),
+    Deps = uniq_by_name(Dependencies),
+    DepIds = assign_dep_ids(
+        [N || #{name := N} <- Deps],
+        [
+            <<"SPDXRef-Package-", SafeAppName/binary>>,
+            ~"SPDXRef-Package-erts",
+            ~"SPDXRef-Package-base-image"
+        ]
+    ),
+    DepPackages = [
+        build_dependency_package(D, maps:get(Name, DepIds))
+     || #{name := Name} = D <- Deps
+    ],
 
     %% Add ERTS package if version provided
     ErtsPackages =
@@ -203,8 +216,7 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
     ],
 
     %% Build relationships
-    SafeAppName = sanitize_spdx_id(AppName),
-    Relationships = build_relationships(SafeAppName, Dependencies, AllPackages),
+    Relationships = build_relationships(SafeAppName, Deps, DepIds, AllPackages),
 
     %% Build the SPDX document
     Sbom = #{
@@ -319,13 +331,12 @@ app_supplier(_) ->
     ~"NOASSERTION".
 
 %% @private Build a dependency package
--spec build_dependency_package(dependency()) -> map().
-build_dependency_package(#{name := Name, version := Version} = Dep) ->
+-spec build_dependency_package(dependency(), binary()) -> map().
+build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
     PURL = to_purl(Dep),
     DownloadLocation = build_download_location(Dep),
-    SafeName = sanitize_spdx_id(Name),
     #{
-        ~"SPDXID" => <<"SPDXRef-Package-", SafeName/binary>>,
+        ~"SPDXID" => SpdxId,
         ~"name" => Name,
         ~"versionInfo" => Version,
         ~"downloadLocation" => DownloadLocation,
@@ -460,8 +471,9 @@ build_base_image_package({Registry, Repo, Tag}, Digest) ->
 %% @private Build SPDX relationships
 %% The app depends on its direct dependencies; each dependency depends on its own
 %% dependencies. See `ocibuild_adapter:dependency()` for how the graph is described.
--spec build_relationships(binary(), [dependency()], [map()]) -> [map()].
-build_relationships(AppName, Dependencies, Packages) ->
+-spec build_relationships(binary(), [dependency()], #{binary() => binary()}, [map()]) ->
+    [map()].
+build_relationships(AppName, Deps, DepIds, Packages) ->
     AppRef = <<"SPDXRef-Package-", AppName/binary>>,
 
     %% DESCRIBES relationship from document
@@ -471,9 +483,6 @@ build_relationships(AppName, Dependencies, Packages) ->
         ~"relatedSpdxElement" => AppRef
     },
 
-    %% Skip anything that would collide with the main app package, ERTS or base-image
-    Reserved = [AppRef, ~"SPDXRef-Package-erts", ~"SPDXRef-Package-base-image"],
-    Deps = [D || #{name := N} = D <- Dependencies, not lists:member(dep_id(N), Reserved)],
     Known = sets:from_list([maps:get(name, D) || D <- Deps]),
     Roots = root_names(Deps),
 
@@ -486,11 +495,11 @@ build_relationships(AppName, Dependencies, Packages) ->
     end,
 
     %% app -> direct dependencies
-    AppRels = [DependsOn(AppRef, dep_id(N)) || N <- Roots],
+    AppRels = [DependsOn(AppRef, maps:get(N, DepIds)) || N <- Roots],
 
     %% dependency -> its dependencies (unknown names, e.g. optional or not shipped, are skipped)
     DepRels = [
-        DependsOn(dep_id(Name), dep_id(Child))
+        DependsOn(maps:get(Name, DepIds), maps:get(Child, DepIds))
      || #{name := Name} = D <- Deps,
         Child <- lists:uniq(maps:get(deps, D, [])),
         Child =/= Name,
@@ -523,10 +532,51 @@ root_names(Deps) ->
         maps:get(direct, D, false) =:= true orelse not sets:is_element(N, Referenced)
     ].
 
-%% @private SPDX ID for a dependency (same scheme as build_dependency_package/1)
--spec dep_id(binary()) -> binary().
-dep_id(Name) ->
-    <<"SPDXRef-Package-", (sanitize_spdx_id(Name))/binary>>.
+%% @private Keep the first dependency of each name; a repeated name would repeat its SPDX ID.
+-spec uniq_by_name([dependency()]) -> [dependency()].
+uniq_by_name(Dependencies) ->
+    {Kept, _} = lists:foldl(
+        fun(#{name := N} = D, {Acc, Seen}) ->
+            case sets:is_element(N, Seen) of
+                true -> {Acc, Seen};
+                false -> {[D | Acc], sets:add_element(N, Seen)}
+            end
+        end,
+        {[], sets:new()},
+        Dependencies
+    ),
+    lists:reverse(Kept).
+
+%% @private Give every dependency name a unique SPDX ID. Sanitizing maps different
+%% names to the same ID (`foo_bar` and `foo-bar`), and a name can also hit an ID
+%% already taken by the app, ERTS or the base image (`Reserved`). Later claimants get
+%% a numeric suffix, in dependency order, so the result is deterministic.
+-spec assign_dep_ids([binary()], [binary()]) -> #{binary() => binary()}.
+assign_dep_ids(Names, Reserved) ->
+    {Ids, _Used} = lists:foldl(
+        fun(Name, {Acc, Used}) ->
+            Id = unique_id(<<"SPDXRef-Package-", (sanitize_spdx_id(Name))/binary>>, Used),
+            {Acc#{Name => Id}, sets:add_element(Id, Used)}
+        end,
+        {#{}, sets:from_list(Reserved)},
+        Names
+    ),
+    Ids.
+
+-spec unique_id(binary(), sets:set(binary())) -> binary().
+unique_id(Base, Used) ->
+    case sets:is_element(Base, Used) of
+        false -> Base;
+        true -> unique_id(Base, Used, 2)
+    end.
+
+-spec unique_id(binary(), sets:set(binary()), pos_integer()) -> binary().
+unique_id(Base, Used, N) ->
+    Id = <<Base/binary, "-", (integer_to_binary(N))/binary>>,
+    case sets:is_element(Id, Used) of
+        false -> Id;
+        true -> unique_id(Base, Used, N + 1)
+    end.
 
 %% @private Check if a package with the given SPDX ID exists in the packages list
 -spec has_package_id(binary(), [map()]) -> boolean().
