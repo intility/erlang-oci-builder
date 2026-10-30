@@ -78,7 +78,9 @@ Security features:
 -export([
     push_signature_referrer/7,
     filter_shipped_deps/2,
-    add_release_app_deps/2
+    add_release_app_deps/2,
+    add_runtime_apps/3,
+    app_dependency_names/2
 ]).
 -endif.
 
@@ -3097,8 +3099,10 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
 
         %% Generate SBOM
         ShippedDeps = filter_shipped_deps(Dependencies, ReleasePath),
+        WithRuntime = add_runtime_apps(ShippedDeps, ReleasePath, AppName),
         {ok, SbomJson} = ocibuild_sbom:generate(
-            add_release_app_deps(ShippedDeps, ReleasePath), SbomOpts
+            add_release_app_deps(WithRuntime, ReleasePath),
+            SbomOpts#{app_deps => app_dependency_names(ReleasePath, AppName)}
         ),
 
         %% Add SBOM as layer using ocibuild:add_layer to properly update config
@@ -3134,6 +3138,90 @@ filter_shipped_deps(Deps, ReleasePath) ->
             [D || #{name := Name} = D <- Deps, sets:is_element(Name, Shipped)];
         {error, _} ->
             Deps
+    end.
+
+%% @private Elixir's own applications, which ship in every Elixir release.
+-define(ELIXIR_APPS, [~"elixir", ~"eex", ~"ex_unit", ~"iex", ~"logger", ~"mix"]).
+
+%% @private Add the applications in the release's lib/ that are neither lock file deps nor the
+%% app itself: Elixir's own apps and the OTP apps (kernel, stdlib, ssl, ...), so the SBOM
+%% lists everything shipped. An OTP app is a directory that also exists in the OTP install
+%% that built the release. Anything else (e.g. umbrella siblings, path deps) is not
+%% identifiable and is left out.
+-spec add_runtime_apps([map()], file:filename() | undefined, binary()) -> [map()].
+add_runtime_apps(Deps, undefined, _AppName) ->
+    Deps;
+add_runtime_apps(Deps, ReleasePath, AppName) ->
+    case file:list_dir(filename:join(ReleasePath, "lib")) of
+        {ok, Entries} ->
+            Known = sets:from_list([AppName | [N || #{name := N} <- Deps]]),
+            OtpLib = filename:join(code:root_dir(), "lib"),
+            Extra = lists:filtermap(
+                fun(Entry) -> runtime_app(Entry, Known, OtpLib) end,
+                lists:sort(Entries)
+            ),
+            Deps ++ Extra;
+        {error, _} ->
+            Deps
+    end.
+
+-spec runtime_app(file:filename(), sets:set(binary()), file:filename()) -> {true, map()} | false.
+runtime_app(Entry, Known, OtpLib) ->
+    Bin = unicode:characters_to_binary(Entry),
+    case string:split(Bin, "-") of
+        [Name, Version] ->
+            case sets:is_element(Name, Known) of
+                true ->
+                    false;
+                false ->
+                    case runtime_source(Name, Entry, OtpLib) of
+                        none -> false;
+                        Source -> {true, #{name => Name, version => Version, source => Source}}
+                    end
+            end;
+        _ ->
+            false
+    end.
+
+-spec runtime_source(binary(), file:filename(), file:filename()) -> binary() | none.
+runtime_source(Name, Entry, OtpLib) ->
+    case lists:member(Name, ?ELIXIR_APPS) of
+        true ->
+            ~"elixir";
+        false ->
+            case filelib:is_dir(filename:join(OtpLib, Entry)) of
+                true -> ~"otp";
+                false -> none
+            end
+    end.
+
+%% @private Applications listed in the app's own .app file, which the app depends on
+%% directly. Empty when the .app file cannot be read.
+-spec app_dependency_names(file:filename() | undefined, binary()) -> [binary()].
+app_dependency_names(undefined, _AppName) ->
+    [];
+app_dependency_names(ReleasePath, AppName) ->
+    LibPath = filename:join(ReleasePath, "lib"),
+    case file:list_dir(LibPath) of
+        {ok, Entries} ->
+            Dirs = [E || E <- Entries, lib_dir_app_name(E) =:= AppName],
+            case Dirs of
+                [Dir | _] ->
+                    AppFile = filename:join([LibPath, Dir, "ebin", <<AppName/binary, ".app">>]),
+                    case file:consult(AppFile) of
+                        {ok, [{application, _, Props}]} when is_list(Props) ->
+                            Apps =
+                                proplists:get_value(applications, Props, []) ++
+                                    proplists:get_value(included_applications, Props, []),
+                            [atom_to_binary(A, utf8) || A <- Apps, is_atom(A)];
+                        _ ->
+                            []
+                    end;
+                [] ->
+                    []
+            end;
+        {error, _} ->
+            []
     end.
 
 %% @private Fill in the dependency edges for deps whose adapter did not provide any, from the
