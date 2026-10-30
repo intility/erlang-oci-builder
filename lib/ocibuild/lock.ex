@@ -72,14 +72,16 @@ defmodule Ocibuild.Lock do
           required(:version) => String.t(),
           required(:source) => String.t(),
           optional(:deps) => [String.t()],
-          optional(:direct) => boolean()
+          optional(:direct) => boolean(),
+          optional(:checksum) => String.t()
         }
 
   # Parse the lock map into a list of dependency info maps
   defp parse_lock_map(lock_map) do
     Enum.map(lock_map, fn
-      {name, {:hex, _, version, _, _, deps, _, _}} ->
+      {name, {:hex, _, version, _, _, deps, _, outer_checksum}} ->
         %{name: Atom.to_string(name), version: version, source: "hex", deps: required_deps(deps)}
+        |> put_checksum(outer_checksum)
 
       {name, {:hex, _, version, _, _, deps, _}} ->
         %{name: Atom.to_string(name), version: version, source: "hex", deps: required_deps(deps)}
@@ -91,6 +93,10 @@ defmodule Ocibuild.Lock do
         %{name: Atom.to_string(name), version: "unknown", source: "unknown"}
     end)
   end
+
+  # The outer checksum is the SHA-256 of the Hex tarball. Only 8-tuple entries carry it.
+  defp put_checksum(dep, checksum) when is_binary(checksum), do: Map.put(dep, :checksum, checksum)
+  defp put_checksum(dep, _), do: dep
 
   # Names of the deps a hex package requires. Optional deps are skipped: a package can be
   # in the lock file because the project uses it directly, not because this one needs it.

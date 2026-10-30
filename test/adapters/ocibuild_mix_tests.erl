@@ -186,6 +186,17 @@ get_dependencies_keeps_graph_keys_test() ->
     ?assertNot(maps:is_key(deps, GitDep)),
     ?assertNot(maps:is_key(direct, GitDep)).
 
+get_dependencies_keeps_checksum_test() ->
+    State = #{
+        dependencies => [
+            #{name => ~"ranch", version => ~"1.8.0", source => ~"hex", checksum => ~"abc"},
+            #{name => ~"old", version => ~"1.0.0", source => ~"hex"}
+        ]
+    },
+    {ok, [Ranch, Old]} = ocibuild_mix:get_dependencies(State),
+    ?assertEqual(~"abc", maps:get(checksum, Ranch)),
+    ?assertNot(maps:is_key(checksum, Old)).
+
 get_dependencies_undefined_test() ->
     State = #{},
     ?assertEqual({error, not_available}, ocibuild_mix:get_dependencies(State)).

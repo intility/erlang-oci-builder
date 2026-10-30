@@ -192,6 +192,22 @@ defmodule Ocibuild.LockTest do
       assert by_name["ranch"].deps == []
     end
 
+    test "reports the outer checksum of 8-tuple hex entries", %{lock_path: lock_path} do
+      File.write!(lock_path, """
+      %{
+        "ranch": {:hex, :ranch, "1.8.0", "inner", [:rebar3], [], "hexpm", "outer"},
+        "old": {:hex, :old, "1.0.0", "inner", [:mix], [], "hexpm"},
+        "gitdep": {:git, "https://github.com/o/gitdep.git", "abc123", []}
+      }
+      """)
+
+      by_name = lock_path |> Lock.get_dependencies(nil) |> Map.new(&{&1.name, &1})
+
+      assert by_name["ranch"].checksum == "outer"
+      refute Map.has_key?(by_name["old"], :checksum)
+      refute Map.has_key?(by_name["gitdep"], :checksum)
+    end
+
     test "ignores optional deps", %{lock_path: lock_path} do
       File.write!(lock_path, """
       %{

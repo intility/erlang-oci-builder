@@ -159,9 +159,14 @@ normalize_dep(Dep) when is_map(Dep) ->
             Names when is_list(Names) -> Base#{deps => [to_binary(N) || N <- Names]};
             _ -> Base
         end,
-    case dep_key(direct, Dep) of
-        Direct when is_boolean(Direct) -> WithDeps#{direct => Direct};
-        _ -> WithDeps
+    WithDirect =
+        case dep_key(direct, Dep) of
+            Direct when is_boolean(Direct) -> WithDeps#{direct => Direct};
+            _ -> WithDeps
+        end,
+    case dep_key(checksum, Dep) of
+        Sum when is_binary(Sum) -> WithDirect#{checksum => Sum};
+        _ -> WithDirect
     end.
 
 %% @private Look up an atom key, falling back to its binary form
