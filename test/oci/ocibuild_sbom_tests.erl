@@ -139,7 +139,8 @@ sbom_with_erts_test() ->
         fun(P) -> maps:get(~"SPDXID", P) =:= ~"SPDXRef-Package-erts" end,
         Packages
     ),
-    ?assertEqual(1, length(ErtsPkg)).
+    ?assertEqual(1, length(ErtsPkg)),
+    ?assertEqual(~"Apache-2.0", maps:get(~"licenseDeclared", hd(ErtsPkg))).
 
 sbom_with_base_image_test() ->
     %% Test SBOM with base image
@@ -392,6 +393,55 @@ runtime_apps_test() ->
     ?assert(has_rel(Rels, ~"SPDXRef-Package-ssl", ~"DEPENDS_ON", ~"SPDXRef-Package-crypto")).
 
 %%%===================================================================
+%%% License Tests
+%%%===================================================================
+
+license_test_() ->
+    Gen = fun(Extra) ->
+        Dep = maps:merge(#{name => ~"dep", version => ~"1.0.0", source => ~"hex"}, Extra),
+        {ok, Json} = ocibuild_sbom:generate([Dep], #{app_name => ~"myapp", app_version => ~"1"}),
+        ocibuild_json:decode(Json)
+    end,
+    Declared = fun(Sbom) ->
+        [P] = [P || P <- maps:get(~"packages", Sbom), maps:get(~"name", P) =:= ~"dep"],
+        maps:get(~"licenseDeclared", P)
+    end,
+    [
+        ?_assertEqual(~"ISC", Declared(Gen(#{licenses => [~"ISC"]}))),
+        %% full SPDX list, case-insensitive, and deprecated ids mapped to their replacement
+        ?_assertEqual(~"Artistic-2.0", Declared(Gen(#{licenses => [~"artistic-2.0"]}))),
+        ?_assertEqual(~"CC-BY-4.0", Declared(Gen(#{licenses => [~"CC-BY-4.0"]}))),
+        ?_assertEqual(~"GPL-2.0-only", Declared(Gen(#{licenses => [~"GPL-2.0"]}))),
+        ?_assertEqual(~"LGPL-3.0-or-later", Declared(Gen(#{licenses => [~"LGPL-3.0+"]}))),
+        %% known spelling and case are normalised
+        ?_assertEqual(~"Apache-2.0", Declared(Gen(#{licenses => [~"Apache 2.0"]}))),
+        ?_assertEqual(~"MIT", Declared(Gen(#{licenses => [~"mit"]}))),
+        %% several entries are alternatives, duplicates collapse
+        ?_assertEqual(~"MIT OR Apache-2.0", Declared(Gen(#{licenses => [~"MIT", ~"Apache-2.0", ~"MIT"]}))),
+        ?_assertEqual(~"NOASSERTION", Declared(Gen(#{}))),
+        ?_assertEqual(~"NOASSERTION", Declared(Gen(#{licenses => []}))),
+        ?_assertEqual(~"NOASSERTION", Declared(Gen(#{licenses => [~"  "]}))),
+        ?_test(begin
+            %% unknown text becomes a LicenseRef defined in the document
+            Sbom = Gen(#{licenses => [~"Some Custom License"]}),
+            ?assertEqual(~"LicenseRef-Some-Custom-License", Declared(Sbom)),
+            [Info] = maps:get(~"hasExtractedLicensingInfos", Sbom),
+            ?assertEqual(~"LicenseRef-Some-Custom-License", maps:get(~"licenseId", Info)),
+            ?assertEqual(~"Some Custom License", maps:get(~"name", Info)),
+            ?assert(is_binary(maps:get(~"extractedText", Info)))
+        end),
+        ?_test(begin
+            %% no LicenseRef, no extracted section
+            ?assertNot(maps:is_key(~"hasExtractedLicensingInfos", Gen(#{licenses => [~"MIT"]})))
+        end),
+        ?_test(begin
+            Sbom = Gen(#{source => ~"otp", name => ~"kernel"}),
+            [P] = [P || P <- maps:get(~"packages", Sbom), maps:get(~"name", P) =:= ~"kernel"],
+            ?assertEqual(~"Apache-2.0", maps:get(~"licenseDeclared", P))
+        end)
+    ].
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 
@@ -498,14 +548,17 @@ sbom_mandatory_package_fields_test() ->
     Packages = maps:get(~"packages", ocibuild_json:decode(SbomJson)),
     %% app + cowboy + erts + base image
     ?assertEqual(4, length(Packages)),
+    %% ERTS is declared Apache-2.0 (see sbom_with_erts_test); the rest is unknown.
     lists:foreach(
         fun(Pkg) ->
-            lists:foreach(
-                fun(Field) ->
-                    ?assertEqual(~"NOASSERTION", maps:get(Field, Pkg, missing))
+            Declared =
+                case maps:get(~"SPDXID", Pkg) of
+                    ~"SPDXRef-Package-erts" -> ~"Apache-2.0";
+                    _ -> ~"NOASSERTION"
                 end,
-                [~"licenseConcluded", ~"licenseDeclared", ~"copyrightText"]
-            )
+            ?assertEqual(Declared, maps:get(~"licenseDeclared", Pkg, missing)),
+            ?assertEqual(~"NOASSERTION", maps:get(~"licenseConcluded", Pkg, missing)),
+            ?assertEqual(~"NOASSERTION", maps:get(~"copyrightText", Pkg, missing))
         end,
         Packages
     ).

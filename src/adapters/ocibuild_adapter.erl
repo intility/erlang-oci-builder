@@ -116,6 +116,9 @@ Optional keys describe the dependency graph for the SBOM:
 - `direct` - `true` if the project declares the package itself, `false` if it is
   only pulled in transitively
 
+Optional `licenses` is the list of license names from the package's Hex metadata. The SBOM
+maps known names to SPDX ids and keeps the rest as `LicenseRef`s.
+
 Optional `checksum` is the SHA-256 of the Hex package tarball as a hex string (the
 "outer checksum" in the lock file), emitted as the SBOM package checksum.
 
@@ -129,7 +132,8 @@ which case every dependency is listed as a direct dependency of the app.
     source := binary(),
     deps => [binary()],
     direct => boolean(),
-    checksum => binary()
+    checksum => binary(),
+    licenses => [binary()]
 }.
 
 -export_type([config/0, dependency/0]).
