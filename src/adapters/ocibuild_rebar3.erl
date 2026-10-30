@@ -583,9 +583,11 @@ parse_rebar_lock(LockFile) ->
     case file:consult(LockFile) of
         {ok, []} ->
             {ok, []};
-        {ok, [{_Version, Deps} | _Rest]} when is_list(Deps) ->
+        {ok, [{_Version, Deps} | Rest]} when is_list(Deps) ->
             %% New format: {"1.2.0", [{~"pkg", {pkg, ~"pkg", ~"1.0.0"}, 0}, ...]}
-            {ok, [parse_dep_entry(D) || D <- Deps]};
+            %% followed by [{pkg_hash, ...}, {pkg_hash_ext, ...}]
+            Hashes = outer_checksums(Rest),
+            {ok, [add_checksum(parse_dep_entry(D), Hashes) || D <- Deps]};
         {ok, [Deps | _Rest]} when is_list(Deps) ->
             %% Old format: [{~"pkg", {pkg, ~"pkg", ~"1.0.0"}, 0}, ...]
             {ok, [parse_dep_entry(D) || D <- Deps]};
@@ -595,6 +597,29 @@ parse_rebar_lock(LockFile) ->
         {error, Reason} ->
             {error, {lock_parse_failed, Reason}}
     end.
+
+%% @private Outer checksums (SHA-256 of the Hex tarball) from the `pkg_hash_ext` section
+%% that follows the dependency list in rebar.lock, keyed by package name.
+-spec outer_checksums([term()]) -> #{binary() => binary()}.
+outer_checksums(Rest) ->
+    Sections = lists:append([L || L <- Rest, is_list(L)]),
+    case lists:keyfind(pkg_hash_ext, 1, Sections) of
+        {pkg_hash_ext, Pairs} when is_list(Pairs) ->
+            #{N => string:lowercase(H) || {N, H} <- Pairs, is_binary(N), is_binary(H)};
+        _ ->
+            #{}
+    end.
+
+%% @private Attach the outer checksum to a Hex dependency that has one
+-spec add_checksum(ocibuild_adapter:dependency(), #{binary() => binary()}) ->
+    ocibuild_adapter:dependency().
+add_checksum(#{name := Name, source := ~"hex"} = Dep, Hashes) ->
+    case Hashes of
+        #{Name := Sum} -> Dep#{checksum => Sum};
+        _ -> Dep
+    end;
+add_checksum(Dep, _Hashes) ->
+    Dep.
 
 %% @private Parse a single dependency entry from rebar.lock
 %% The third element is the level in the dependency tree: 0 for deps declared in
