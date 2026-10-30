@@ -315,7 +315,7 @@ build_dependency_package(#{name := Name, version := Version} = Dep) ->
         ~"versionInfo" => Version,
         ~"downloadLocation" => DownloadLocation,
         ~"filesAnalyzed" => false,
-        ~"supplier" => ~"NOASSERTION",
+        ~"supplier" => dependency_supplier(Dep),
         ~"externalRefs" => [
             #{
                 ~"referenceCategory" => ~"PACKAGE_MANAGER",
@@ -324,6 +324,20 @@ build_dependency_package(#{name := Name, version := Version} = Dep) ->
             }
         ]
     }.
+
+%% @private Supplier of a dependency, derived from where it is fetched from: the Hex
+%% registry for Hex packages, the git host for git dependencies. This names the
+%% distributor, not the package author, which the lock files do not record.
+-spec dependency_supplier(dependency()) -> binary().
+dependency_supplier(#{source := S}) when S =:= ~"hex"; S =:= ~"hexpm" ->
+    ~"Organization: hex.pm";
+dependency_supplier(#{source := Url}) when is_binary(Url) ->
+    case parse_git_url(Url) of
+        {ok, {Host, _Repo}} -> <<"Organization: ", Host/binary>>;
+        error -> ~"NOASSERTION"
+    end;
+dependency_supplier(_) ->
+    ~"NOASSERTION".
 
 %% @private Build the SPDX download location of a dependency: the Hex tarball, or
 %% `git+<scheme>://host/path.git@<ref>` for git dependencies.
@@ -418,7 +432,7 @@ build_base_image_package({Registry, Repo, Tag}, Digest) ->
         ~"versionInfo" => Tag,
         ~"downloadLocation" => DownloadLocation,
         ~"filesAnalyzed" => false,
-        ~"supplier" => ~"NOASSERTION",
+        ~"supplier" => <<"Organization: ", Registry/binary>>,
         ~"externalRefs" => [
             #{
                 ~"referenceCategory" => ~"PACKAGE_MANAGER",

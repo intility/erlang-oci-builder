@@ -205,6 +205,34 @@ download_location_test_() ->
     ].
 
 %%%===================================================================
+%%% Supplier Tests
+%%%===================================================================
+
+supplier_test_() ->
+    Deps = [
+        #{name => ~"h", version => ~"1.0.0", source => ~"hex"},
+        #{name => ~"g", version => ~"abc", source => ~"https://github.com/o/g.git"},
+        #{name => ~"u", version => ~"unknown", source => ~"unknown"}
+    ],
+    Opts = #{
+        app_name => ~"myapp",
+        app_version => ~"1.0.0",
+        base_image => {~"ghcr.io", ~"myorg/base", ~"v1"}
+    },
+    {ok, Json} = ocibuild_sbom:generate(Deps, Opts),
+    Pkgs = maps:get(~"packages", ocibuild_json:decode(Json)),
+    Supplier = fun(Name) ->
+        [P] = [P || P <- Pkgs, maps:get(~"name", P) =:= Name],
+        maps:get(~"supplier", P)
+    end,
+    [
+        ?_assertEqual(~"Organization: hex.pm", Supplier(~"h")),
+        ?_assertEqual(~"Organization: github.com", Supplier(~"g")),
+        ?_assertEqual(~"NOASSERTION", Supplier(~"u")),
+        ?_assertEqual(~"Organization: ghcr.io", Supplier(~"base"))
+    ].
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 
