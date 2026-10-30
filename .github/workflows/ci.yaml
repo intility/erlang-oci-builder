@@ -197,6 +197,7 @@ jobs:
             -t "${IMAGE_NAME_LOWER}:${{ github.sha }}" \
             -t "${IMAGE_NAME_LOWER}:integration-elixir" \
             -d "CI workflow test image" \
+            -a org.opencontainers.image.vendor=Intility \
             --sbom sbom.spdx.json \
             --push ghcr.io
 
@@ -206,9 +207,8 @@ jobs:
           "$RUNNER_TEMP/sbomvenv/bin/pip" install --quiet spdx-tools==0.8.5 ntia-conformance-checker==6.0.0
           # Blocking: must be valid SPDX
           "$RUNNER_TEMP/sbomvenv/bin/pyspdxtools" -i test_app/sbom.spdx.json
-          # Report only until suppliers are set and ERTS/base image are attached to the tree
-          "$RUNNER_TEMP/sbomvenv/bin/sbomcheck" -c ntia test_app/sbom.spdx.json \
-            || echo "::warning::SBOM does not meet the NTIA minimum elements yet"
+          # Blocking: must meet the NTIA minimum elements
+          "$RUNNER_TEMP/sbomvenv/bin/sbomcheck" -c ntia test_app/sbom.spdx.json
 
       - name: Install cosign
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0

@@ -1252,7 +1252,7 @@ Generate Software Bill of Materials from lock files. GitHub, Microsoft, and ko a
 - OTP version
 - Base image reference + digest
 
-**Validation:** the CI integration job validates the SBOM of the Phoenix build with spdx-tools (blocking) and the NTIA minimum elements checker (report only until suppliers are provided and ERTS/base image are attached to the dependency tree). Install `spdx-tools` and `ntia-conformance-checker` to run `pyspdxtools -i` and `sbomcheck -c ntia` on any exported `--sbom` file.
+**Validation:** the CI integration job validates the SBOM of the Phoenix build with spdx-tools (blocking) and the NTIA minimum elements checker (both blocking; the integration build sets the vendor annotation so the app has a supplier). Install `spdx-tools` and `ntia-conformance-checker` to run `pyspdxtools -i` and `sbomcheck -c ntia` on any exported `--sbom` file.
 
 **Default Behavior:**
 
