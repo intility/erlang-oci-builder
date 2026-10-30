@@ -448,37 +448,14 @@ build_relationships(AppName, Dependencies, Packages) ->
     ],
     DependsOnRels = AppRels ++ DepRels,
 
-    %% RUNTIME_DEPENDENCY_OF for ERTS (if present)
-    ErtsRels =
-        case has_package_id(~"SPDXRef-Package-erts", Packages) of
-            false ->
-                [];
-            true ->
-                [
-                    #{
-                        ~"spdxElementId" => ~"SPDXRef-Package-erts",
-                        ~"relationshipType" => ~"RUNTIME_DEPENDENCY_OF",
-                        ~"relatedSpdxElement" => AppRef
-                    }
-                ]
-        end,
+    %% The app depends on ERTS and on the base image it runs on (when present)
+    RuntimeRels = [
+        DependsOn(AppRef, Id)
+     || Id <- [~"SPDXRef-Package-erts", ~"SPDXRef-Package-base-image"],
+        has_package_id(Id, Packages)
+    ],
 
-    %% BUILD_TOOL_OF for base image (if present)
-    BaseRels =
-        case has_package_id(~"SPDXRef-Package-base-image", Packages) of
-            false ->
-                [];
-            true ->
-                [
-                    #{
-                        ~"spdxElementId" => ~"SPDXRef-Package-base-image",
-                        ~"relationshipType" => ~"BUILD_TOOL_OF",
-                        ~"relatedSpdxElement" => AppRef
-                    }
-                ]
-        end,
-
-    [DescribesRel] ++ DependsOnRels ++ ErtsRels ++ BaseRels.
+    [DescribesRel] ++ DependsOnRels ++ RuntimeRels.
 
 %% @private Names of the dependencies the app depends on directly: those flagged `direct`,
 %% plus any package no other package depends on. The second rule keeps a package listed

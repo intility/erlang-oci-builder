@@ -165,6 +165,35 @@ sbom_with_base_image_test() ->
 %%% Relationship Tests
 %%%===================================================================
 
+sbom_runtime_rels_attached_to_app_test() ->
+    %% ERTS and the base image hang off the app, so no package floats outside the tree
+    Opts = #{
+        app_name => ~"myapp",
+        app_version => ~"1.0.0",
+        erts_version => ~"14.2",
+        otp_version => ~"27.0",
+        base_image => {~"ghcr.io", ~"myorg/base", ~"v1"},
+        base_digest => ~"sha256:abc123"
+    },
+    {ok, SbomJson} = ocibuild_sbom:generate([], Opts),
+    Rels = maps:get(~"relationships", ocibuild_json:decode(SbomJson)),
+    App = ~"SPDXRef-Package-myapp",
+    ?assert(has_rel(Rels, App, ~"DEPENDS_ON", ~"SPDXRef-Package-erts")),
+    ?assert(has_rel(Rels, App, ~"DEPENDS_ON", ~"SPDXRef-Package-base-image")),
+    Types = [maps:get(~"relationshipType", R) || R <- Rels],
+    ?assertNot(lists:member(~"RUNTIME_DEPENDENCY_OF", Types)),
+    ?assertNot(lists:member(~"BUILD_TOOL_OF", Types)).
+
+has_rel(Rels, From, Type, To) ->
+    lists:any(
+        fun(R) ->
+            maps:get(~"spdxElementId", R) =:= From andalso
+                maps:get(~"relationshipType", R) =:= Type andalso
+                maps:get(~"relatedSpdxElement", R) =:= To
+        end,
+        Rels
+    ).
+
 sbom_relationships_test() ->
     %% Test that SBOM includes proper relationships
     Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
