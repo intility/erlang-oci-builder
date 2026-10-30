@@ -443,13 +443,17 @@ build_base_image_package({Registry, Repo, Tag}, Digest) ->
 
     DownloadLocation = <<"https://", Registry/binary, "/", Repo/binary>>,
 
+    %% purl spec for oci: the version is the digest with its colon percent-encoded, the
+    %% full repository goes in repository_url, and the tag is a qualifier
+    RepoUrl = <<Registry/binary, "/", Repo/binary>>,
+    Qualifiers = <<"?repository_url=", RepoUrl/binary, "&tag=", Tag/binary>>,
     PURL =
         case Digest of
             undefined ->
-                <<"pkg:oci/", ImageName/binary, "@", Tag/binary, "?repository_url=",
-                    Registry/binary>>;
+                <<"pkg:oci/", ImageName/binary, Qualifiers/binary>>;
             D ->
-                <<"pkg:oci/", ImageName/binary, "@", D/binary, "?repository_url=", Registry/binary>>
+                <<"pkg:oci/", ImageName/binary, "@", (binary:replace(D, ~":", ~"%3A"))/binary,
+                    Qualifiers/binary>>
         end,
 
     #{

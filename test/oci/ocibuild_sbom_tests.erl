@@ -297,6 +297,33 @@ id_collisions_are_deterministic_test() ->
     ),
     ?assertEqual(Ids(), Ids()).
 
+oci_purl_test_() ->
+    Purl = fun(Digest) ->
+        Opts = #{
+            app_name => ~"myapp",
+            app_version => ~"1.0.0",
+            base_image => {~"ghcr.io", ~"myorg/base", ~"v1"},
+            base_digest => Digest
+        },
+        {ok, Json} = ocibuild_sbom:generate([], Opts),
+        [Base] = [
+            P
+         || P <- maps:get(~"packages", ocibuild_json:decode(Json)),
+            maps:get(~"SPDXID", P) =:= ~"SPDXRef-Package-base-image"
+        ],
+        [Ref] = maps:get(~"externalRefs", Base),
+        maps:get(~"referenceLocator", Ref)
+    end,
+    [
+        ?_assertEqual(
+            ~"pkg:oci/base@sha256%3Aabc123?repository_url=ghcr.io/myorg/base&tag=v1",
+            Purl(~"sha256:abc123")
+        ),
+        ?_assertEqual(
+            ~"pkg:oci/base?repository_url=ghcr.io/myorg/base&tag=v1", Purl(undefined)
+        )
+    ].
+
 %%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
