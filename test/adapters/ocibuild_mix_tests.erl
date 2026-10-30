@@ -197,6 +197,17 @@ get_dependencies_keeps_checksum_test() ->
     ?assertEqual(~"abc", maps:get(checksum, Ranch)),
     ?assertNot(maps:is_key(checksum, Old)).
 
+get_dependencies_keeps_licenses_test() ->
+    State = #{
+        dependencies => [
+            #{name => ~"ranch", version => ~"1.8.0", source => ~"hex", licenses => [~"ISC"]},
+            #{name => ~"old", version => ~"1.0.0", source => ~"hex", licenses => []}
+        ]
+    },
+    {ok, [Ranch, Old]} = ocibuild_mix:get_dependencies(State),
+    ?assertEqual([~"ISC"], maps:get(licenses, Ranch)),
+    ?assertNot(maps:is_key(licenses, Old)).
+
 get_dependencies_undefined_test() ->
     State = #{},
     ?assertEqual({error, not_available}, ocibuild_mix:get_dependencies(State)).
