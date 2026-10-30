@@ -47,6 +47,7 @@ https://github.com/package-url/purl-spec
     release_name => binary() | undefined,
     source_url => binary() | undefined,
     vendor => binary() | undefined,
+    app_deps => [binary()],
     base_image => {binary(), binary(), binary()} | none | undefined,
     base_digest => binary() | undefined,
     erts_version => binary() | undefined,
@@ -216,7 +217,7 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
     ],
 
     %% Build relationships
-    Relationships = build_relationships(SafeAppName, Deps, DepIds, AllPackages),
+    Relationships = build_relationships(SafeAppName, Deps, DepIds, maps:get(app_deps, Opts, []), AllPackages),
 
     %% Build the SPDX document
     Sbom = #{
@@ -370,6 +371,10 @@ dependency_checksums(_) ->
 -spec dependency_supplier(dependency()) -> binary().
 dependency_supplier(#{source := S}) when S =:= ~"hex"; S =:= ~"hexpm" ->
     ~"Organization: hex.pm";
+dependency_supplier(#{source := ~"otp"}) ->
+    ~"Organization: Erlang/OTP Team";
+dependency_supplier(#{source := ~"elixir"}) ->
+    ~"Organization: Elixir Team";
 dependency_supplier(#{source := Url}) when is_binary(Url) ->
     case parse_git_url(Url) of
         {ok, {Host, _Repo}} -> <<"Organization: ", Host/binary>>;
@@ -386,6 +391,10 @@ build_download_location(#{name := Name, version := Version, source := Source}) -
         S when S =:= ~"hex"; S =:= ~"hexpm" ->
             %% Hex packages (rebar3 uses "hex", Mix uses "hexpm")
             <<"https://repo.hex.pm/tarballs/", Name/binary, "-", Version/binary, ".tar">>;
+        ~"otp" ->
+            ~"git+https://github.com/erlang/otp.git";
+        ~"elixir" ->
+            ~"git+https://github.com/elixir-lang/elixir.git";
         Url when is_binary(Url) ->
             git_download_location(Url, Version);
         _ ->
@@ -488,9 +497,10 @@ build_base_image_package({Registry, Repo, Tag}, Digest) ->
 %% @private Build SPDX relationships
 %% The app depends on its direct dependencies; each dependency depends on its own
 %% dependencies. See `ocibuild_adapter:dependency()` for how the graph is described.
--spec build_relationships(binary(), [dependency()], #{binary() => binary()}, [map()]) ->
-    [map()].
-build_relationships(AppName, Deps, DepIds, Packages) ->
+-spec build_relationships(
+    binary(), [dependency()], #{binary() => binary()}, [binary()], [map()]
+) -> [map()].
+build_relationships(AppName, Deps, DepIds, AppDeps, Packages) ->
     AppRef = <<"SPDXRef-Package-", AppName/binary>>,
 
     %% DESCRIBES relationship from document
@@ -501,7 +511,7 @@ build_relationships(AppName, Deps, DepIds, Packages) ->
     },
 
     Known = sets:from_list([maps:get(name, D) || D <- Deps]),
-    Roots = root_names(Deps),
+    Roots = root_names(Deps, AppDeps),
 
     DependsOn = fun(From, To) ->
         #{
@@ -534,11 +544,12 @@ build_relationships(AppName, Deps, DepIds, Packages) ->
     [DescribesRel] ++ DependsOnRels ++ RuntimeRels.
 
 %% @private Names of the dependencies the app depends on directly: those flagged `direct`,
-%% plus any package no other package depends on. The second rule keeps a package listed
-%% when an adapter has no graph data for it (e.g. git deps, whose own deps are not in the
-%% lock file), and gives the flat list when no graph data is provided at all.
--spec root_names([dependency()]) -> [binary()].
-root_names(Deps) ->
+%% those the app's own .app file lists (`AppDeps`), plus any package no other package
+%% depends on. The last rule keeps a package listed when an adapter has no graph data for
+%% it (e.g. git deps, whose own deps are not in the lock file), and gives the flat list
+%% when no graph data is provided at all.
+-spec root_names([dependency()], [binary()]) -> [binary()].
+root_names(Deps, AppDeps) ->
     Referenced = sets:from_list([
         C
      || #{name := N} = D <- Deps, C <- maps:get(deps, D, []), C =/= N
@@ -546,7 +557,8 @@ root_names(Deps) ->
     [
         N
      || #{name := N} = D <- Deps,
-        maps:get(direct, D, false) =:= true orelse not sets:is_element(N, Referenced)
+        maps:get(direct, D, false) =:= true orelse lists:member(N, AppDeps) orelse
+            not sets:is_element(N, Referenced)
     ].
 
 %% @private Keep the first dependency of each name; a repeated name would repeat its SPDX ID.

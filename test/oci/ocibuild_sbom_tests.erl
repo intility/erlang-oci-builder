@@ -356,6 +356,42 @@ checksum_test_() ->
     ].
 
 %%%===================================================================
+%%% OTP and Elixir Application Tests
+%%%===================================================================
+
+runtime_apps_test() ->
+    Deps = [
+        #{name => ~"ssl", version => ~"11.2", source => ~"otp", deps => [~"crypto", ~"kernel"]},
+        #{name => ~"crypto", version => ~"5.5", source => ~"otp", deps => [~"kernel"]},
+        #{name => ~"kernel", version => ~"10.1", source => ~"otp", deps => []},
+        #{name => ~"logger", version => ~"1.18.0", source => ~"elixir", deps => [~"kernel"]}
+    ],
+    %% The app's own .app lists ssl, logger and kernel; kernel is referenced by others
+    Opts = #{app_name => ~"myapp", app_version => ~"1", app_deps => [~"ssl", ~"logger", ~"kernel"]},
+    {ok, Json} = ocibuild_sbom:generate(Deps, Opts),
+    Sbom = ocibuild_json:decode(Json),
+    Pkgs = maps:from_list([{maps:get(~"name", P), P} || P <- maps:get(~"packages", Sbom)]),
+    Ssl = maps:get(~"ssl", Pkgs),
+    ?assertEqual(~"Organization: Erlang/OTP Team", maps:get(~"supplier", Ssl)),
+    ?assertEqual(~"git+https://github.com/erlang/otp.git", maps:get(~"downloadLocation", Ssl)),
+    [Ref] = maps:get(~"externalRefs", Ssl),
+    ?assertEqual(~"pkg:generic/ssl@11.2", maps:get(~"referenceLocator", Ref)),
+    Logger = maps:get(~"logger", Pkgs),
+    ?assertEqual(~"Organization: Elixir Team", maps:get(~"supplier", Logger)),
+    ?assertEqual(
+        ~"git+https://github.com/elixir-lang/elixir.git", maps:get(~"downloadLocation", Logger)
+    ),
+    Rels = maps:get(~"relationships", Sbom),
+    App = ~"SPDXRef-Package-myapp",
+    ?assert(has_rel(Rels, App, ~"DEPENDS_ON", ~"SPDXRef-Package-ssl")),
+    ?assert(has_rel(Rels, App, ~"DEPENDS_ON", ~"SPDXRef-Package-logger")),
+    %% kernel is referenced by other packages but the app lists it itself
+    ?assert(has_rel(Rels, App, ~"DEPENDS_ON", ~"SPDXRef-Package-kernel")),
+    %% crypto is only reached through ssl
+    ?assertNot(has_rel(Rels, App, ~"DEPENDS_ON", ~"SPDXRef-Package-crypto")),
+    ?assert(has_rel(Rels, ~"SPDXRef-Package-ssl", ~"DEPENDS_ON", ~"SPDXRef-Package-crypto")).
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 

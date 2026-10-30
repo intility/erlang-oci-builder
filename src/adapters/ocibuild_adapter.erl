@@ -108,7 +108,8 @@ error(Format, Args) ->
 -doc """
 A dependency of the release, as reported by an adapter's `get_dependencies/1`.
 
-Required keys: `name`, `version` and `source` (`hex`/`hexpm` or a git URL).
+Required keys: `name`, `version` and `source` (`hex`/`hexpm`, a git URL, or `otp` / `elixir`
+for applications that ship with Erlang/OTP and Elixir).
 
 Optional keys describe the dependency graph for the SBOM:
 - `deps` - names of the packages this package depends on (from the lock file)
