@@ -89,6 +89,7 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -eqwalizer({nowarn_function, get_push_registry/1}).
 -eqwalizer({nowarn_function, get_platform/2}).
 -eqwalizer({nowarn_function, parse_rebar_lock/1}).
+-eqwalizer({nowarn_function, parse_rebar_lock/2}).
 -eqwalizer({nowarn_function, get_annotations/2}).
 
 %% Provider callbacks
@@ -101,7 +102,7 @@ export OCIBUILD_PULL_PASSWORD="pass"
 
 %% Exports for testing
 -ifdef(TEST).
--export([find_relx_release/1, get_base_image/2, parse_rebar_lock/1]).
+-export([find_relx_release/1, get_base_image/2, parse_rebar_lock/1, parse_rebar_lock/2]).
 -export([get_tags/2, normalize_tags/1, normalize_tag/1]).
 -export([get_labels/2, get_annotations/2]).
 -endif.
@@ -573,13 +574,30 @@ Supports both old format (list only) and new format (version tuple + list).
 get_dependencies(State) ->
     ProjectDir = rebar_state:dir(State),
     LockFile = filename:join(ProjectDir, "rebar.lock"),
-    parse_rebar_lock(LockFile).
+    parse_rebar_lock(LockFile, filename:join(rebar_dir:base_dir(State), "lib")).
 
-%% @private Parse rebar.lock file
+-ifdef(TEST).
+%% @private Parse rebar.lock file, without reading license metadata
 -spec parse_rebar_lock(file:filename()) ->
-    {ok, [#{name := binary(), version := binary(), source := binary()}]}
-    | {error, term()}.
+    {ok, [ocibuild_adapter:dependency()]} | {error, term()}.
 parse_rebar_lock(LockFile) ->
+    parse_rebar_lock(LockFile, undefined).
+-endif.
+
+%% @private Parse rebar.lock file. When `DepsDir` is given (the profile's `lib` directory, where
+%% rebar3 unpacks dependencies), license names are read from each Hex package's
+%% hex_metadata.config there.
+-spec parse_rebar_lock(file:filename(), file:filename() | undefined) ->
+    {ok, [ocibuild_adapter:dependency()]} | {error, term()}.
+parse_rebar_lock(LockFile, DepsDir) ->
+    case parse_lock_entries(LockFile) of
+        {ok, Deps} -> {ok, [add_licenses(D, DepsDir) || D <- Deps]};
+        {error, _} = Error -> Error
+    end.
+
+-spec parse_lock_entries(file:filename()) ->
+    {ok, [ocibuild_adapter:dependency()]} | {error, term()}.
+parse_lock_entries(LockFile) ->
     case file:consult(LockFile) of
         {ok, []} ->
             {ok, []};
@@ -597,6 +615,31 @@ parse_rebar_lock(LockFile) ->
         {error, Reason} ->
             {error, {lock_parse_failed, Reason}}
     end.
+
+%% @private Attach the license names a Hex package declares, from the hex_metadata.config that
+%% rebar3 unpacks with the package. Missing metadata (git deps, not fetched) adds nothing.
+-spec add_licenses(ocibuild_adapter:dependency(), file:filename() | undefined) ->
+    ocibuild_adapter:dependency().
+add_licenses(Dep, undefined) ->
+    Dep;
+add_licenses(#{name := Name, source := ~"hex"} = Dep, DepsDir) ->
+    Metadata = filename:join([DepsDir, binary_to_list(Name), "hex_metadata.config"]),
+    case file:consult(Metadata) of
+        {ok, Terms} ->
+            case proplists:get_value(~"licenses", Terms) of
+                Ls when is_list(Ls) ->
+                    case [L || L <- Ls, is_binary(L)] of
+                        [] -> Dep;
+                        Licenses -> Dep#{licenses => Licenses}
+                    end;
+                _ ->
+                    Dep
+            end;
+        {error, _} ->
+            Dep
+    end;
+add_licenses(Dep, _DepsDir) ->
+    Dep.
 
 %% @private Outer checksums (SHA-256 of the Hex tarball) from the `pkg_hash_ext` section
 %% that follows the dependency list in rebar.lock, keyed by package name.
