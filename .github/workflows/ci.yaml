@@ -197,7 +197,7 @@ jobs:
             -t "${IMAGE_NAME_LOWER}:${{ github.sha }}" \
             -t "${IMAGE_NAME_LOWER}:integration-elixir" \
             -d "CI workflow test image" \
-            -a org.opencontainers.image.vendor=Intility \
+            -a "org.opencontainers.image.vendor=${{ github.repository_owner }}" \
             --sbom sbom.spdx.json \
             --push ghcr.io
 
