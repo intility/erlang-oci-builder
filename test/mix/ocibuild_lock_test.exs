@@ -208,6 +208,43 @@ defmodule Ocibuild.LockTest do
       refute Map.has_key?(by_name["gitdep"], :checksum)
     end
 
+    test "reads licenses from hex_metadata.config when a deps path is given", %{
+      lock_path: lock_path
+    } do
+      deps_path = Path.join(Path.dirname(lock_path), "deps")
+      File.mkdir_p!(Path.join(deps_path, "ranch"))
+      File.mkdir_p!(Path.join(deps_path, "plain"))
+
+      File.write!(Path.join([deps_path, "ranch", "hex_metadata.config"]), """
+      {<<"name">>,<<"ranch">>}.
+      {<<"licenses">>,[<<"ISC">>,<<"MIT">>]}.
+      """)
+
+      File.write!(Path.join([deps_path, "plain", "hex_metadata.config"]), """
+      {<<"name">>,<<"plain">>}.
+      """)
+
+      File.write!(lock_path, """
+      %{
+        "ranch": {:hex, :ranch, "1.8.0", "i", [:rebar3], [], "hexpm", "o"},
+        "plain": {:hex, :plain, "1.0.0", "i", [:mix], [], "hexpm", "o"},
+        "missing": {:hex, :missing, "1.0.0", "i", [:mix], [], "hexpm", "o"},
+        "gitdep": {:git, "https://github.com/o/gitdep.git", "abc123", []}
+      }
+      """)
+
+      by_name = lock_path |> Lock.get_dependencies(nil, deps_path) |> Map.new(&{&1.name, &1})
+
+      assert by_name["ranch"].licenses == ["ISC", "MIT"]
+      refute Map.has_key?(by_name["plain"], :licenses)
+      refute Map.has_key?(by_name["missing"], :licenses)
+      refute Map.has_key?(by_name["gitdep"], :licenses)
+
+      # without a deps path nothing is read
+      no_path = lock_path |> Lock.get_dependencies(nil) |> Map.new(&{&1.name, &1})
+      refute Map.has_key?(no_path["ranch"], :licenses)
+    end
+
     test "ignores optional deps", %{lock_path: lock_path} do
       File.write!(lock_path, """
       %{

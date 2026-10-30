@@ -26,7 +26,7 @@ defmodule Ocibuild.Lock do
   """
   @spec get_dependencies() :: [dependency()]
   def get_dependencies do
-    get_dependencies("mix.lock", project_direct_names())
+    get_dependencies("mix.lock", project_direct_names(), Mix.Project.deps_path())
   end
 
   @doc """
@@ -45,13 +45,16 @@ defmodule Ocibuild.Lock do
   `direct_names` are the package names declared by the project (`nil` when unknown, in
   which case the `:direct` key is left out). Mirrors the optional keys of
   `ocibuild_adapter:dependency()`.
+
+  When `deps_path` is given, the license names are read from each Hex package's
+  `hex_metadata.config` in that directory (no network involved).
   """
-  @spec get_dependencies(Path.t(), [String.t()] | nil) :: [dependency()]
-  def get_dependencies(lock_path, direct_names) do
+  @spec get_dependencies(Path.t(), [String.t()] | nil, Path.t() | nil) :: [dependency()]
+  def get_dependencies(lock_path, direct_names, deps_path \\ nil) do
     if File.exists?(lock_path) do
       try do
         lock_map = Mix.Dep.Lock.read(lock_path)
-        lock_map |> parse_lock_map() |> mark_direct(direct_names)
+        lock_map |> parse_lock_map() |> mark_direct(direct_names) |> put_licenses(deps_path)
       rescue
         exception ->
           log_error(
@@ -73,7 +76,8 @@ defmodule Ocibuild.Lock do
           required(:source) => String.t(),
           optional(:deps) => [String.t()],
           optional(:direct) => boolean(),
-          optional(:checksum) => String.t()
+          optional(:checksum) => String.t(),
+          optional(:licenses) => [String.t()]
         }
 
   # Parse the lock map into a list of dependency info maps
@@ -120,6 +124,32 @@ defmodule Ocibuild.Lock do
 
   defp mark_direct(deps, direct_names) do
     Enum.map(deps, &Map.put(&1, :direct, &1.name in direct_names))
+  end
+
+  # License names a Hex package declares, from the hex_metadata.config unpacked next to its
+  # source. Missing or unreadable metadata (git deps, not fetched) leaves the key out.
+  defp put_licenses(deps, nil), do: deps
+
+  defp put_licenses(deps, deps_path) do
+    Enum.map(deps, fn
+      %{source: "hex", name: name} = dep ->
+        case read_licenses(Path.join([deps_path, name, "hex_metadata.config"])) do
+          [] -> dep
+          licenses -> Map.put(dep, :licenses, licenses)
+        end
+
+      dep ->
+        dep
+    end)
+  end
+
+  defp read_licenses(metadata_path) do
+    with {:ok, terms} <- :file.consult(String.to_charlist(metadata_path)),
+         {"licenses", licenses} when is_list(licenses) <- List.keyfind(terms, "licenses", 0) do
+      Enum.filter(licenses, &is_binary/1)
+    else
+      _ -> []
+    end
   end
 
   # Log error message using appropriate method based on context

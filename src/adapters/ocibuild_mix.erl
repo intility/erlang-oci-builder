@@ -164,9 +164,16 @@ normalize_dep(Dep) when is_map(Dep) ->
             Direct when is_boolean(Direct) -> WithDeps#{direct => Direct};
             _ -> WithDeps
         end,
-    case dep_key(checksum, Dep) of
-        Sum when is_binary(Sum) -> WithDirect#{checksum => Sum};
-        _ -> WithDirect
+    WithChecksum =
+        case dep_key(checksum, Dep) of
+            Sum when is_binary(Sum) -> WithDirect#{checksum => Sum};
+            _ -> WithDirect
+        end,
+    case dep_key(licenses, Dep) of
+        Licenses when is_list(Licenses), Licenses =/= [] ->
+            WithChecksum#{licenses => [to_binary(L) || L <- Licenses]};
+        _ ->
+            WithChecksum
     end.
 
 %% @private Look up an atom key, falling back to its binary form
