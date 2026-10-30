@@ -232,6 +232,22 @@ supplier_test_() ->
         ?_assertEqual(~"Organization: ghcr.io", Supplier(~"base"))
     ].
 
+app_supplier_test_() ->
+    Supplier = fun(Vendor) ->
+        Opts = #{app_name => ~"myapp", app_version => ~"1.0.0", vendor => Vendor},
+        {ok, Json} = ocibuild_sbom:generate([], Opts),
+        [Pkg] = maps:get(~"packages", ocibuild_json:decode(Json)),
+        maps:get(~"supplier", Pkg)
+    end,
+    [
+        ?_assertEqual(~"Organization: Intility", Supplier(~"Intility")),
+        ?_assertEqual(~"Organization: Intility", Supplier(~"  Intility ")),
+        ?_assertEqual(~"Person: Ada", Supplier(~"Person: Ada")),
+        ?_assertEqual(~"Organization: Intility", Supplier(~"Organization: Intility")),
+        ?_assertEqual(~"NOASSERTION", Supplier(~"")),
+        ?_assertEqual(~"NOASSERTION", Supplier(undefined))
+    ].
+
 %%%===================================================================
 %%% Relationship Tests
 %%%===================================================================

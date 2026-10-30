@@ -46,6 +46,7 @@ https://github.com/package-url/purl-spec
     app_version => binary() | undefined,
     release_name => binary() | undefined,
     source_url => binary() | undefined,
+    vendor => binary() | undefined,
     base_image => {binary(), binary(), binary()} | none | undefined,
     base_digest => binary() | undefined,
     erts_version => binary() | undefined,
@@ -299,9 +300,23 @@ build_package(AppName, Version, Opts) ->
         %% filesAnalyzed: false indicates we did not analyze individual files
         %% for license/copyright info. This is standard for dependency SBOMs.
         ~"filesAnalyzed" => false,
-        ~"supplier" => ~"NOASSERTION",
+        ~"supplier" => app_supplier(maps:get(vendor, Opts, undefined)),
         ~"primaryPackagePurpose" => ~"APPLICATION"
     }.
+
+%% @private Supplier of the application itself, from the `vendor` option (the
+%% `org.opencontainers.image.vendor` annotation). A value that already starts with
+%% "Person: " or "Organization: " is used as is; anything else is an organization.
+-spec app_supplier(binary() | undefined) -> binary().
+app_supplier(Vendor) when is_binary(Vendor) ->
+    case string:trim(Vendor) of
+        <<>> -> ~"NOASSERTION";
+        <<"Person: ", _/binary>> = V -> V;
+        <<"Organization: ", _/binary>> = V -> V;
+        V -> <<"Organization: ", V/binary>>
+    end;
+app_supplier(_) ->
+    ~"NOASSERTION".
 
 %% @private Build a dependency package
 -spec build_dependency_package(dependency()) -> map().
