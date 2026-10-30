@@ -2265,6 +2265,64 @@ filter_shipped_deps_undefined_test() ->
     ?assertEqual(Deps, ocibuild_release:filter_shipped_deps(Deps, undefined)).
 
 %%%===================================================================
+%%% SBOM: OTP and Elixir applications that ship in the release
+%%%===================================================================
+
+runtime_apps_test_() ->
+    {foreach, fun setup_temp_dir/0, fun cleanup_temp_dir_wrapper/1, [
+        fun(TmpDir) ->
+            {"adds OTP and Elixir apps", fun() -> runtime_apps_adds_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"reads the app's own applications", fun() -> app_dependency_names_test(TmpDir) end}
+        end,
+        fun(_TmpDir) ->
+            {"no release path", fun() ->
+                ?assertEqual([], ocibuild_release:add_runtime_apps([], undefined, ~"myapp")),
+                ?assertEqual([], ocibuild_release:app_dependency_names(undefined, ~"myapp"))
+            end}
+        end
+    ]}.
+
+runtime_apps_adds_test(TmpDir) ->
+    %% Use the OTP app directory of the running VM so the "exists in this OTP" check holds
+    KernelDir = filename:basename(code:lib_dir(kernel)),
+    [<<"kernel">>, KernelVsn] = string:split(unicode:characters_to_binary(KernelDir), "-"),
+    Lib = filename:join(TmpDir, "lib"),
+    lists:foreach(
+        fun(D) -> ok = filelib:ensure_path(filename:join(Lib, D)) end,
+        [KernelDir, "myapp-1.0.0", "cowboy-2.10.0", "logger-1.18.0", "mystery-0.1.0"]
+    ),
+    Deps = [#{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"}],
+    Result = ocibuild_release:add_runtime_apps(Deps, TmpDir, ~"myapp"),
+    ?assertEqual(
+        [
+            #{name => ~"cowboy", version => ~"2.10.0", source => ~"hex"},
+            #{name => ~"kernel", version => KernelVsn, source => ~"otp"},
+            #{name => ~"logger", version => ~"1.18.0", source => ~"elixir"}
+        ],
+        lists:sort(
+            fun(#{name := A}, #{name := B}) -> A =< B end,
+            Result
+        )
+    ).
+
+app_dependency_names_test(TmpDir) ->
+    Ebin = filename:join([TmpDir, "lib", "myapp-1.0.0", "ebin"]),
+    ok = filelib:ensure_path(Ebin),
+    ok = file:write_file(
+        filename:join(Ebin, "myapp.app"),
+        "{application, myapp, [{applications, [kernel, stdlib, cowboy]},"
+        " {included_applications, [mnesia]}]}.\n"
+    ),
+    ?assertEqual(
+        [~"kernel", ~"stdlib", ~"cowboy", ~"mnesia"],
+        ocibuild_release:app_dependency_names(TmpDir, ~"myapp")
+    ),
+    %% unreadable or missing .app file
+    ?assertEqual([], ocibuild_release:app_dependency_names(TmpDir, ~"other")).
+
+%%%===================================================================
 %%% SBOM: dependency edges from the release's .app files
 %%%===================================================================
 
