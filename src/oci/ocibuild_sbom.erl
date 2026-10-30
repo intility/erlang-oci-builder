@@ -365,39 +365,28 @@ build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
 %%% Licenses
 %%%===================================================================
 
-%% Common SPDX license IDs and well-known spellings, keyed by the lower-cased string.
-%% Anything not listed here becomes a LicenseRef (see normalize_license/1), so a
-%% spelling is only added when it is unambiguous.
--define(KNOWN_LICENSES, #{
-    ~"mit" => ~"MIT",
+%% Spellings seen in package metadata that are not SPDX ids, plus the deprecated SPDX ids
+%% (mapped to the replacement SPDX gives for them), keyed by the lower-cased string. Exact
+%% SPDX ids are looked up in ocibuild_spdx_licenses. Anything else becomes a LicenseRef (see
+%% normalize_license/1), so a spelling is only added when it is unambiguous.
+-define(LICENSE_ALIASES, #{
     ~"mit license" => ~"MIT",
-    ~"apache-2.0" => ~"Apache-2.0",
     ~"apache 2.0" => ~"Apache-2.0",
     ~"apache2.0" => ~"Apache-2.0",
     ~"apache license 2.0" => ~"Apache-2.0",
-    ~"bsd-2-clause" => ~"BSD-2-Clause",
+    ~"apache 2" => ~"Apache-2.0",
     ~"bsd 2-clause" => ~"BSD-2-Clause",
-    ~"bsd-3-clause" => ~"BSD-3-Clause",
     ~"bsd 3-clause" => ~"BSD-3-Clause",
-    ~"isc" => ~"ISC",
-    ~"mpl-2.0" => ~"MPL-2.0",
-    ~"0bsd" => ~"0BSD",
-    ~"unlicense" => ~"Unlicense",
-    ~"cc0-1.0" => ~"CC0-1.0",
-    ~"zlib" => ~"Zlib",
-    ~"bsl-1.0" => ~"BSL-1.0",
-    ~"epl-1.0" => ~"EPL-1.0",
-    ~"epl-2.0" => ~"EPL-2.0",
-    ~"gpl-2.0-only" => ~"GPL-2.0-only",
-    ~"gpl-2.0-or-later" => ~"GPL-2.0-or-later",
-    ~"gpl-3.0-only" => ~"GPL-3.0-only",
-    ~"gpl-3.0-or-later" => ~"GPL-3.0-or-later",
-    ~"lgpl-2.1-only" => ~"LGPL-2.1-only",
-    ~"lgpl-2.1-or-later" => ~"LGPL-2.1-or-later",
-    ~"lgpl-3.0-only" => ~"LGPL-3.0-only",
-    ~"lgpl-3.0-or-later" => ~"LGPL-3.0-or-later",
-    ~"agpl-3.0-only" => ~"AGPL-3.0-only",
-    ~"agpl-3.0-or-later" => ~"AGPL-3.0-or-later"
+    ~"gpl-2.0" => ~"GPL-2.0-only",
+    ~"gpl-2.0+" => ~"GPL-2.0-or-later",
+    ~"gpl-3.0" => ~"GPL-3.0-only",
+    ~"gpl-3.0+" => ~"GPL-3.0-or-later",
+    ~"lgpl-2.1" => ~"LGPL-2.1-only",
+    ~"lgpl-2.1+" => ~"LGPL-2.1-or-later",
+    ~"lgpl-3.0" => ~"LGPL-3.0-only",
+    ~"lgpl-3.0+" => ~"LGPL-3.0-or-later",
+    ~"agpl-3.0" => ~"AGPL-3.0-only",
+    ~"agpl-3.0+" => ~"AGPL-3.0-or-later"
 }).
 
 %% @private The SPDX id for a license string from package metadata, or a LicenseRef (with the
@@ -405,9 +394,15 @@ build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
 -spec normalize_license(binary()) -> {spdx, binary()} | {ref, binary(), binary()}.
 normalize_license(Raw) ->
     Trimmed = string:trim(Raw),
-    case maps:find(string:lowercase(Trimmed), ?KNOWN_LICENSES) of
-        {ok, Id} -> {spdx, Id};
-        error -> {ref, <<"LicenseRef-", (sanitize_spdx_id(Trimmed))/binary>>, Trimmed}
+    Lower = string:lowercase(Trimmed),
+    case maps:find(Lower, ?LICENSE_ALIASES) of
+        {ok, Id} ->
+            {spdx, Id};
+        error ->
+            case ocibuild_spdx_licenses:lookup(Lower) of
+                {ok, Id} -> {spdx, Id};
+                error -> {ref, <<"LicenseRef-", (sanitize_spdx_id(Trimmed))/binary>>, Trimmed}
+            end
     end.
 
 %% @private License strings of a dependency, ignoring blanks.
@@ -543,6 +538,8 @@ build_erts_package(ErtsVersion, OtpVersion) ->
         ~"downloadLocation" => ~"https://github.com/erlang/otp",
         ~"filesAnalyzed" => false,
         ~"supplier" => ~"Organization: Erlang/OTP Team",
+        %% ERTS ships inside Erlang/OTP, which is Apache-2.0
+        ~"licenseDeclared" => ~"Apache-2.0",
         ~"externalRefs" => [
             #{
                 ~"referenceCategory" => ~"PACKAGE_MANAGER",
