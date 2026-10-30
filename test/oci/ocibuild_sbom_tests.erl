@@ -392,6 +392,50 @@ runtime_apps_test() ->
     ?assert(has_rel(Rels, ~"SPDXRef-Package-ssl", ~"DEPENDS_ON", ~"SPDXRef-Package-crypto")).
 
 %%%===================================================================
+%%% License Tests
+%%%===================================================================
+
+license_test_() ->
+    Gen = fun(Extra) ->
+        Dep = maps:merge(#{name => ~"dep", version => ~"1.0.0", source => ~"hex"}, Extra),
+        {ok, Json} = ocibuild_sbom:generate([Dep], #{app_name => ~"myapp", app_version => ~"1"}),
+        ocibuild_json:decode(Json)
+    end,
+    Declared = fun(Sbom) ->
+        [P] = [P || P <- maps:get(~"packages", Sbom), maps:get(~"name", P) =:= ~"dep"],
+        maps:get(~"licenseDeclared", P)
+    end,
+    [
+        ?_assertEqual(~"ISC", Declared(Gen(#{licenses => [~"ISC"]}))),
+        %% known spelling and case are normalised
+        ?_assertEqual(~"Apache-2.0", Declared(Gen(#{licenses => [~"Apache 2.0"]}))),
+        ?_assertEqual(~"MIT", Declared(Gen(#{licenses => [~"mit"]}))),
+        %% several entries are alternatives, duplicates collapse
+        ?_assertEqual(~"MIT OR Apache-2.0", Declared(Gen(#{licenses => [~"MIT", ~"Apache-2.0", ~"MIT"]}))),
+        ?_assertEqual(~"NOASSERTION", Declared(Gen(#{}))),
+        ?_assertEqual(~"NOASSERTION", Declared(Gen(#{licenses => []}))),
+        ?_assertEqual(~"NOASSERTION", Declared(Gen(#{licenses => [~"  "]}))),
+        ?_test(begin
+            %% unknown text becomes a LicenseRef defined in the document
+            Sbom = Gen(#{licenses => [~"Some Custom License"]}),
+            ?assertEqual(~"LicenseRef-Some-Custom-License", Declared(Sbom)),
+            [Info] = maps:get(~"hasExtractedLicensingInfos", Sbom),
+            ?assertEqual(~"LicenseRef-Some-Custom-License", maps:get(~"licenseId", Info)),
+            ?assertEqual(~"Some Custom License", maps:get(~"name", Info)),
+            ?assert(is_binary(maps:get(~"extractedText", Info)))
+        end),
+        ?_test(begin
+            %% no LicenseRef, no extracted section
+            ?assertNot(maps:is_key(~"hasExtractedLicensingInfos", Gen(#{licenses => [~"MIT"]})))
+        end),
+        ?_test(begin
+            Sbom = Gen(#{source => ~"otp", name => ~"kernel"}),
+            [P] = [P || P <- maps:get(~"packages", Sbom), maps:get(~"name", P) =:= ~"kernel"],
+            ?assertEqual(~"Apache-2.0", maps:get(~"licenseDeclared", P))
+        end)
+    ].
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 

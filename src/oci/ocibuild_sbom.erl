@@ -216,6 +216,8 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
      || P <- [MainPackage] ++ DepPackages ++ ErtsPackages ++ BasePackages
     ],
 
+    ExtractedLicenses = extracted_license_infos(Deps),
+
     %% Build relationships
     Relationships = build_relationships(SafeAppName, Deps, DepIds, maps:get(app_deps, Opts, []), AllPackages),
 
@@ -234,8 +236,13 @@ generate(Dependencies, #{app_name := AppName} = Opts) ->
         ~"packages" => AllPackages,
         ~"relationships" => Relationships
     },
+    SbomWithLicenses =
+        case ExtractedLicenses of
+            [] -> Sbom;
+            _ -> Sbom#{~"hasExtractedLicensingInfos" => ExtractedLicenses}
+        end,
 
-    {ok, ocibuild_json:encode(Sbom)}.
+    {ok, ocibuild_json:encode(SbomWithLicenses)}.
 
 -doc """
 Generate a Package URL (PURL) for a dependency.
@@ -343,6 +350,7 @@ build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
         ~"downloadLocation" => DownloadLocation,
         ~"filesAnalyzed" => false,
         ~"supplier" => dependency_supplier(Dep),
+        ~"licenseDeclared" => dependency_license(Dep),
         ~"externalRefs" => [
             #{
                 ~"referenceCategory" => ~"PACKAGE_MANAGER",
@@ -352,6 +360,97 @@ build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
         ]
     },
     maps:merge(Package, dependency_checksums(Dep)).
+
+%%%===================================================================
+%%% Licenses
+%%%===================================================================
+
+%% Common SPDX license IDs and well-known spellings, keyed by the lower-cased string.
+%% Anything not listed here becomes a LicenseRef (see normalize_license/1), so a
+%% spelling is only added when it is unambiguous.
+-define(KNOWN_LICENSES, #{
+    ~"mit" => ~"MIT",
+    ~"mit license" => ~"MIT",
+    ~"apache-2.0" => ~"Apache-2.0",
+    ~"apache 2.0" => ~"Apache-2.0",
+    ~"apache2.0" => ~"Apache-2.0",
+    ~"apache license 2.0" => ~"Apache-2.0",
+    ~"bsd-2-clause" => ~"BSD-2-Clause",
+    ~"bsd 2-clause" => ~"BSD-2-Clause",
+    ~"bsd-3-clause" => ~"BSD-3-Clause",
+    ~"bsd 3-clause" => ~"BSD-3-Clause",
+    ~"isc" => ~"ISC",
+    ~"mpl-2.0" => ~"MPL-2.0",
+    ~"0bsd" => ~"0BSD",
+    ~"unlicense" => ~"Unlicense",
+    ~"cc0-1.0" => ~"CC0-1.0",
+    ~"zlib" => ~"Zlib",
+    ~"bsl-1.0" => ~"BSL-1.0",
+    ~"epl-1.0" => ~"EPL-1.0",
+    ~"epl-2.0" => ~"EPL-2.0",
+    ~"gpl-2.0-only" => ~"GPL-2.0-only",
+    ~"gpl-2.0-or-later" => ~"GPL-2.0-or-later",
+    ~"gpl-3.0-only" => ~"GPL-3.0-only",
+    ~"gpl-3.0-or-later" => ~"GPL-3.0-or-later",
+    ~"lgpl-2.1-only" => ~"LGPL-2.1-only",
+    ~"lgpl-2.1-or-later" => ~"LGPL-2.1-or-later",
+    ~"lgpl-3.0-only" => ~"LGPL-3.0-only",
+    ~"lgpl-3.0-or-later" => ~"LGPL-3.0-or-later",
+    ~"agpl-3.0-only" => ~"AGPL-3.0-only",
+    ~"agpl-3.0-or-later" => ~"AGPL-3.0-or-later"
+}).
+
+%% @private The SPDX id for a license string from package metadata, or a LicenseRef (with the
+%% original text kept) when it is not a recognised SPDX id.
+-spec normalize_license(binary()) -> {spdx, binary()} | {ref, binary(), binary()}.
+normalize_license(Raw) ->
+    Trimmed = string:trim(Raw),
+    case maps:find(string:lowercase(Trimmed), ?KNOWN_LICENSES) of
+        {ok, Id} -> {spdx, Id};
+        error -> {ref, <<"LicenseRef-", (sanitize_spdx_id(Trimmed))/binary>>, Trimmed}
+    end.
+
+%% @private License strings of a dependency, ignoring blanks.
+-spec dependency_licenses(dependency()) -> [binary()].
+dependency_licenses(#{licenses := Ls}) when is_list(Ls) ->
+    [string:trim(L) || L <- Ls, is_binary(L), string:trim(L) =/= <<>>];
+dependency_licenses(_) ->
+    [].
+
+%% @private `licenseDeclared` of a dependency. OTP and Elixir are Apache-2.0. For Hex
+%% packages, the `licenses` list from the package metadata is read as alternatives
+%% (`A OR B`), the usual meaning of several entries there. Unknown: NOASSERTION.
+-spec dependency_license(dependency()) -> binary().
+dependency_license(#{source := S}) when S =:= ~"otp"; S =:= ~"elixir" ->
+    ~"Apache-2.0";
+dependency_license(Dep) ->
+    Ids = lists:uniq([license_id(normalize_license(L)) || L <- dependency_licenses(Dep)]),
+    case Ids of
+        [] -> ~"NOASSERTION";
+        _ -> iolist_to_binary(lists:join(~" OR ", Ids))
+    end.
+
+-spec license_id({spdx, binary()} | {ref, binary(), binary()}) -> binary().
+license_id({spdx, Id}) -> Id;
+license_id({ref, Id, _Raw}) -> Id.
+
+%% @private `hasExtractedLicensingInfos` entries for every LicenseRef used, one per id.
+-spec extracted_license_infos([dependency()]) -> [map()].
+extracted_license_infos(Deps) ->
+    Refs = lists:usort([
+        {Id, Raw}
+     || D <- Deps, L <- dependency_licenses(D), {ref, Id, Raw} <- [normalize_license(L)]
+    ]),
+    %% first spelling wins when two strings sanitize to the same id
+    Unique = lists:ukeysort(1, Refs),
+    [
+        #{
+            ~"licenseId" => Id,
+            ~"name" => Raw,
+            ~"extractedText" => <<"Declared as \"", Raw/binary, "\" in the package metadata">>
+        }
+     || {Id, Raw} <- Unique
+    ].
 
 %% @private SPDX `checksums` for a dependency that reports a valid SHA-256 (64 hex
 %% characters); anything else is left out rather than emitted malformed.
