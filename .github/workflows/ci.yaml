@@ -218,9 +218,11 @@ jobs:
           IMAGE_NAME: ${{ github.repository }}
         run: |
           IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
-          echo "Verifying signature for ghcr.io/${IMAGE_NAME_LOWER}:integration-elixir"
+          # Verify the commit SHA tag, not integration-elixir: that tag is shared by all
+          # runs, and a concurrent run can repoint it at an image signed with its own key
+          echo "Verifying signature for ghcr.io/${IMAGE_NAME_LOWER}:${{ github.sha }}"
           # --insecure-ignore-tlog: Skip transparency log check (required for local key signing)
-          cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog "ghcr.io/${IMAGE_NAME_LOWER}:integration-elixir"
+          cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog "ghcr.io/${IMAGE_NAME_LOWER}:${{ github.sha }}"
           echo "Signature verification passed - safe to run container"
 
       - name: Log in to GitHub Container Registry
