@@ -335,7 +335,7 @@ app_supplier(_) ->
 build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
     PURL = to_purl(Dep),
     DownloadLocation = build_download_location(Dep),
-    #{
+    Package = #{
         ~"SPDXID" => SpdxId,
         ~"name" => Name,
         ~"versionInfo" => Version,
@@ -349,7 +349,20 @@ build_dependency_package(#{name := Name, version := Version} = Dep, SpdxId) ->
                 ~"referenceLocator" => PURL
             }
         ]
-    }.
+    },
+    maps:merge(Package, dependency_checksums(Dep)).
+
+%% @private SPDX `checksums` for a dependency that reports a valid SHA-256 (64 hex
+%% characters); anything else is left out rather than emitted malformed.
+-spec dependency_checksums(dependency()) -> #{binary() => [map()]}.
+dependency_checksums(#{checksum := <<_:64/binary>> = Sum}) ->
+    Lower = string:lowercase(Sum),
+    case lists:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $a andalso C =< $f) end, binary_to_list(Lower)) of
+        true -> #{~"checksums" => [#{~"algorithm" => ~"SHA256", ~"checksumValue" => Lower}]};
+        false -> #{}
+    end;
+dependency_checksums(_) ->
+    #{}.
 
 %% @private Supplier of a dependency, derived from where it is fetched from: the Hex
 %% registry for Hex packages, the git host for git dependencies. This names the

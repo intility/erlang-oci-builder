@@ -325,6 +325,37 @@ oci_purl_test_() ->
     ].
 
 %%%===================================================================
+%%% Checksum Tests
+%%%===================================================================
+
+checksum_test_() ->
+    Sum = ~"ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789",
+    Checksums = fun(Extra) ->
+        Dep = maps:merge(#{name => ~"dep", version => ~"1.0.0", source => ~"hex"}, Extra),
+        {ok, Json} = ocibuild_sbom:generate([Dep], #{app_name => ~"myapp", app_version => ~"1"}),
+        [P] = [
+            P
+         || P <- maps:get(~"packages", ocibuild_json:decode(Json)),
+            maps:get(~"name", P) =:= ~"dep"
+        ],
+        maps:get(~"checksums", P, none)
+    end,
+    [
+        ?_assertEqual(
+            [
+                #{
+                    ~"algorithm" => ~"SHA256",
+                    ~"checksumValue" => ~"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                }
+            ],
+            Checksums(#{checksum => Sum})
+        ),
+        ?_assertEqual(none, Checksums(#{})),
+        ?_assertEqual(none, Checksums(#{checksum => ~"tooshort"})),
+        ?_assertEqual(none, Checksums(#{checksum => binary:copy(~"z", 64)}))
+    ].
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 

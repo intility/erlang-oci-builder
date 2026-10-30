@@ -115,6 +115,9 @@ Optional keys describe the dependency graph for the SBOM:
 - `direct` - `true` if the project declares the package itself, `false` if it is
   only pulled in transitively
 
+Optional `checksum` is the SHA-256 of the Hex package tarball as a hex string (the
+"outer checksum" in the lock file), emitted as the SBOM package checksum.
+
 The app is listed as depending on every package that is `direct` or that no other
 package depends on. Adapters that do not know the graph can leave both keys out, in
 which case every dependency is listed as a direct dependency of the app.
@@ -124,7 +127,8 @@ which case every dependency is listed as a direct dependency of the app.
     version := binary(),
     source := binary(),
     deps => [binary()],
-    direct => boolean()
+    direct => boolean(),
+    checksum => binary()
 }.
 
 -export_type([config/0, dependency/0]).
