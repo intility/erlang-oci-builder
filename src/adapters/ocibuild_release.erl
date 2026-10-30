@@ -3088,6 +3088,7 @@ add_sbom_layer(Image, ReleaseName, Dependencies, ReleasePath, Opts) ->
             release_name => ReleaseNameBin,
             app_version => AppVersion,
             source_url => SourceUrl,
+            vendor => get_vendor_from_opts(Opts),
             base_image => BaseImage,
             base_digest => BaseDigest,
             erts_version => ErtsVersion,
@@ -3186,6 +3187,12 @@ lib_dir_app_name(Entry) ->
 get_source_url_from_opts(Opts) ->
     Annotations = maps:get(annotations, Opts, #{}),
     maps:get(~"org.opencontainers.image.source", Annotations, undefined).
+
+%% @private Get the vendor (OCI `image.vendor` annotation), used as the SBOM supplier of the app
+-spec get_vendor_from_opts(map()) -> binary() | undefined.
+get_vendor_from_opts(Opts) ->
+    Annotations = maps:get(annotations, Opts, #{}),
+    maps:get(~"org.opencontainers.image.vendor", Annotations, undefined).
 
 %% @private Detect ERTS version from release path
 %% Looks for erts-X.Y.Z directory in the release

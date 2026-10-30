@@ -368,6 +368,14 @@ ocibuild:push(Image, ~"docker.io", ~"myuser/myapp:latest", Auth).
 | `org.opencontainers.image.base.name`   | Base image      | Base image reference (e.g., `debian:stable-slim`) |
 | `org.opencontainers.image.base.digest` | Base manifest   | SHA256 digest of base image manifest              |
 
+### SBOM Supplier
+
+The SBOM needs a supplier for the application package (an NTIA minimum element). Set the standard vendor annotation and it is used as the supplier, as `Organization: <vendor>`. Prefix the value with `Person: ` for an individual. Without it the supplier is `NOASSERTION`.
+
+```erlang
+{ocibuild, [{annotations, #{<<"org.opencontainers.image.vendor">> => <<"Acme Inc">>}}]}.
+```
+
 ### CI Environment Support
 
 In CI environments, VCS information is read from environment variables for reliability:
