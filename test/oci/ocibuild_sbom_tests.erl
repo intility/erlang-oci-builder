@@ -162,6 +162,49 @@ sbom_with_base_image_test() ->
     ?assertEqual(1, length(BasePkg)).
 
 %%%===================================================================
+%%% Download Location Tests
+%%%===================================================================
+
+download_location_test_() ->
+    Loc = fun(Source, Version) ->
+        {ok, Json} = ocibuild_sbom:generate(
+            [#{name => ~"dep", version => Version, source => Source}],
+            #{app_name => ~"myapp", app_version => ~"1.0.0"}
+        ),
+        [Pkg] = [
+            P
+         || P <- maps:get(~"packages", ocibuild_json:decode(Json)),
+            maps:get(~"name", P) =:= ~"dep"
+        ],
+        maps:get(~"downloadLocation", Pkg)
+    end,
+    [
+        ?_assertEqual(
+            ~"https://repo.hex.pm/tarballs/dep-1.2.3.tar", Loc(~"hex", ~"1.2.3")
+        ),
+        ?_assertEqual(
+            ~"https://repo.hex.pm/tarballs/dep-1.2.3.tar", Loc(~"hexpm", ~"1.2.3")
+        ),
+        ?_assertEqual(
+            ~"git+https://github.com/o/dep.git@abc123",
+            Loc(~"https://github.com/o/dep.git", ~"abc123")
+        ),
+        ?_assertEqual(
+            ~"git+https://github.com/o/dep.git@abc123",
+            Loc(~"https://github.com/o/dep", ~"abc123")
+        ),
+        ?_assertEqual(
+            ~"git+ssh://git@github.com/o/dep.git@v1",
+            Loc(~"git@github.com:o/dep.git", ~"v1")
+        ),
+        ?_assertEqual(
+            ~"git+https://github.com/o/dep.git",
+            Loc(~"https://github.com/o/dep.git", ~"unknown")
+        ),
+        ?_assertEqual(~"NOASSERTION", Loc(~"unknown", ~"unknown"))
+    ].
+
+%%%===================================================================
 %%% Relationship Tests
 %%%===================================================================
 
