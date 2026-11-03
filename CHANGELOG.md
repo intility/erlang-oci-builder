@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.10.6](https://github.com/intility/erlang-oci-builder/compare/v0.10.5...v0.10.6) (2026-10-30)
+
+
+### Features
+
+* declare package licenses in the SBOM ([#87](https://github.com/intility/erlang-oci-builder/issues/87)) ([5abadbc](https://github.com/intility/erlang-oci-builder/commit/5abadbccc6b9451db515c26d0fbc861e844d4f12))
+* describe OTP and Elixir applications in the SBOM ([#84](https://github.com/intility/erlang-oci-builder/issues/84)) ([bbe0866](https://github.com/intility/erlang-oci-builder/commit/bbe0866996633506b8862d2c9c128b2f8189da29)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* emit package checksums in the SBOM ([#79](https://github.com/intility/erlang-oci-builder/issues/79)) ([563296c](https://github.com/intility/erlang-oci-builder/commit/563296cf0c334cf60bc9a4ec531b28d7be010451)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* emit SPDX 2.3 SBOMs ([#59](https://github.com/intility/erlang-oci-builder/issues/59)) ([9ec2ac1](https://github.com/intility/erlang-oci-builder/commit/9ec2ac1afdefb2b2988a9ece2c143b77d7bb58a5)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* emit the dependency graph in the SBOM ([#64](https://github.com/intility/erlang-oci-builder/issues/64)) ([dc0a2bf](https://github.com/intility/erlang-oci-builder/commit/dc0a2bfee9278fde8a253eb5499db7cff98977b9)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* list OTP and Elixir applications in the SBOM ([#85](https://github.com/intility/erlang-oci-builder/issues/85)) ([07ffa47](https://github.com/intility/erlang-oci-builder/commit/07ffa474bbb473e717cfeab852e4c44b2fa3cf2b)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* read dependency licenses from hex_metadata.config for Mix ([#88](https://github.com/intility/erlang-oci-builder/issues/88)) ([c0cfcb4](https://github.com/intility/erlang-oci-builder/commit/c0cfcb4a5d1ecfa3d33e317fffa4cff6f6abb253)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* read dependency licenses from hex_metadata.config for rebar3 ([#89](https://github.com/intility/erlang-oci-builder/issues/89)) ([0f0b7ac](https://github.com/intility/erlang-oci-builder/commit/0f0b7acb4679ff82c09642dbd1aaff8414403050)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* report the dependency graph for rebar3 releases ([#68](https://github.com/intility/erlang-oci-builder/issues/68)) ([cd80369](https://github.com/intility/erlang-oci-builder/commit/cd803699b55432ce3b47476d7f5613f6a5167589)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* report the dependency graph from the Mix adapter ([#65](https://github.com/intility/erlang-oci-builder/issues/65)) ([d896ad5](https://github.com/intility/erlang-oci-builder/commit/d896ad55396ac991da7e8df2e2889022a1cb932e)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* report the Hex outer checksum from the Mix adapter ([#80](https://github.com/intility/erlang-oci-builder/issues/80)) ([c2b6c5e](https://github.com/intility/erlang-oci-builder/commit/c2b6c5ed5b36eabe64e646566ac8dae50e48cdeb)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* report the Hex outer checksum from the rebar3 adapter ([#81](https://github.com/intility/erlang-oci-builder/issues/81)) ([3a4239b](https://github.com/intility/erlang-oci-builder/commit/3a4239b28c9a7e6a2be3dd3dfb3882faeca0c248)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* set SBOM supplier from the registry or git host ([#72](https://github.com/intility/erlang-oci-builder/issues/72)) ([97ec1b1](https://github.com/intility/erlang-oci-builder/commit/97ec1b1c0023aed0d1a1f71e8f439a6db2947f7a)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* use the vendor annotation as the SBOM supplier of the app ([#76](https://github.com/intility/erlang-oci-builder/issues/76)) ([fd211bf](https://github.com/intility/erlang-oci-builder/commit/fd211bfd86546c224cea9c9dd1124ed914c6c8d8)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+
+
+### Bug Fixes
+
+* add mandatory SPDX 2.2 package fields to SBOM ([#58](https://github.com/intility/erlang-oci-builder/issues/58)) ([5d1e342](https://github.com/intility/erlang-oci-builder/commit/5d1e3426be5aea8ed8ea42e98463057b35d89fc3)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* attach ERTS and the base image to the SBOM dependency tree ([#70](https://github.com/intility/erlang-oci-builder/issues/70)) ([af52cbc](https://github.com/intility/erlang-oci-builder/commit/af52cbcf7522939164965657fc1b0fcadec3167c)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* **ci:** pin the docs build to ubuntu-24.04 ([#75](https://github.com/intility/erlang-oci-builder/issues/75)) ([d3fc4f0](https://github.com/intility/erlang-oci-builder/commit/d3fc4f079975e64b17745bf57ff47993ac075ab3))
+* **ci:** verify the image signature by commit SHA tag ([#74](https://github.com/intility/erlang-oci-builder/issues/74)) ([b8e8532](https://github.com/intility/erlang-oci-builder/commit/b8e8532fdda87cff71b35a8de42ded42f294da91))
+* follow the purl spec for the base image oci purl ([#78](https://github.com/intility/erlang-oci-builder/issues/78)) ([6b62a8e](https://github.com/intility/erlang-oci-builder/commit/6b62a8e5c755240365f16e9f643e8a4f92ef0987)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* keep SPDX IDs unique when package names collide ([#77](https://github.com/intility/erlang-oci-builder/issues/77)) ([92bf1d9](https://github.com/intility/erlang-oci-builder/commit/92bf1d9857dab637f9af54df377711008bce83b2)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* only list shipped dependencies in the SBOM ([#61](https://github.com/intility/erlang-oci-builder/issues/61)) ([ffd71a1](https://github.com/intility/erlang-oci-builder/commit/ffd71a153a4cca629063d061cfe8661223aa16b1)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+* split ENTRYPOINT and CMD for container orchestrator compatibility ([#67](https://github.com/intility/erlang-oci-builder/issues/67)) ([e2a07ff](https://github.com/intility/erlang-oci-builder/commit/e2a07ff60023ca296797372e4b81199e69318ee7))
+* use Hex tarball and git+ URLs for SBOM downloadLocation ([#71](https://github.com/intility/erlang-oci-builder/issues/71)) ([0d73261](https://github.com/intility/erlang-oci-builder/commit/0d7326176f5edfa3ab08bf03b35547c30dac8bbc)), closes [#57](https://github.com/intility/erlang-oci-builder/issues/57)
+
 ## [0.10.5](https://github.com/intility/erlang-oci-builder/compare/v0.10.4...v0.10.5) (2026-06-30)
 
 
