@@ -577,7 +577,7 @@ get_dependencies(State) ->
     parse_rebar_lock(LockFile, filename:join(rebar_dir:base_dir(State), "lib")).
 
 -ifdef(TEST).
-%% @private Parse rebar.lock file, without reading license metadata
+%% Test-only entry point: parse rebar.lock without reading license metadata.
 -spec parse_rebar_lock(file:filename()) ->
     {ok, [ocibuild_adapter:dependency()]} | {error, term()}.
 parse_rebar_lock(LockFile) ->

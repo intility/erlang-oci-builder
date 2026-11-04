@@ -3140,13 +3140,12 @@ filter_shipped_deps(Deps, ReleasePath) ->
             Deps
     end.
 
-%% @private Elixir's own applications, which ship in every Elixir release.
 -define(ELIXIR_APPS, [~"elixir", ~"eex", ~"ex_unit", ~"iex", ~"logger", ~"mix"]).
 
 %% @private Add the applications in the release's lib/ that are neither lock file deps nor the
-%% app itself: Elixir's own apps and the OTP apps (kernel, stdlib, ssl, ...), so the SBOM
-%% lists everything shipped. An OTP app is a directory that also exists in the OTP install
-%% that built the release. Anything else (e.g. umbrella siblings, path deps) is not
+%% app itself: Elixir's own apps (?ELIXIR_APPS) and the OTP apps (kernel, stdlib, ssl, ...), so
+%% the SBOM lists everything shipped. An OTP app is a directory that also exists in the OTP
+%% install that built the release. Anything else (e.g. umbrella siblings, path deps) is not
 %% identifiable and is left out.
 -spec add_runtime_apps([map()], file:filename() | undefined, binary()) -> [map()].
 add_runtime_apps(Deps, undefined, _AppName) ->
