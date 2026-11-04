@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.7](https://github.com/intility/erlang-oci-builder/compare/v0.10.6...v0.10.7) (2026-11-04)
+
+
+### Bug Fixes
+
+* resolve edoc multiple [@private](https://github.com/private) tag failures in docs generation ([c25f293](https://github.com/intility/erlang-oci-builder/commit/c25f29335ff600926e845f866b14b70ab10558fc))
+
 ## [0.10.6](https://github.com/intility/erlang-oci-builder/compare/v0.10.5...v0.10.6) (2026-10-30)
 
 
